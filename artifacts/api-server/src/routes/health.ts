@@ -8,4 +8,11 @@ router.get("/healthz", (_req, res) => {
   res.json(data);
 });
 
+router.get("/health", (_req, res) => {
+  res.json({
+    service: "kowri-backend",
+    status: "running"
+  });
+});
+
 export default router;
