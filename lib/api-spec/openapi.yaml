@@ -1,22 +1,37 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
-  version: 0.1.0
-  description: API specification
+  version: 5.0.0
+  description: KOWRI V5.0 - Digital Financial Infrastructure for African Markets
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: users
+    description: User management and authentication
+  - name: wallets
+    description: Wallet operations
+  - name: transactions
+    description: Transaction history and ledger
+  - name: tontines
+    description: Group savings (tontines)
+  - name: credit
+    description: Credit scoring and micro-loans
+  - name: merchants
+    description: Merchant and marketplace operations
+  - name: compliance
+    description: KYC and compliance
+  - name: analytics
+    description: Financial analytics and dashboard stats
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +39,558 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List all users
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, suspended, pending_kyc]
+      responses:
+        "200":
+          description: Users list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserListResponse"
+    post:
+      operationId: createUser
+      tags: [users]
+      summary: Create a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /users/{userId}:
+    get:
+      operationId: getUser
+      tags: [users]
+      summary: Get user by ID
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserDetail"
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /wallets:
+    get:
+      operationId: listWallets
+      tags: [wallets]
+      summary: List all wallets
+      parameters:
+        - name: userId
+          in: query
+          schema:
+            type: string
+        - name: currency
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Wallets list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletListResponse"
+    post:
+      operationId: createWallet
+      tags: [wallets]
+      summary: Create a new wallet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWalletRequest"
+      responses:
+        "201":
+          description: Wallet created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Wallet"
+
+  /wallets/{walletId}:
+    get:
+      operationId: getWallet
+      tags: [wallets]
+      summary: Get wallet by ID
+      parameters:
+        - name: walletId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Wallet details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Wallet"
+
+  /wallets/{walletId}/deposit:
+    post:
+      operationId: depositToWallet
+      tags: [wallets]
+      summary: Deposit funds to wallet
+      parameters:
+        - name: walletId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DepositRequest"
+      responses:
+        "200":
+          description: Deposit successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+
+  /wallets/{walletId}/transfer:
+    post:
+      operationId: transferFromWallet
+      tags: [wallets]
+      summary: Transfer funds from wallet
+      parameters:
+        - name: walletId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransferRequest"
+      responses:
+        "200":
+          description: Transfer successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+
+  /transactions:
+    get:
+      operationId: listTransactions
+      tags: [transactions]
+      summary: List all transactions
+      parameters:
+        - name: walletId
+          in: query
+          schema:
+            type: string
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [deposit, transfer, loan_disbursement, loan_repayment, subscription, tontine_contribution, tontine_payout, merchant_payment]
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, completed, failed, reversed]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Transactions list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionListResponse"
+
+  /transactions/{transactionId}:
+    get:
+      operationId: getTransaction
+      tags: [transactions]
+      summary: Get transaction by ID
+      parameters:
+        - name: transactionId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Transaction details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+
+  /tontines:
+    get:
+      operationId: listTontines
+      tags: [tontines]
+      summary: List all tontines (group savings)
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, completed, pending]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Tontines list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TontineListResponse"
+    post:
+      operationId: createTontine
+      tags: [tontines]
+      summary: Create a new tontine group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTontineRequest"
+      responses:
+        "201":
+          description: Tontine created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tontine"
+
+  /tontines/{tontineId}:
+    get:
+      operationId: getTontine
+      tags: [tontines]
+      summary: Get tontine by ID
+      parameters:
+        - name: tontineId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Tontine details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TontineDetail"
+
+  /credit/scores:
+    get:
+      operationId: listCreditScores
+      tags: [credit]
+      summary: List credit scores
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Credit scores list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreditScoreListResponse"
+
+  /credit/scores/{userId}:
+    get:
+      operationId: getCreditScore
+      tags: [credit]
+      summary: Get credit score for a user
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Credit score
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreditScore"
+
+  /credit/loans:
+    get:
+      operationId: listLoans
+      tags: [credit]
+      summary: List all loans
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, approved, disbursed, repaid, defaulted]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Loans list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanListResponse"
+    post:
+      operationId: applyForLoan
+      tags: [credit]
+      summary: Apply for a micro-loan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoanApplicationRequest"
+      responses:
+        "201":
+          description: Loan application submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+
+  /credit/loans/{loanId}:
+    get:
+      operationId: getLoan
+      tags: [credit]
+      summary: Get loan by ID
+      parameters:
+        - name: loanId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Loan details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+
+  /merchants:
+    get:
+      operationId: listMerchants
+      tags: [merchants]
+      summary: List all merchants
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [active, suspended, pending_approval]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Merchants list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MerchantListResponse"
+    post:
+      operationId: createMerchant
+      tags: [merchants]
+      summary: Register a new merchant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMerchantRequest"
+      responses:
+        "201":
+          description: Merchant registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Merchant"
+
+  /compliance/kyc:
+    get:
+      operationId: listKycRecords
+      tags: [compliance]
+      summary: List KYC verification records
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, verified, rejected, expired]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: KYC records list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KycListResponse"
+
+  /analytics/overview:
+    get:
+      operationId: getAnalyticsOverview
+      tags: [analytics]
+      summary: Get platform overview statistics
+      responses:
+        "200":
+          description: Platform overview stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyticsOverview"
+
+  /analytics/transactions:
+    get:
+      operationId: getTransactionAnalytics
+      tags: [analytics]
+      summary: Get transaction volume analytics
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d]
+            default: 30d
+      responses:
+        "200":
+          description: Transaction analytics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionAnalytics"
+
+  /analytics/ledger:
+    get:
+      operationId: getLedgerEntries
+      tags: [analytics]
+      summary: Get ledger entries for audit
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Ledger entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LedgerListResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +598,792 @@ components:
       properties:
         status:
           type: string
+        services:
+          type: object
+          additionalProperties:
+            type: string
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: string
+      required:
+        - error
+        - message
+
+    Pagination:
+      type: object
+      properties:
+        page:
+          type: integer
+        limit:
+          type: integer
+        total:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - page
+        - limit
+        - total
+        - totalPages
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+          nullable: true
+        firstName:
+          type: string
+        lastName:
+          type: string
+        status:
+          type: string
+          enum: [active, suspended, pending_kyc]
+        kycLevel:
+          type: integer
+        creditScore:
+          type: integer
+          nullable: true
+        country:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - phone
+        - firstName
+        - lastName
+        - status
+        - kycLevel
+        - country
+        - createdAt
+
+    UserDetail:
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          properties:
+            walletCount:
+              type: integer
+            totalBalance:
+              type: number
+            totalTransactions:
+              type: integer
+            tontineCount:
+              type: integer
+
+    UserListResponse:
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - users
+        - pagination
+
+    CreateUserRequest:
+      type: object
+      properties:
+        phone:
+          type: string
+        email:
+          type: string
+          nullable: true
+        firstName:
+          type: string
+        lastName:
+          type: string
+        country:
+          type: string
+        pin:
+          type: string
+      required:
+        - phone
+        - firstName
+        - lastName
+        - country
+        - pin
+
+    Wallet:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        currency:
+          type: string
+        balance:
+          type: number
+        availableBalance:
+          type: number
+        status:
+          type: string
+          enum: [active, frozen, closed]
+        walletType:
+          type: string
+          enum: [personal, merchant, savings, tontine]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - currency
+        - balance
+        - availableBalance
+        - status
+        - walletType
+        - createdAt
+
+    WalletListResponse:
+      type: object
+      properties:
+        wallets:
+          type: array
+          items:
+            $ref: "#/components/schemas/Wallet"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - wallets
+        - pagination
+
+    CreateWalletRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+        currency:
+          type: string
+        walletType:
+          type: string
+          enum: [personal, merchant, savings, tontine]
+      required:
+        - userId
+        - currency
+        - walletType
+
+    DepositRequest:
+      type: object
+      properties:
+        amount:
+          type: number
+        currency:
+          type: string
+        reference:
+          type: string
+        description:
+          type: string
+          nullable: true
+      required:
+        - amount
+        - currency
+        - reference
+
+    TransferRequest:
+      type: object
+      properties:
+        toWalletId:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        description:
+          type: string
+          nullable: true
+        reference:
+          type: string
+      required:
+        - toWalletId
+        - amount
+        - currency
+        - reference
+
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: string
+        fromWalletId:
+          type: string
+          nullable: true
+        toWalletId:
+          type: string
+          nullable: true
+        amount:
+          type: number
+        currency:
+          type: string
+        type:
+          type: string
+          enum: [deposit, transfer, loan_disbursement, loan_repayment, subscription, tontine_contribution, tontine_payout, merchant_payment]
+        status:
+          type: string
+          enum: [pending, completed, failed, reversed]
+        reference:
+          type: string
+        description:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - amount
+        - currency
+        - type
+        - status
+        - reference
+        - createdAt
+
+    TransactionListResponse:
+      type: object
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transaction"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - transactions
+        - pagination
+
+    Tontine:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        contributionAmount:
+          type: number
+        currency:
+          type: string
+        frequency:
+          type: string
+          enum: [weekly, biweekly, monthly]
+        memberCount:
+          type: integer
+        maxMembers:
+          type: integer
+        currentRound:
+          type: integer
+        totalRounds:
+          type: integer
+        status:
+          type: string
+          enum: [active, completed, pending]
+        adminUserId:
+          type: string
+        nextPayoutDate:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - contributionAmount
+        - currency
+        - frequency
+        - memberCount
+        - maxMembers
+        - currentRound
+        - totalRounds
+        - status
+        - adminUserId
+        - createdAt
+
+    TontineDetail:
+      allOf:
+        - $ref: "#/components/schemas/Tontine"
+        - type: object
+          properties:
+            members:
+              type: array
+              items:
+                $ref: "#/components/schemas/TontineMember"
+            totalContributed:
+              type: number
+
+    TontineMember:
+      type: object
+      properties:
+        userId:
+          type: string
+        userName:
+          type: string
+        payoutOrder:
+          type: integer
+        hasReceivedPayout:
+          type: boolean
+        contributionsCount:
+          type: integer
+      required:
+        - userId
+        - userName
+        - payoutOrder
+        - hasReceivedPayout
+        - contributionsCount
+
+    TontineListResponse:
+      type: object
+      properties:
+        tontines:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tontine"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - tontines
+        - pagination
+
+    CreateTontineRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        contributionAmount:
+          type: number
+        currency:
+          type: string
+        frequency:
+          type: string
+          enum: [weekly, biweekly, monthly]
+        maxMembers:
+          type: integer
+        adminUserId:
+          type: string
+      required:
+        - name
+        - contributionAmount
+        - currency
+        - frequency
+        - maxMembers
+        - adminUserId
+
+    CreditScore:
+      type: object
+      properties:
+        userId:
+          type: string
+        score:
+          type: integer
+        tier:
+          type: string
+          enum: [bronze, silver, gold, platinum]
+        maxLoanAmount:
+          type: number
+        interestRate:
+          type: number
+        factors:
+          type: object
+          properties:
+            paymentHistory:
+              type: integer
+            savingsRegularity:
+              type: integer
+            transactionVolume:
+              type: integer
+            tontineParticipation:
+              type: integer
+            networkScore:
+              type: integer
+        lastUpdated:
+          type: string
+          format: date-time
+      required:
+        - userId
+        - score
+        - tier
+        - maxLoanAmount
+        - interestRate
+        - lastUpdated
+
+    CreditScoreListResponse:
+      type: object
+      properties:
+        scores:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreditScore"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - scores
+        - pagination
+
+    Loan:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        walletId:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        interestRate:
+          type: number
+        termDays:
+          type: integer
+        status:
+          type: string
+          enum: [pending, approved, disbursed, repaid, defaulted]
+        amountRepaid:
+          type: number
+        dueDate:
+          type: string
+          format: date-time
+          nullable: true
+        disbursedAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - walletId
+        - amount
+        - currency
+        - interestRate
+        - termDays
+        - status
+        - amountRepaid
+        - createdAt
+
+    LoanListResponse:
+      type: object
+      properties:
+        loans:
+          type: array
+          items:
+            $ref: "#/components/schemas/Loan"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - loans
+        - pagination
+
+    LoanApplicationRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+        walletId:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        termDays:
+          type: integer
+        purpose:
+          type: string
+      required:
+        - userId
+        - walletId
+        - amount
+        - currency
+        - termDays
+        - purpose
+
+    Merchant:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        businessName:
+          type: string
+        businessType:
+          type: string
+        status:
+          type: string
+          enum: [active, suspended, pending_approval]
+        walletId:
+          type: string
+        apiKey:
+          type: string
+          nullable: true
+        country:
+          type: string
+        totalRevenue:
+          type: number
+        transactionCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - businessName
+        - businessType
+        - status
+        - walletId
+        - country
+        - totalRevenue
+        - transactionCount
+        - createdAt
+
+    MerchantListResponse:
+      type: object
+      properties:
+        merchants:
+          type: array
+          items:
+            $ref: "#/components/schemas/Merchant"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - merchants
+        - pagination
+
+    CreateMerchantRequest:
+      type: object
+      properties:
+        userId:
+          type: string
+        businessName:
+          type: string
+        businessType:
+          type: string
+        country:
+          type: string
+      required:
+        - userId
+        - businessName
+        - businessType
+        - country
+
+    KycRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        userName:
+          type: string
+        documentType:
+          type: string
+          enum: [national_id, passport, drivers_license]
+        status:
+          type: string
+          enum: [pending, verified, rejected, expired]
+        kycLevel:
+          type: integer
+        submittedAt:
+          type: string
+          format: date-time
+        verifiedAt:
+          type: string
+          format: date-time
+          nullable: true
+        rejectionReason:
+          type: string
+          nullable: true
+      required:
+        - id
+        - userId
+        - userName
+        - documentType
+        - status
+        - kycLevel
+        - submittedAt
+
+    KycListResponse:
+      type: object
+      properties:
+        records:
+          type: array
+          items:
+            $ref: "#/components/schemas/KycRecord"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required:
+        - records
+        - pagination
+
+    AnalyticsOverview:
+      type: object
+      properties:
+        totalUsers:
+          type: integer
+        activeWallets:
+          type: integer
+        totalTransactionVolume:
+          type: number
+        totalTransactions:
+          type: integer
+        activeTontines:
+          type: integer
+        activeLoans:
+          type: integer
+        activeMerchants:
+          type: integer
+        platformRevenue:
+          type: number
+        currency:
+          type: string
+        growthRates:
+          type: object
+          properties:
+            users:
+              type: number
+            transactions:
+              type: number
+            volume:
+              type: number
+      required:
+        - totalUsers
+        - activeWallets
+        - totalTransactionVolume
+        - totalTransactions
+        - activeTontines
+        - activeLoans
+        - activeMerchants
+        - platformRevenue
+        - currency
+
+    TransactionDataPoint:
+      type: object
+      properties:
+        date:
+          type: string
+        volume:
+          type: number
+        count:
+          type: integer
+        type:
+          type: string
+      required:
+        - date
+        - volume
+        - count
+        - type
+
+    TransactionAnalytics:
+      type: object
+      properties:
+        period:
+          type: string
+        dataPoints:
+          type: array
+          items:
+            $ref: "#/components/schemas/TransactionDataPoint"
+        totalVolume:
+          type: number
+        totalCount:
+          type: integer
+        byType:
+          type: object
+          additionalProperties:
+            type: number
+      required:
+        - period
+        - dataPoints
+        - totalVolume
+        - totalCount
+        - byType
+
+    LedgerEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        transactionId:
+          type: string
+        accountId:
+          type: string
+        accountType:
+          type: string
+        debitAmount:
+          type: number
+        creditAmount:
+          type: number
+        currency:
+          type: string
+        eventType:
+          type: string
+        description:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - transactionId
+        - accountId
+        - accountType
+        - debitAmount
+        - creditAmount
+        - currency
+        - eventType
+        - createdAt
+
+    LedgerListResponse:
+      type: object
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/LedgerEntry"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+        totalDebits:
+          type: number
+        totalCredits:
+          type: number
+      required:
+        - entries
+        - pagination
+        - totalDebits
+        - totalCredits

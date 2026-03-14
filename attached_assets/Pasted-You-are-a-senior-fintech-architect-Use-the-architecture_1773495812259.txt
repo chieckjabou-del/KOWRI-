@@ -1,0 +1,192 @@
+You are a senior fintech architect.
+
+Use the architecture described in architecture/core-kowri-v5.md as the reference system design for KOWRI.
+
+Create a complete production-ready fintech backend called KOWRI.
+
+SYSTEM OVERVIEW
+
+KOWRI is a digital financial infrastructure designed for African markets.  
+It must support wallets, group savings (tontines), micro-credit, merchant payments, and financial reputation scoring.
+
+The system must be scalable, secure and auditable.
+
+TECH STACK
+
+Node.js
+Express.js
+PostgreSQL
+Docker
+Docker Compose
+
+ARCHITECTURE STYLE
+
+Microservices architecture.
+
+Each microservice must include:
+
+- routes
+- controllers
+- services
+- repositories
+- database schema
+- Dockerfile
+
+COMMUNICATION
+
+Services communicate using:
+
+1. REST APIs for synchronous requests
+2. Event-driven architecture for asynchronous communication
+
+Use a message broker (Kafka or RabbitMQ).
+
+FINANCIAL CORE RULES
+
+The financial system must implement:
+
+Double-entry accounting  
+Atomic transactions  
+Idempotent APIs  
+
+The ledger must guarantee that:
+
+Total debits = total credits.
+
+LEDGER ARCHITECTURE
+
+The core-ledger must implement event sourcing.
+
+All financial operations must be stored as immutable events.
+
+Examples:
+
+deposit  
+transfer  
+loan disbursement  
+loan repayment  
+subscription charge  
+
+The ledger must support full financial replay for auditing.
+
+SERVICES REQUIRED
+
+core-ledger  
+Handles all financial transactions.
+
+wallet-service  
+Manages wallets and balances.
+
+user-service  
+Handles authentication and profiles.
+
+tontine-service  
+Manages group savings.
+
+credit-engine  
+Handles credit scoring and micro-loans.
+
+subscription-service  
+Handles recurring payments.
+
+marketplace-service  
+Allows merchants to integrate payments.
+
+api-gateway  
+Single entry point for all services.
+
+liquidity-engine  
+Manages platform liquidity.
+
+settlement-engine  
+Handles settlement with banks and mobile money providers.
+
+risk-engine  
+Fraud detection and transaction monitoring.
+
+compliance-engine  
+Handles KYC and AML.
+
+financial-identity-service  
+Builds a financial reputation score.
+
+data-intelligence-engine  
+Analyzes financial behavior.
+
+notification-service  
+Handles SMS, email and push notifications.
+
+partner-api-service  
+External API for partners and fintech integrations.
+
+DATABASE
+
+Use PostgreSQL.
+
+Each service must have its own database schema.
+
+EVENTS
+
+Examples of system events:
+
+wallet_created  
+wallet_credited  
+wallet_debited  
+transaction_completed  
+loan_approved  
+loan_repaid  
+fraud_detected  
+
+EVENT BUS
+
+Use Kafka or RabbitMQ as a message broker.
+
+Services publish and subscribe to events.
+
+PROJECT STRUCTURE
+
+kowri-platform/
+
+architecture/
+core-kowri-v5.md
+
+services/
+
+core-ledger/
+wallet-service/
+user-service/
+tontine-service/
+credit-engine/
+subscription-service/
+marketplace-service/
+api-gateway/
+liquidity-engine/
+settlement-engine/
+risk-engine/
+compliance-engine/
+financial-identity-service/
+data-intelligence-engine/
+notification-service/
+partner-api-service/
+
+infrastructure/
+
+docker-compose.yml
+
+README.md
+
+DOCKER REQUIREMENTS
+
+Each service must run in its own container.
+
+Include Dockerfiles for each service.
+
+Include docker-compose.yml to run the entire system.
+
+RUNNING THE SYSTEM
+
+The system must be runnable with:
+
+docker-compose up
+
+Include instructions in the README.

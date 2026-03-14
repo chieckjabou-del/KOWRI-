@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>KOWRI V5.0 — Economic Engine · Architecture Complète (1/2)</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Sora:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
+:root {
+  --void:#07090F; --deep:#0C0F1A; --mid:#111826; --surf:#18222E; --raise:#1F2C3C;
+  --bdr:rgba(255,255,255,.07); --bdr2:rgba(255,255,255,.13);
+  --tx:#DDE4EF; --tx2:#7E98B8; --tx3:#3A5470; --tx4:#1E3348;
+  --gold:#C8891C; --gold-l:#E8A830; --gold-xl:#F5C858;
+  --gd:rgba(200,137,28,.1); --gb:rgba(200,137,28,.28);
+  --jade:#10A870; --jd:rgba(16,168,112,.1); --jb:rgba(16,168,112,.28);
+  --sky:#1890D8; --skd:rgba(24,144,216,.1); --skb:rgba(24,144,216,.28);
+  --plum:#8050D0; --pld:rgba(128,80,208,.1); --plb:rgba(128,80,208,.28);
+  --coral:#D84040; --cod:rgba(216,64,64,.1); --cob:rgba(216,64,64,.28);
+  --amber:#D08020; --amd:rgba(208,128,32,.1); --amb:rgba(208,128,32,.28);
+  --teal:#10B8C0; --ted:rgba(16,184,192,.1); --teb:rgba(16,184,192,.28);
+  --rose:#C040A0; --rod:rgba(192,64,160,.1); --rob:rgba(192,64,160,.28);
+  --ff-d:'Sora',sans-serif; --ff-n:'DM Sans',system-ui,sans-serif; --ff-m:'JetBrains Mono',monospace;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--ff-n);background:var(--void);color:var(--tx);font-size:13.5px;line-height:1.68;}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(200,137,28,.018) 1px,transparent 1px),linear-gradient(90deg,rgba(200,137,28,.018) 1px,transparent 1px);background-size:44px 44px;pointer-events:none;z-index:0;}
+
+.layout{display:flex;min-height:100vh;position:relative;z-index:1;}
+.sb{width:262px;flex-shrink:0;background:var(--deep);border-right:1px solid var(--bdr);position:fixed;top:0;left:0;bottom:0;overflow-y:auto;z-index:100;scrollbar-width:thin;scrollbar-color:var(--surf) transparent;}
+.sb::-webkit-scrollbar{width:3px;} .sb::-webkit-scrollbar-thumb{background:var(--surf);}
+.main{margin-left:262px;flex:1;}
+.page{padding:38px 50px 110px;max-width:1060px;}
+
+.sb-brand{padding:20px 17px 15px;border-bottom:1px solid var(--bdr);}
+.sb-logo{font-family:var(--ff-d);font-size:1.1rem;font-weight:800;color:var(--gold-l);letter-spacing:3px;}
+.sb-sub{font-family:var(--ff-m);font-size:.55rem;color:var(--tx3);letter-spacing:1.5px;text-transform:uppercase;margin-top:2px;}
+.sb-v{font-family:var(--ff-m);font-size:.57rem;color:rgba(200,137,28,.6);margin-top:5px;}
+.sb-nav{padding:3px 0;}
+.sb-cat{padding:8px 16px 2px;font-family:var(--ff-m);font-size:.53rem;font-weight:600;text-transform:uppercase;letter-spacing:2px;color:var(--tx4);}
+.sb-a{display:flex;align-items:center;gap:5px;padding:4px 16px;font-size:.73rem;color:var(--tx3);text-decoration:none;border-left:2px solid transparent;transition:all .1s;}
+.sb-a:hover{color:var(--tx2);background:rgba(255,255,255,.02);}
+.sb-a.on{color:var(--gold-l);border-left-color:var(--gold);background:var(--gd);}
+.sb-n{font-family:var(--ff-m);font-size:.54rem;color:var(--tx4);min-width:16px;}
+.sb-a.on .sb-n{color:var(--gold);}
+.sb-div{border:none;border-top:1px solid var(--bdr);margin:4px 0;}
+.sb-ft{padding:11px 16px;border-top:1px solid var(--bdr);font-family:var(--ff-m);font-size:.56rem;color:var(--tx4);line-height:1.9;}
+
+.top{background:rgba(12,15,26,.94);backdrop-filter:blur(12px);border-bottom:1px solid var(--bdr);padding:9px 50px;position:sticky;top:0;z-index:50;display:flex;align-items:center;justify-content:space-between;font-family:var(--ff-m);font-size:.65rem;color:var(--tx3);}
+.top strong{color:var(--gold-l);}
+.top-chips{display:flex;gap:5px;}
+.tc{padding:2px 7px;border-radius:3px;font-size:.58rem;font-weight:600;border:1px solid;}
+.tc-g{background:var(--gd);border-color:var(--gb);color:var(--gold-l);}
+.tc-j{background:var(--jd);border-color:var(--jb);color:var(--jade);}
+.tc-s{background:var(--skd);border-color:var(--skb);color:var(--sky);}
+.tc-p{background:var(--pld);border-color:var(--plb);color:var(--plum);}
+
+.anc{display:block;height:73px;margin-top:-73px;visibility:hidden;}
+.sec{margin-bottom:52px;}
+.sec-eye{font-family:var(--ff-m);font-size:.56rem;color:var(--gold);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;}
+.sec-title{font-family:var(--ff-d);font-size:1.32rem;font-weight:800;color:var(--tx);line-height:1.12;margin-bottom:8px;}
+.sec-lead{font-size:.83rem;color:var(--tx2);max-width:640px;line-height:1.82;margin-bottom:16px;padding-left:11px;border-left:2px solid var(--bdr2);}
+.div{border:none;border-top:1px solid var(--bdr);margin:46px 0;}
+
+.hero{background:linear-gradient(135deg,var(--mid),var(--surf));border:1px solid var(--bdr2);border-radius:10px;padding:32px;margin-bottom:32px;position:relative;overflow:hidden;}
+.hero::after{content:'';position:absolute;top:-60px;right:-60px;width:220px;height:220px;background:radial-gradient(circle,var(--gd) 0%,transparent 70%);pointer-events:none;}
+.hero-eye{font-family:var(--ff-m);font-size:.57rem;color:var(--gold);letter-spacing:2.5px;text-transform:uppercase;margin-bottom:8px;}
+.hero-title{font-family:var(--ff-d);font-size:1.75rem;font-weight:800;color:var(--tx);line-height:1.06;margin-bottom:9px;}
+.hero-title em{color:var(--gold-l);font-style:normal;}
+.hero-body{font-size:.84rem;color:var(--tx2);max-width:560px;line-height:1.85;}
+.hero-stats{display:flex;flex-wrap:wrap;gap:24px;margin-top:20px;padding-top:16px;border-top:1px solid var(--bdr);}
+.hs-v{font-family:var(--ff-d);font-size:1.35rem;font-weight:800;color:var(--gold-xl);display:block;}
+.hs-l{font-family:var(--ff-m);font-size:.54rem;color:var(--tx3);letter-spacing:1px;}
+
+.n{border-radius:4px;padding:10px 13px;margin:8px 0;border-left:2px solid;}
+.n-lbl{font-family:var(--ff-m);font-size:.55rem;font-weight:600;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:3px;}
+.n p{font-size:.81rem;color:var(--tx2);}
+.n ul{padding-left:14px;}
+.n li{font-size:.79rem;color:var(--tx2);margin-bottom:2px;}
+.ng{border-color:var(--gold);background:var(--gd);} .ng .n-lbl{color:var(--gold-l);}
+.nj{border-color:var(--jade);background:var(--jd);} .nj .n-lbl{color:var(--jade);}
+.ns{border-color:var(--sky);background:var(--skd);} .ns .n-lbl{color:var(--sky);}
+.np{border-color:var(--plum);background:var(--pld);} .np .n-lbl{color:var(--plum);}
+.nc{border-color:var(--coral);background:var(--cod);} .nc .n-lbl{color:var(--coral);}
+.nt{border-color:var(--teal);background:var(--ted);} .nt .n-lbl{color:var(--teal);}
+.nr{border-color:var(--rose);background:var(--rod);} .nr .n-lbl{color:var(--rose);}
+
+.tbl{overflow-x:auto;border:1px solid var(--bdr);border-radius:5px;margin:9px 0;}
+table{width:100%;border-collapse:collapse;font-size:.76rem;}
+thead tr{background:var(--surf);}
+thead th{padding:8px 11px;text-align:left;font-family:var(--ff-m);font-weight:500;font-size:.62rem;color:var(--tx2);letter-spacing:.4px;white-space:nowrap;border-bottom:1px solid var(--bdr2);}
+tbody tr{border-bottom:1px solid var(--bdr);}
+tbody tr:hover{background:rgba(255,255,255,.02);}
+tbody td{padding:7px 11px;vertical-align:top;color:var(--tx2);line-height:1.6;}
+tbody td:first-child{font-family:var(--ff-m);font-size:.69rem;font-weight:600;color:var(--tx);}
+
+code{font-family:var(--ff-m);font-size:.79em;background:var(--surf);padding:1px 4px;border-radius:3px;color:var(--gold-l);border:1px solid var(--bdr);}
+pre{font-family:var(--ff-m);font-size:.71em;background:var(--deep);color:#9AAEC0;padding:16px 18px;border-radius:5px;overflow-x:auto;line-height:1.92;margin:9px 0;border:1px solid var(--bdr);}
+pre .kw{color:#C89050;} pre .fn{color:#70A8D0;} pre .str{color:#70A860;}
+pre .num{color:#C8A840;} pre .cmt{color:#2A3D50;font-style:italic;}
+pre .ok{color:#40A870;} pre .er{color:#C05040;} pre .tp{color:#9870C0;}
+
+.schema{background:var(--deep);border-radius:7px;padding:14px;display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;border:1px solid var(--bdr);}
+.dbt{background:rgba(255,255,255,.03);border:1px solid var(--bdr2);border-radius:4px;min-width:160px;overflow:hidden;}
+.dbh{padding:5px 9px;font-family:var(--ff-m);font-size:.67rem;font-weight:700;color:#fff;}
+.dh-g{background:rgba(200,137,28,.35);} .dh-j{background:rgba(16,168,112,.3);}
+.dh-s{background:rgba(24,144,216,.3);} .dh-p{background:rgba(128,80,208,.3);}
+.dh-c{background:rgba(216,64,64,.3);} .dh-a{background:rgba(208,128,32,.35);}
+.dh-t{background:rgba(16,184,192,.3);} .dh-r{background:rgba(192,64,160,.3);}
+.dbf{padding:3px 9px;font-family:var(--ff-m);font-size:.62rem;color:var(--tx3);border-bottom:1px solid var(--bdr);display:flex;align-items:center;gap:4px;}
+.dbf:last-child{border:none;}
+.pk{color:#F5C858;font-size:.55rem;font-weight:700;} .fk{color:#10A870;font-size:.55rem;font-weight:700;}
+.uk{color:#1890D8;font-size:.55rem;font-weight:700;} .tp{color:var(--tx4);font-size:.58rem;margin-left:auto;}
+.nn{color:#D08020;font-size:.55rem;}
+
+.arch{background:var(--deep);border:1px solid var(--bdr2);border-radius:10px;padding:26px;margin:13px 0;text-align:center;position:relative;overflow:hidden;}
+.arch::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 50% 0%,var(--gd) 0%,transparent 55%);pointer-events:none;}
+.arch-title{font-family:var(--ff-m);font-size:.57rem;color:var(--gold);letter-spacing:2px;text-transform:uppercase;margin-bottom:16px;}
+.layer{margin-bottom:5px;}
+.layer-lbl{font-family:var(--ff-m);font-size:.55rem;color:var(--tx3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:4px;}
+.layer-boxes{display:flex;justify-content:center;flex-wrap:wrap;gap:5px;}
+.lb{padding:5px 10px;border-radius:4px;font-family:var(--ff-m);font-size:.65rem;font-weight:600;border:1px solid;}
+.lb-g{background:var(--gd);border-color:var(--gb);color:var(--gold-l);}
+.lb-j{background:var(--jd);border-color:var(--jb);color:var(--jade);}
+.lb-s{background:var(--skd);border-color:var(--skb);color:var(--sky);}
+.lb-p{background:var(--pld);border-color:var(--plb);color:var(--plum);}
+.lb-c{background:var(--cod);border-color:var(--cob);color:var(--coral);}
+.lb-a{background:var(--amd);border-color:var(--amb);color:var(--amber);}
+.lb-t{background:var(--ted);border-color:var(--teb);color:var(--teal);}
+.lb-r{background:var(--rod);border-color:var(--rob);color:var(--rose);}
+.lb-lock{background:rgba(200,137,28,.08);border-color:rgba(200,137,28,.4);color:var(--gold-xl);font-weight:700;}
+.arch-arrow{color:var(--bdr2);font-size:.95rem;margin:5px 0;display:block;}
+
+.comm-tbl{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--bdr);border-radius:5px;overflow:hidden;margin:10px 0;}
+.ct{background:var(--deep);padding:10px 13px;}
+.ct.hdr{background:var(--surf);font-family:var(--ff-m);font-size:.61rem;font-weight:600;color:var(--tx2);text-transform:uppercase;letter-spacing:.5px;}
+.ct-range{font-family:var(--ff-m);font-size:.76rem;font-weight:600;color:var(--tx);}
+.ct-rate{font-family:var(--ff-d);font-size:1.2rem;font-weight:800;}
+.ct-desc{font-size:.71rem;color:var(--tx3);margin-top:2px;}
+.r1{color:var(--coral);} .r2{color:var(--amber);} .r3{color:var(--jade);} .r4{color:var(--sky);}
+
+.gh{background:linear-gradient(90deg,var(--surf),var(--deep));border:1px solid var(--bdr2);border-left:3px solid;border-radius:5px;padding:11px 15px;margin-bottom:11px;display:flex;align-items:center;gap:9px;}
+.gh-g{border-left-color:var(--gold);} .gh-j{border-left-color:var(--jade);}
+.gh-s{border-left-color:var(--sky);} .gh-p{border-left-color:var(--plum);}
+.gh-c{border-left-color:var(--coral);} .gh-t{border-left-color:var(--teal);}
+.gh-r{border-left-color:var(--rose);} .gh-a{border-left-color:var(--amber);}
+.gh-ico{font-size:1.1rem;}
+.gh-title{font-family:var(--ff-d);font-size:.9rem;font-weight:700;color:var(--tx);}
+.gh-desc{font-size:.75rem;color:var(--tx2);margin-top:1px;}
+.gh-count{margin-left:auto;font-family:var(--ff-m);font-size:.61rem;color:var(--tx3);white-space:nowrap;}
+
+.flow{display:flex;flex-direction:column;gap:0;margin:11px 0;}
+.fs{display:flex;gap:0;}
+.fs-l{display:flex;flex-direction:column;align-items:center;width:33px;flex-shrink:0;}
+.fb{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--ff-m);font-size:.62rem;font-weight:700;flex-shrink:0;z-index:1;}
+.fb-g{background:var(--gold);color:#fff;} .fb-j{background:var(--jade);color:#fff;}
+.fb-s{background:var(--sky);color:#fff;} .fb-p{background:var(--plum);color:#fff;}
+.fb-d{background:var(--tx3);color:var(--tx);}
+.fl{flex:1;width:1px;background:var(--bdr);margin:2px 0;min-height:9px;}
+.fs:last-child .fl{display:none;}
+.fr{flex:1;padding:0 0 13px 11px;padding-top:2px;}
+.fs:last-child .fr{padding-bottom:0;}
+.fh{font-family:var(--ff-m);font-size:.73rem;font-weight:600;color:var(--tx);margin-bottom:2px;}
+.fb2{font-size:.78rem;color:var(--tx2);line-height:1.65;}
+.ft{margin-top:4px;display:inline-block;font-family:var(--ff-m);font-size:.64rem;padding:2px 6px;border-radius:3px;border:1px solid;}
+.ft-j{background:var(--jd);border-color:var(--jb);color:var(--jade);}
+.ft-g{background:var(--gd);border-color:var(--gb);color:var(--gold-l);}
+.ft-c{background:var(--cod);border-color:var(--cob);color:var(--coral);}
+.ft-s{background:var(--skd);border-color:var(--skb);color:var(--sky);}
+
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+@media(max-width:720px){.g2{grid-template-columns:1fr;}}
+
+p{font-size:.82rem;color:var(--tx2);margin-bottom:6px;line-height:1.8;}
+h3{font-family:var(--ff-d);font-size:.93rem;font-weight:700;color:var(--tx);margin:16px 0 8px;padding-bottom:5px;border-bottom:1px solid var(--bdr);}
+h4{font-family:var(--ff-m);font-size:.72rem;font-weight:600;color:var(--tx2);margin:12px 0 5px;text-transform:uppercase;letter-spacing:.5px;}
+ul.d{padding-left:15px;margin-bottom:6px;}
+ul.d li{font-size:.79rem;color:var(--tx2);margin-bottom:2px;}
+
+.next-link{display:block;margin-top:30px;padding:14px 20px;background:var(--mid);border:1px solid var(--bdr2);border-radius:6px;text-align:center;font-family:var(--ff-m);font-size:.75rem;color:var(--gold-l);text-decoration:none;}
+.next-link:hover{background:var(--surf);}
+
+@media(max-width:860px){.sb{width:220px;}.main{margin-left:220px;}.page{padding:20px 14px 80px;}}
+@media(max-width:560px){.sb{display:none;}.main{margin-left:0;}}
+</style>
+</head>
+<body>
+<div class="layout">
+
+<aside class="sb">
+  <div class="sb-brand">
+    <div class="sb-logo">◈ KOWRI</div>
+    <div class="sb-sub">Economic Engine V5.0</div>
+    <div class="sb-v">// Document 1/2 · Couches L0–L3</div>
+  </div>
+  <div class="sb-nav">
+    <div class="sb-cat">Fondation</div>
+    <a class="sb-a" href="#s0"><span class="sb-n">00</span> Périmètre & Contraintes</a>
+    <a class="sb-a" href="#s1"><span class="sb-n">01</span> Architecture V5.0</a>
+    <a class="sb-a" href="#s2"><span class="sb-n">02</span> Commissions & Wallet</a>
+    <div class="sb-cat">L1 · Plateforme</div>
+    <a class="sb-a" href="#m01"><span class="sb-n">M01</span> Commission Plateforme</a>
+    <a class="sb-a" href="#m02"><span class="sb-n">M02</span> Wallet Central</a>
+    <a class="sb-a" href="#m03"><span class="sb-n">M03</span> Abonnement Tontinier</a>
+    <div class="sb-cat">L2 · Marché</div>
+    <a class="sb-a" href="#m04"><span class="sb-n">M04</span> Marketplace Tontines</a>
+    <a class="sb-a" href="#m05"><span class="sb-n">M05</span> Score Fiabilité</a>
+    <a class="sb-a" href="#m06"><span class="sb-n">M06</span> Badge Vérifié</a>
+    <a class="sb-a" href="#m07"><span class="sb-n">M07</span> Marché Secondaire</a>
+    <a class="sb-a" href="#m08"><span class="sb-n">M08</span> Commission Revente</a>
+    <div class="sb-cat">L3 · Financière</div>
+    <a class="sb-a" href="#m09"><span class="sb-n">M09</span> Float Financier</a>
+    <a class="sb-a" href="#m10"><span class="sb-n">M10</span> Dashboard Économique</a>
+    <a class="sb-a" href="#m11"><span class="sb-n">M11</span> Transfrontalières</a>
+    <a class="sb-a" href="#m12"><span class="sb-n">M12</span> Entreprises</a>
+    <a class="sb-a" href="#m13"><span class="sb-n">M13</span> Investissement</a>
+    <a class="sb-a" href="#m14"><span class="sb-n">M14</span> Garanties</a>
+    <a class="sb-a" href="#m15"><span class="sb-n">M15</span> Assurance</a>
+    <div class="sb-cat">Suite</div>
+    <a class="sb-a" href="#next">→ Document 2/2 (L4–L6 + Flux)</a>
+  </div>
+  <div class="sb-ft">V5.0 · Doc 1/2<br>L0 Core inchangé<br>L1-L3 définis ici</div>
+</aside>
+
+<div class="main">
+  <div class="top">
+    <div><strong>KOWRI V5.0</strong> · Economic Engine · Document 1/2 · Couches L0 à L3 · 15 modules</div>
+    <div class="top-chips">
+      <span class="tc tc-g">LEDGER INTACT</span>
+      <span class="tc tc-j">15 MODULES ICI</span>
+      <span class="tc tc-s">+15 DOC 2/2</span>
+    </div>
+  </div>
+  <div class="page">
+
+    <!-- HERO -->
+    <div class="hero">
+      <div class="hero-eye">// KOWRI V5.0 · Economic Engine Expansion · Document 1 sur 2</div>
+      <div class="hero-title">De la Tontine Digitale<br>à la <em>Super-App Financière</em></div>
+      <div class="hero-body">Architecture complète en deux documents. Ce document couvre la fondation économique et les couches L1 à L3 (15 modules). Le document 2/2 couvre les couches L4 à L6, les flux économiques détaillés et la roadmap d'implémentation. Le Core Engine V4.x reste strictement inchangé.</div>
+      <div class="hero-stats">
+        <div><span class="hs-v">30</span><span class="hs-l">MODULES TOTAL</span></div>
+        <div><span class="hs-v">6</span><span class="hs-l">COUCHES</span></div>
+        <div><span class="hs-v">60+</span><span class="hs-l">TABLES</span></div>
+        <div><span class="hs-v">0</span><span class="hs-l">MODIF. CORE</span></div>
+      </div>
+    </div>
+
+    <!-- ══ S0 PÉRIMÈTRE ══ -->
+    <div class="anc" id="s0"></div>
+    <div class="sec">
+      <div class="sec-eye">// 00 · PÉRIMÈTRE & CONTRAINTES</div>
+      <div class="sec-title">Ce qui est intouchable. Ce qui s'étend.</div>
+      <div class="g2">
+        <div class="n nc">
+          <div class="n-lbl">⛔ CORE ENGINE — STRICTEMENT INTOUCHABLE</div>
+          <ul>
+            <li><code>ledger_core</code> — Ledger central double-entry append-only</li>
+            <li><code>financial_invariants</code> — I1–I9 définis en V4.1</li>
+            <li><code>transaction_state_machine</code> — E2, matrice de transitions</li>
+            <li><code>transaction_journal</code> — AUDIT_LOGS append-only</li>
+            <li><code>mobile_money_flows</code> — SUSPENSE_MOMO, PENDING_EXTERNAL</li>
+          </ul>
+        </div>
+        <div class="n nj">
+          <div class="n-lbl">✅ RÈGLE ABSOLUE DES NOUVEAUX MODULES</div>
+          <ul>
+            <li>Toute valeur financière lue depuis le Ledger (jamais stockée)</li>
+            <li>Toute transaction soumise via le flow Core Engine V4.1</li>
+            <li>Aucun module ne crée un solde parallèle autoritaire</li>
+            <li>Les tables modules = logique métier, pas des montants de référence</li>
+            <li>Commissions uniquement sur payouts tontine (table commission_tiers)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="div"></div>
+
+    <!-- ══ S1 ARCHITECTURE ══ -->
+    <div class="anc" id="s1"></div>
+    <div class="sec">
+      <div class="sec-eye">// 01 · ARCHITECTURE GLOBALE V5.0</div>
+      <div class="sec-title">6 Couches — 30 Modules</div>
+
+      <div class="arch">
+        <div class="arch-title">// KOWRI V5.0 — Diagramme d'Architecture Logique</div>
+        <div class="layer">
+          <div class="layer-lbl">⚡ L0 · CORE ENGINE V4.x — INTOUCHABLE</div>
+          <div class="layer-boxes">
+            <span class="lb lb-lock">Ledger</span>
+            <span class="lb lb-lock">State Engine</span>
+            <span class="lb lb-lock">Risk Engine</span>
+            <span class="lb lb-lock">Compliance</span>
+            <span class="lb lb-lock">Audit Engine</span>
+            <span class="lb lb-lock">Fee Engine</span>
+            <span class="lb lb-lock">Treasury</span>
+          </div>
+        </div>
+        <span class="arch-arrow">↕ Lecture + Soumission transactions uniquement</span>
+        <div class="layer">
+          <div class="layer-lbl">L1 · COUCHE PLATEFORME (ce document)</div>
+          <div class="layer-boxes">
+            <span class="lb lb-g">M01 Commission</span>
+            <span class="lb lb-g">M02 Wallet</span>
+            <span class="lb lb-g">M03 Abonnement</span>
+          </div>
+        </div>
+        <span class="arch-arrow">↕</span>
+        <div class="layer">
+          <div class="layer-lbl">L2 · COUCHE MARCHÉ (ce document)</div>
+          <div class="layer-boxes">
+            <span class="lb lb-j">M04 Marketplace</span>
+            <span class="lb lb-j">M05 Score</span>
+            <span class="lb lb-j">M06 Badge</span>
+            <span class="lb lb-j">M07 Marché Secondaire</span>
+            <span class="lb lb-j">M08 Comm. Revente</span>
+          </div>
+        </div>
+        <span class="arch-arrow">↕</span>
+        <div class="layer">
+          <div class="layer-lbl">L3 · COUCHE FINANCIÈRE AVANCÉE (ce document)</div>
+          <div class="layer-boxes">
+            <span class="lb lb-s">M09 Float</span>
+            <span class="lb lb-s">M10 Dashboard</span>
+            <span class="lb lb-s">M11 Transfrontalier</span>
+            <span class="lb lb-s">M12 Entreprises</span>
+            <span class="lb lb-s">M13 Investissement</span>
+            <span class="lb lb-s">M14 Garanties</span>
+            <span class="lb lb-s">M15 Assurance</span>
+          </div>
+        </div>
+        <span class="arch-arrow">↕</span>
+        <div class="layer">
+          <div class="layer-lbl">L4-L6 · CRÉDIT / ÉPARGNE / COMMUNAUTAIRE (document 2/2)</div>
+          <div class="layer-boxes">
+            <span class="lb lb-p">M16–M19 Crédit</span>
+            <span class="lb lb-c">M20–M23 Épargne</span>
+            <span class="lb lb-r">M24–M30 Communauté</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="div"></div>
+
+    <!-- ══ S2 COMMISSIONS ══ -->
+    <div class="anc" id="s2"></div>
+    <div class="sec">
+      <div class="sec-eye">// 02 · COMMISSIONS & WALLET — FONDATION ÉCONOMIQUE</div>
+      <div class="sec-title">Structure de Commission & Règle Wallet</div>
+
+      <h3>Table commission_tiers — Structure officielle</h3>
+      <div class="comm-tbl">
+        <div class="ct hdr">Tranche payout</div>
+        <div class="ct hdr">Commission</div>
+        <div class="ct hdr">Exemple calculé</div>
+        <div class="ct"><div class="ct-range">0 – 200 000 XOF</div><div class="ct-desc">Petits cycles communautaires</div></div>
+        <div class="ct"><div class="ct-rate r1">8%</div></div>
+        <div class="ct"><div class="ct-desc">100k XOF → comm. = 8 000 XOF · net = 92 000</div></div>
+        <div class="ct"><div class="ct-range">200 001 – 500 000 XOF</div><div class="ct-desc">Tontines standards</div></div>
+        <div class="ct"><div class="ct-rate r2">6%</div></div>
+        <div class="ct"><div class="ct-desc">350k XOF → comm. = 21 000 XOF · net = 329 000</div></div>
+        <div class="ct"><div class="ct-range">500 001 – 1 000 000 XOF</div><div class="ct-desc">Tontines moyennes</div></div>
+        <div class="ct"><div class="ct-rate r3">4%</div></div>
+        <div class="ct"><div class="ct-desc">750k XOF → comm. = 30 000 XOF · net = 720 000</div></div>
+        <div class="ct"><div class="ct-range">1 000 001+ XOF</div><div class="ct-desc">Grandes tontines / Entreprises</div></div>
+        <div class="ct"><div class="ct-rate r4">2.5%</div></div>
+        <div class="ct"><div class="ct-desc">2M XOF → comm. = 50 000 XOF · net = 1 950 000</div></div>
+      </div>
+
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-g">commission_tiers</div>
+          <div class="dbf"><span class="pk">PK</span> tier_id <span class="tp">UUID</span></div>
+          <div class="dbf">tier_name <span class="tp">VARCHAR(50)</span></div>
+          <div class="dbf">min_amount_xof <span class="tp">BIGINT</span><span class="nn">NN</span></div>
+          <div class="dbf">max_amount_xof <span class="tp">BIGINT NULL</span></div>
+          <div class="dbf">rate_bps <span class="tp">INT</span><span class="nn">NN</span></div>
+          <div class="dbf">currency <span class="tp">VARCHAR(3)</span></div>
+          <div class="dbf">country_scope <span class="tp">VARCHAR[]</span></div>
+          <div class="dbf">applies_to <span class="tp">ENUM</span></div>
+          <div class="dbf">discount_for_sub <span class="tp">INT</span></div>
+          <div class="dbf">is_active <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">effective_from <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">created_by_admin <span class="tp">UUID</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-g">commission_calculations</div>
+          <div class="dbf"><span class="pk">PK</span> calc_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> payout_ledger_tx <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tier_id_applied <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tontine_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> beneficiary_id <span class="tp">UUID</span></div>
+          <div class="dbf">gross_payout <span class="tp">BIGINT</span></div>
+          <div class="dbf">rate_applied_bps <span class="tp">INT</span></div>
+          <div class="dbf">commission_amount <span class="tp">BIGINT</span></div>
+          <div class="dbf">net_payout <span class="tp">BIGINT</span></div>
+          <div class="dbf">sub_discount_applied <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">tier_snapshot <span class="tp">JSONB</span></div>
+          <div class="dbf">calculated_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+
+      <div class="n ng">
+        <div class="n-lbl">Règle de calcul — Bigint, jamais float</div>
+        <p>Tous les montants en unité minimale (XOF centimes ou XOF entier selon la devise). <code>commission = gross_payout × rate_bps / 10000</code> avec division entière (floor). Si l'utilisateur a un abonnement actif (M03), le taux est réduit du <code>discount_for_sub</code> en bps. La commission est toujours écrite via Fee Engine → PLATFORM_FEES (jamais de déduction silencieuse).</p>
+      </div>
+
+      <h3>Règle Wallet — Invariant absolu (aucune table de solde)</h3>
+      <pre><span class="cmt">-- wallet_balance = projection des entrées Ledger. Toujours calculé, jamais stocké.</span>
+
+<span class="tp">WalletView</span> <span class="fn">get_wallet</span>(user_id):
+  available  = ledger.<span class="fn">get_balance</span>(<span class="str">"CLIENT_WALLET"</span>, user_id, status=<span class="str">COMMITTED</span>)
+  reserved   = ledger.<span class="fn">sum_pending_external</span>(user_id)   <span class="cmt">-- MOMO in-flight</span>
+  in_coffre  = ledger.<span class="fn">get_balance</span>(<span class="str">"CLIENT_COFFRE"</span>, user_id)  <span class="cmt">-- M20</span>
+  <span class="kw">RETURN</span> { available, reserved, in_coffre, total: available+reserved+in_coffre }
+  <span class="cmt">-- Aucune table wallet_balances. GET_BALANCE lit LEDGER_ENTRIES.</span></pre>
+    </div>
+
+    <div class="div"></div>
+
+    <!-- ══ L1 ══ -->
+    <div class="sec">
+      <div class="sec-eye">// L1 · COUCHE PLATEFORME</div>
+      <div class="sec-title">Modules Fondamentaux</div>
+
+      <div class="anc" id="m01"></div>
+      <div class="gh gh-g"><span class="gh-ico">💰</span><div><div class="gh-title">M01 — Commission Plateforme</div><div class="gh-desc">Intercepte chaque payout tontine, calcule et écrit la commission via Fee Engine</div></div><span class="gh-count">2 tables · L1</span></div>
+      <p>Ce module s'insère entre le State Engine (signal PAYOUT_READY) et l'écriture Ledger finale. Il consulte <code>commission_tiers</code>, calcule en bigint, puis transmet au Fee Engine qui écrit de façon atomique.</p>
+      <div class="flow">
+        <div class="fs"><div class="fs-l"><div class="fb fb-g">1</div><div class="fl"></div></div><div class="fr"><div class="fh">Signal PAYOUT_READY depuis State Engine</div><div class="fb2">Le cycle tontine est terminé. L'État Engine émet un événement. M01 est en écoute. Aucune écriture encore.</div></div></div>
+        <div class="fs"><div class="fs-l"><div class="fb fb-g">2</div><div class="fl"></div></div><div class="fr"><div class="fh">Calcul commission depuis commission_tiers</div><div class="fb2">Lookup tranche selon <code>gross_payout</code>. Vérification abonnement actif (M03). Calcul bigint. Enregistrement dans <code>commission_calculations</code> (état PRE_COMMIT).</div><span class="ft ft-g">→ commission_amount calculé</span></div></div>
+        <div class="fs"><div class="fs-l"><div class="fb fb-j">3</div><div class="fl"></div></div><div class="fr"><div class="fh">Fee Engine écrit dans le Ledger (atomique)</div><div class="fb2">Une seule transaction DB : DEBIT CLIENT_TONTINE_POOL (gross), CREDIT CLIENT_WALLET[bénéficiaire] (net), CREDIT PLATFORM_FEES (commission). Équilibre vérifié avant COMMIT.</div><span class="ft ft-j">→ LEDGER_COMMITTED · double-entry ✓</span></div></div>
+        <div class="fs"><div class="fs-l"><div class="fb fb-d">4</div></div><div class="fr"><div class="fh">Mise à jour commission_calculations → COMMITTED</div><div class="fb2">Référence du ledger_tx_id stockée dans calc. Audit log PAYOUT_WITH_COMMISSION. Notification bénéficiaire avec montant net.</div></div></div>
+      </div>
+
+      <div class="anc" id="m02"></div>
+      <div class="gh gh-g" style="margin-top:16px;"><span class="gh-ico">👛</span><div><div class="gh-title">M02 — Wallet Central</div><div class="gh-desc">Vue unifiée du portefeuille · Jamais de table de solde · Lecture Ledger</div></div><span class="gh-count">2 tables · L1</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-g">wallet_preferences</div>
+          <div class="dbf"><span class="pk">PK</span> user_id <span class="tp">UUID</span></div>
+          <div class="dbf">default_currency <span class="tp">VARCHAR(3)</span></div>
+          <div class="dbf">auto_save_pct <span class="tp">INT DEFAULT 0</span></div>
+          <div class="dbf">coffre_auto_rule <span class="tp">JSONB</span></div>
+          <div class="dbf">pin_hash <span class="tp">TEXT enc</span></div>
+          <div class="dbf">biometric_enabled <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">display_currency <span class="tp">VARCHAR(3)</span></div>
+          <div class="dbf">updated_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-g">wallet_balance_snapshots</div>
+          <div class="dbf"><span class="pk">PK</span> snapshot_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> user_id <span class="tp">UUID</span></div>
+          <div class="dbf">snapshot_date <span class="tp">DATE</span></div>
+          <div class="dbf">balance_available <span class="tp">BIGINT</span></div>
+          <div class="dbf">checksum_ledger <span class="tp">VARCHAR</span></div>
+          <div class="dbf">divergence_flag <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">created_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+      <div class="n nt"><div class="n-lbl">Snapshots = optimisation seulement</div><p>Les snapshots quotidiens dans <code>wallet_balance_snapshots</code> accélèrent l'affichage mais ne font jamais autorité. En cas de divergence (<code>divergence_flag = true</code>), c'est toujours <code>GET_BALANCE()</code> depuis le Ledger qui est utilisé. Le checksum compare le snapshot au calcul Ledger pour détecter les inconsistances.</p></div>
+
+      <div class="anc" id="m03"></div>
+      <div class="gh gh-g" style="margin-top:16px;"><span class="gh-ico">📋</span><div><div class="gh-title">M03 — Abonnement Tontinier</div><div class="gh-desc">Plans d'abonnement pour organisateurs et membres premium avec réduction de commission</div></div><span class="gh-count">3 tables · L1</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-g">subscription_plans</div>
+          <div class="dbf"><span class="pk">PK</span> plan_id <span class="tp">UUID</span></div>
+          <div class="dbf">plan_code <span class="tp">VARCHAR</span><span class="tp"> UNIQUE</span></div>
+          <div class="dbf">name <span class="tp">VARCHAR</span></div>
+          <div class="dbf">plan_type <span class="tp">ENUM</span></div>
+          <div class="dbf">price_monthly_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">price_annual_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">max_tontines <span class="tp">INT</span></div>
+          <div class="dbf">max_members_per <span class="tp">INT</span></div>
+          <div class="dbf">commission_discount_bps <span class="tp">INT</span></div>
+          <div class="dbf">features_json <span class="tp">JSONB</span></div>
+          <div class="dbf">is_active <span class="tp">BOOLEAN</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-g">user_subscriptions</div>
+          <div class="dbf"><span class="pk">PK</span> sub_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> user_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> plan_id <span class="tp">UUID</span></div>
+          <div class="dbf">billing_cycle <span class="tp">ENUM</span></div>
+          <div class="dbf">status <span class="tp">ENUM</span></div>
+          <div class="dbf">started_at <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">renews_at <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">billing_ledger_tx <span class="tp">UUID</span></div>
+          <div class="dbf">auto_renew <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">cancelled_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="div"></div>
+
+    <!-- ══ L2 ══ -->
+    <div class="sec">
+      <div class="sec-eye">// L2 · COUCHE MARCHÉ</div>
+      <div class="sec-title">Marketplace & Instruments de Marché</div>
+
+      <div class="anc" id="m04"></div>
+      <div class="gh gh-j"><span class="gh-ico">🏪</span><div><div class="gh-title">M04 — Marketplace Tontines</div><div class="gh-desc">Découverte publique de tontines · Filtres · Adhésion en ligne · Panafricain</div></div><span class="gh-count">4 tables · L2</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-j">tontine_listings</div>
+          <div class="dbf"><span class="pk">PK</span> listing_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tontine_id <span class="tp">UUID</span></div>
+          <div class="dbf">visibility <span class="tp">ENUM</span></div>
+          <div class="dbf">title <span class="tp">VARCHAR</span></div>
+          <div class="dbf">description <span class="tp">TEXT</span></div>
+          <div class="dbf">category <span class="tp">ENUM</span></div>
+          <div class="dbf">country_focus <span class="tp">VARCHAR[]</span></div>
+          <div class="dbf">language <span class="tp">VARCHAR(5)</span></div>
+          <div class="dbf">min_score_required <span class="tp">INT</span></div>
+          <div class="dbf">kyc_tier_required <span class="tp">INT</span></div>
+          <div class="dbf">spots_available <span class="tp">INT</span></div>
+          <div class="dbf">featured_until <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">view_count <span class="tp">INT</span></div>
+          <div class="dbf">join_count <span class="tp">INT</span></div>
+          <div class="dbf">listed_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-j">marketplace_join_requests</div>
+          <div class="dbf"><span class="pk">PK</span> request_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> listing_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> applicant_id <span class="tp">UUID</span></div>
+          <div class="dbf">message <span class="tp">TEXT</span></div>
+          <div class="dbf">score_at_request <span class="tp">INT</span></div>
+          <div class="dbf">kyc_tier_at_req <span class="tp">INT</span></div>
+          <div class="dbf">status <span class="tp">ENUM</span></div>
+          <div class="dbf">reviewed_by <span class="tp">UUID</span></div>
+          <div class="dbf">reviewed_at <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">created_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-j">listing_reviews</div>
+          <div class="dbf"><span class="pk">PK</span> review_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> listing_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> reviewer_id <span class="tp">UUID</span></div>
+          <div class="dbf">score <span class="tp">INT (1-5)</span></div>
+          <div class="dbf">comment <span class="tp">TEXT</span></div>
+          <div class="dbf">tontine_completed <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">created_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+
+      <div class="anc" id="m05"></div>
+      <div class="gh gh-j" style="margin-top:16px;"><span class="gh-ico">⭐</span><div><div class="gh-title">M05 — Score Fiabilité Tontinier</div><div class="gh-desc">Score comportemental tontine · Distinct du Score Engine global V4.0</div></div><span class="gh-count">2 tables · L2</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-j">tontine_reliability_scores</div>
+          <div class="dbf"><span class="pk">PK</span> user_id <span class="tp">UUID</span></div>
+          <div class="dbf">score_total <span class="tp">INT (0-1000)</span></div>
+          <div class="dbf">score_punctuality <span class="tp">INT</span></div>
+          <div class="dbf">score_consistency <span class="tp">INT</span></div>
+          <div class="dbf">score_longevity <span class="tp">INT</span></div>
+          <div class="dbf">tontines_completed <span class="tp">INT</span></div>
+          <div class="dbf">tontines_abandoned <span class="tp">INT</span></div>
+          <div class="dbf">avg_delay_days <span class="tp">DECIMAL</span></div>
+          <div class="dbf">streak_on_time <span class="tp">INT</span></div>
+          <div class="dbf">last_recalculated <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-j">reliability_events</div>
+          <div class="dbf"><span class="pk">PK</span> event_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> user_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tontine_id <span class="tp">UUID</span></div>
+          <div class="dbf">event_type <span class="tp">ENUM</span></div>
+          <div class="dbf">delta_score <span class="tp">INT</span></div>
+          <div class="dbf">dimension <span class="tp">ENUM</span></div>
+          <div class="dbf">reference_tx_id <span class="tp">UUID</span></div>
+          <div class="dbf">created_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+      <div class="n nj"><div class="n-lbl">Relation avec Score Engine Core</div><p>M05 est complémentaire au Score Engine V4.0. V4.0 gère le score global (limites crédit, AML). M05 gère le score comportemental tontine (accès marketplace, badge). Ils partagent les mêmes événements sources (via AUDIT_LOGS) mais calculent des métriques différentes. M05 ne modifie jamais le Score Engine V4.0.</p></div>
+
+      <div class="anc" id="m06"></div>
+      <div class="gh gh-j" style="margin-top:16px;"><span class="gh-ico">🏅</span><div><div class="gh-title">M06 — Badge Tontinier Vérifié</div><div class="gh-desc">Certification comportementale · Déblocage d'accès et avantages</div></div><span class="gh-count">2 tables · L2</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-j">badge_definitions</div>
+          <div class="dbf"><span class="pk">PK</span> badge_id <span class="tp">UUID</span></div>
+          <div class="dbf">code <span class="tp">VARCHAR</span><span class="tp"> UNIQUE</span></div>
+          <div class="dbf">name <span class="tp">VARCHAR</span></div>
+          <div class="dbf">level <span class="tp">ENUM(BRONZE,SILVER,GOLD,DIAMOND)</span></div>
+          <div class="dbf">min_reliability_score <span class="tp">INT</span></div>
+          <div class="dbf">min_tontines_done <span class="tp">INT</span></div>
+          <div class="dbf">min_kyc_tier <span class="tp">INT</span></div>
+          <div class="dbf">validity_months <span class="tp">INT</span></div>
+          <div class="dbf">perks_json <span class="tp">JSONB</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-j">user_badges</div>
+          <div class="dbf"><span class="pk">PK</span> user_badge_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> user_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> badge_id <span class="tp">UUID</span></div>
+          <div class="dbf">awarded_at <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">expires_at <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">is_active <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">revoked_at <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">revoke_reason <span class="tp">TEXT</span></div>
+        </div>
+      </div>
+
+      <div class="anc" id="m07"></div>
+      <div class="gh gh-j" style="margin-top:16px;"><span class="gh-ico">🔄</span><div><div class="gh-title">M07 — Marché Secondaire de Positions</div><div class="gh-desc">Revente de position tontine entre membres · Avec approbation organisateur</div></div><span class="gh-count">3 tables · L2</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-j">position_listings</div>
+          <div class="dbf"><span class="pk">PK</span> listing_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tontine_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> seller_id <span class="tp">UUID</span></div>
+          <div class="dbf">position_slot <span class="tp">INT</span></div>
+          <div class="dbf">contributions_paid <span class="tp">INT</span></div>
+          <div class="dbf">remaining_cycles <span class="tp">INT</span></div>
+          <div class="dbf">face_value_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">asking_price_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">min_buyer_score <span class="tp">INT</span></div>
+          <div class="dbf">organizer_pre_approved <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">status <span class="tp">ENUM</span></div>
+          <div class="dbf">expires_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-j">position_transfers</div>
+          <div class="dbf"><span class="pk">PK</span> transfer_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> listing_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> buyer_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> seller_id <span class="tp">UUID</span></div>
+          <div class="dbf">sale_price_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">platform_comm_ledger_tx <span class="tp">UUID</span></div>
+          <div class="dbf">org_comm_ledger_tx <span class="tp">UUID</span></div>
+          <div class="dbf">payment_ledger_tx <span class="tp">UUID</span></div>
+          <div class="dbf">org_approval_at <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">status <span class="tp">ENUM</span></div>
+          <div class="dbf">completed_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+
+      <div class="anc" id="m08"></div>
+      <div class="gh gh-j" style="margin-top:16px;"><span class="gh-ico">💹</span><div><div class="gh-title">M08 — Commission Revente Position</div><div class="gh-desc">3% acheteur + 0.5% organisateur · Tout via Fee Engine</div></div><span class="gh-count">1 table · L2</span></div>
+      <pre><span class="cmt">-- Flux financier revente position (atomique dans une transaction DB)</span>
+SALE_PRICE       = <span class="num">140_000</span> XOF
+PLATFORM_COMM    = 140_000 × <span class="num">300</span> / 10_000 = <span class="num">4_200</span> XOF   <span class="cmt">(3%)</span>
+ORGANIZER_COMM   = 140_000 × <span class="num">50</span>  / 10_000 = <span class="num">700</span> XOF    <span class="cmt">(0.5%)</span>
+NET_TO_SELLER    = 140_000 - 4_200 - 700   = <span class="num">135_100</span> XOF
+
+<span class="cmt">-- Écriture Ledger double-entry (4 lignes, toutes dans le même tx DB) :</span>
+DEBIT  CLIENT_WALLET[buyer]           <span class="num">140_000</span> XOF
+CREDIT CLIENT_WALLET[seller]          <span class="num">135_100</span> XOF
+CREDIT PLATFORM_FEES                    <span class="num">4_200</span> XOF
+CREDIT CLIENT_WALLET[organizer]           <span class="num">700</span> XOF
+<span class="cmt">-- 140_000 = 135_100 + 4_200 + 700 ✓ (équilibré)</span>
+
+<span class="cmt">-- Position transférée logiquement dans tontine_members (hors ledger) :</span>
+<span class="kw">UPDATE</span> tontine_members <span class="kw">SET</span> user_id = buyer_id <span class="kw">WHERE</span> slot = sold_slot</pre>
+    </div>
+
+    <div class="div"></div>
+
+    <!-- ══ L3 ══ -->
+    <div class="sec">
+      <div class="sec-eye">// L3 · COUCHE FINANCIÈRE AVANCÉE</div>
+      <div class="sec-title">Tontines Spécialisées, Float, Instruments</div>
+
+      <div class="anc" id="m09"></div>
+      <div class="gh gh-s"><span class="gh-ico">📊</span><div><div class="gh-title">M09 — Observabilité Float Financier</div><div class="gh-desc">Monitoring temps réel des positions de liquidité par pays et opérateur MOMO</div></div><span class="gh-count">2 tables · L3</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-s">float_positions</div>
+          <div class="dbf"><span class="pk">PK</span> position_id <span class="tp">UUID</span></div>
+          <div class="dbf">country <span class="tp">VARCHAR(2)</span></div>
+          <div class="dbf">currency <span class="tp">VARCHAR(3)</span></div>
+          <div class="dbf">operator <span class="tp">ENUM(ORANGE,MTN,WAVE,MOOV)</span></div>
+          <div class="dbf">ledger_balance_ref <span class="tp">VARCHAR</span></div>
+          <div class="dbf">real_balance_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">min_float_target <span class="tp">BIGINT</span></div>
+          <div class="dbf">alert_threshold <span class="tp">BIGINT</span></div>
+          <div class="dbf">last_synced_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-s">float_alerts</div>
+          <div class="dbf"><span class="pk">PK</span> alert_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> position_id <span class="tp">UUID</span></div>
+          <div class="dbf">alert_type <span class="tp">ENUM</span></div>
+          <div class="dbf">severity <span class="tp">ENUM</span></div>
+          <div class="dbf">current_value <span class="tp">BIGINT</span></div>
+          <div class="dbf">threshold_value <span class="tp">BIGINT</span></div>
+          <div class="dbf">resolved <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">resolved_at <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">created_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+      <div class="n ns"><div class="n-lbl">Extension du Treasury Engine V4.0</div><p>M09 étend l'observabilité du Treasury Engine (V4.0) avec une granularité par opérateur et par pays. Il lit uniquement les positions Ledger et les soldes opérateurs réels. En cas d'alerte critique, il déclenche un événement vers le Treasury Engine V4.0 qui reste le seul autorisé à modifier des états de comptes.</p></div>
+
+      <div class="anc" id="m10"></div>
+      <div class="gh gh-s" style="margin-top:16px;"><span class="gh-ico">📈</span><div><div class="gh-title">M10 — Dashboard Économique</div><div class="gh-desc">Agrégats financiers pré-calculés · Lecture seule depuis Ledger</div></div><span class="gh-count">2 tables snapshots · L3</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-s">eco_daily_snapshots</div>
+          <div class="dbf"><span class="pk">PK</span> snapshot_id <span class="tp">UUID</span></div>
+          <div class="dbf">snapshot_date <span class="tp">DATE</span></div>
+          <div class="dbf">country <span class="tp">VARCHAR(2)</span></div>
+          <div class="dbf">total_volume_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">total_payouts_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">total_commissions <span class="tp">BIGINT</span></div>
+          <div class="dbf">active_tontines <span class="tp">INT</span></div>
+          <div class="dbf">active_users <span class="tp">INT</span></div>
+          <div class="dbf">new_users <span class="tp">INT</span></div>
+          <div class="dbf">microcredit_disbursed <span class="tp">BIGINT</span></div>
+          <div class="dbf">default_rate_pct <span class="tp">DECIMAL</span></div>
+          <div class="dbf">computed_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+
+      <div class="anc" id="m11"></div>
+      <div class="gh gh-s" style="margin-top:16px;"><span class="gh-ico">🌍</span><div><div class="gh-title">M11 — Tontines Transfrontalières</div><div class="gh-desc">Tontines multi-devises · Membres de pays africains différents · FX rate lock</div></div><span class="gh-count">3 tables · L3</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-s">cross_border_tontines</div>
+          <div class="dbf"><span class="pk">PK</span> cb_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tontine_id <span class="tp">UUID</span></div>
+          <div class="dbf">reference_currency <span class="tp">VARCHAR(3)</span></div>
+          <div class="dbf">accepted_currencies <span class="tp">VARCHAR[]</span></div>
+          <div class="dbf">fx_rate_source <span class="tp">ENUM</span></div>
+          <div class="dbf">fx_lock_hours <span class="tp">INT</span></div>
+          <div class="dbf">countries_allowed <span class="tp">VARCHAR[]</span></div>
+          <div class="dbf">regulatory_status <span class="tp">JSONB</span></div>
+          <div class="dbf">total_volume_usd <span class="tp">BIGINT</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-s">fx_rate_snapshots</div>
+          <div class="dbf"><span class="pk">PK</span> snap_id <span class="tp">UUID</span></div>
+          <div class="dbf">from_currency <span class="tp">VARCHAR(3)</span></div>
+          <div class="dbf">to_currency <span class="tp">VARCHAR(3)</span></div>
+          <div class="dbf">rate <span class="tp">DECIMAL(18,8)</span></div>
+          <div class="dbf">spread_bps <span class="tp">INT</span></div>
+          <div class="dbf">source <span class="tp">VARCHAR</span></div>
+          <div class="dbf">valid_until <span class="tp">TIMESTAMPTZ</span></div>
+          <div class="dbf">captured_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-s">cb_member_currencies</div>
+          <div class="dbf"><span class="pk">PK</span> entry_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> cb_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> user_id <span class="tp">UUID</span></div>
+          <div class="dbf">local_currency <span class="tp">VARCHAR(3)</span></div>
+          <div class="dbf">contribution_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">fx_rate_used <span class="tp">DECIMAL</span></div>
+          <div class="dbf">fx_snapshot_id <span class="tp">UUID</span></div>
+        </div>
+      </div>
+
+      <div class="anc" id="m12"></div>
+      <div class="gh gh-s" style="margin-top:16px;"><span class="gh-ico">🏢</span><div><div class="gh-title">M12 — Tontines Entreprises</div><div class="gh-desc">Épargne salariale collective · Intégration RH · Contribution employeur</div></div><span class="gh-count">2 tables · L3</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-s">enterprise_tontines</div>
+          <div class="dbf"><span class="pk">PK</span> ent_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tontine_id <span class="tp">UUID</span></div>
+          <div class="dbf">company_name <span class="tp">VARCHAR</span></div>
+          <div class="dbf">company_siret <span class="tp">VARCHAR enc</span></div>
+          <div class="dbf">hr_admin_id <span class="tp">UUID</span></div>
+          <div class="dbf">employer_contrib_pct <span class="tp">INT</span></div>
+          <div class="dbf">employer_contrib_max <span class="tp">BIGINT</span></div>
+          <div class="dbf">payroll_integration <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">vesting_months <span class="tp">INT</span></div>
+          <div class="dbf">tax_regime <span class="tp">ENUM</span></div>
+        </div>
+      </div>
+
+      <div class="anc" id="m13"></div>
+      <div class="gh gh-s" style="margin-top:16px;"><span class="gh-ico">📈</span><div><div class="gh-title">M13 — Tontines Investissement</div><div class="gh-desc">Capital poolé vers actifs réels · Immobilier, obligations, fonds PME</div></div><span class="gh-count">3 tables · L3</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-s">investment_tontines</div>
+          <div class="dbf"><span class="pk">PK</span> inv_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tontine_id <span class="tp">UUID</span></div>
+          <div class="dbf">target_asset_type <span class="tp">ENUM</span></div>
+          <div class="dbf">target_return_pct <span class="tp">DECIMAL</span></div>
+          <div class="dbf">lock_period_months <span class="tp">INT</span></div>
+          <div class="dbf">min_total_capital <span class="tp">BIGINT</span></div>
+          <div class="dbf">asset_manager_id <span class="tp">UUID</span></div>
+          <div class="dbf">escrow_account_id <span class="tp">VARCHAR</span></div>
+          <div class="dbf">regulatory_approved <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">prospectus_url <span class="tp">VARCHAR</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-s">investment_returns</div>
+          <div class="dbf"><span class="pk">PK</span> return_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> inv_id <span class="tp">UUID</span></div>
+          <div class="dbf">period <span class="tp">DATE</span></div>
+          <div class="dbf">gross_return_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">platform_fee_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">net_to_members_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">ledger_dist_tx_id <span class="tp">UUID</span></div>
+          <div class="dbf">distributed_at <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+
+      <div class="anc" id="m14"></div>
+      <div class="gh gh-s" style="margin-top:16px;"><span class="gh-ico">🛡️</span><div><div class="gh-title">M14 — Tontines Garanties</div><div class="gh-desc">Tontines avec garantie de payout par RESERVE_GUARANTY · Gérée par Treasury Engine</div></div><span class="gh-count">2 tables · L3</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-s">guaranteed_tontines</div>
+          <div class="dbf"><span class="pk">PK</span> gt_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tontine_id <span class="tp">UUID</span></div>
+          <div class="dbf">guarantee_type <span class="tp">ENUM</span></div>
+          <div class="dbf">coverage_pct <span class="tp">INT</span></div>
+          <div class="dbf">max_coverage_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">reserve_allocated_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">reserve_ledger_entry <span class="tp">UUID</span></div>
+          <div class="dbf">guarantee_active <span class="tp">BOOLEAN</span></div>
+          <div class="dbf">premium_rate_bps <span class="tp">INT</span></div>
+        </div>
+      </div>
+      <div class="n ns"><div class="n-lbl">Interaction Treasury Engine V4.0</div><p>M14 soumet une demande de réservation au Treasury Engine qui vérifie le ratio RESERVE_GUARANTY / encours crédits (invariant I6). Si le ratio reste ≥ 8%, la garantie est accordée et une portion de RESERVE_GUARANTY est allouée. L'activation sur défaut est déclenchée par le Treasury Engine selon la procédure V4.1 — M14 ne fait que demander.</p></div>
+
+      <div class="anc" id="m15"></div>
+      <div class="gh gh-s" style="margin-top:16px;"><span class="gh-ico">🔒</span><div><div class="gh-title">M15 — Assurance Tontine</div><div class="gh-desc">Assurance vie/décès liée à la position · Partenariat assureurs africains</div></div><span class="gh-count">3 tables · L3</span></div>
+      <div class="schema">
+        <div class="dbt">
+          <div class="dbh dh-s">insurance_products</div>
+          <div class="dbf"><span class="pk">PK</span> product_id <span class="tp">UUID</span></div>
+          <div class="dbf">provider_name <span class="tp">VARCHAR</span></div>
+          <div class="dbf">coverage_type <span class="tp">ENUM</span></div>
+          <div class="dbf">premium_rate_bps <span class="tp">INT</span></div>
+          <div class="dbf">coverage_multiple <span class="tp">DECIMAL</span></div>
+          <div class="dbf">max_coverage_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">countries <span class="tp">VARCHAR[]</span></div>
+          <div class="dbf">api_endpoint <span class="tp">VARCHAR</span></div>
+          <div class="dbf">is_active <span class="tp">BOOLEAN</span></div>
+        </div>
+        <div class="dbt">
+          <div class="dbh dh-s">member_insurance</div>
+          <div class="dbf"><span class="pk">PK</span> policy_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> user_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> tontine_id <span class="tp">UUID</span></div>
+          <div class="dbf"><span class="fk">FK</span> product_id <span class="tp">UUID</span></div>
+          <div class="dbf">coverage_xof <span class="tp">BIGINT</span></div>
+          <div class="dbf">premium_ledger_tx <span class="tp">UUID</span></div>
+          <div class="dbf">beneficiary_id <span class="tp">UUID</span></div>
+          <div class="dbf">status <span class="tp">ENUM</span></div>
+          <div class="dbf">valid_until <span class="tp">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="div"></div>
+
+    <div class="anc" id="next"></div>
+    <div class="n ng">
+      <div class="n-lbl">→ Document 2/2 — Couches L4 à L6 + Flux Économiques</div>
+      <p>Le document 2/2 couvre : <strong>L4</strong> (M16 Score Financier, M17 Micro-crédit, M18 API KOWRI, M19 Agents) · <strong>L5</strong> (M20 Coffre-fort, M21 Santé Financière, M22 Carte Virtuelle, M23 Mode Anonyme) · <strong>L6</strong> (M24 B2B, M25 Gouvernance, M26 Ultra-Sécurité, M27 Réputation, M28 Investissement Collectif, M29 Réseau Social, M30 Crowdfunding) · Flux économiques détaillés · Matrice revenus · Roadmap d'implémentation.</p>
+    </div>
+
+    <a class="next-link" href="kowri-v5-part2.html">→ Ouvrir le Document 2/2 (L4–L6 · Flux · Roadmap)</a>
+
+  </div>
+</div>
+</div>
+
+<script>
+const links=document.querySelectorAll('.sb-a');
+const ancs=document.querySelectorAll('.anc');
+function nav(){let c='';ancs.forEach(a=>{if(window.scrollY>=a.offsetTop-85)c=a.id;});links.forEach(l=>l.classList.toggle('on',l.getAttribute('href')==='#'+c));}
+window.addEventListener('scroll',nav,{passive:true});nav();
+</script>
+</body>
+</html>

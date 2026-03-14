@@ -1,8 +1,17 @@
-# Workspace
+# KOWRI V5.0 - Digital Financial Infrastructure
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+KOWRI is a production-ready fintech backend platform for African markets, built as a pnpm workspace monorepo using TypeScript. Features wallets, tontines (group savings), micro-credit, merchant payments, KYC/compliance, and a financial reputation scoring engine.
+
+## Architecture
+
+Full-stack fintech platform with:
+- Express.js REST API backend with double-entry ledger accounting
+- PostgreSQL with Drizzle ORM for transactional data integrity
+- React + Vite dashboard for platform monitoring
+- Event-sourced ledger (debits always equal credits)
+- Auto-seeded sample data (20 users, 23 wallets, 60 transactions)
 
 ## Stack
 

@@ -1,0 +1,18 @@
+packages:
+  "recharts": "For complex financial analytics charts and transaction volume graphs"
+  "framer-motion": "For page transitions, subtle card hover effects, and layout animations"
+  "date-fns": "For formatting timestamps from the API into human-readable formats"
+  "lucide-react": "Standardizing icons across the dashboard"
+
+images:
+  - path: "artifacts/kowri-dashboard/public/images/kowri-bg-mesh.png"
+    description: "A dark, premium, abstract gradient mesh background in deep navy blue, charcoal, and subtle gold/amber light leaks, representing modern fintech"
+    aspect_ratio: "16:9"
+  - path: "artifacts/kowri-dashboard/public/images/kowri-logo-mark.png"
+    description: "A minimalist, premium geometric logo mark in gold and amber colors on a transparent background, representing wealth and security"
+    aspect_ratio: "1:1"
+
+notes:
+  - API base is /api
+  - The dashboard uses the generated React Query hooks from @workspace/api-client-react
+  - Force dark mode as the default for the professional fintech aesthetic
