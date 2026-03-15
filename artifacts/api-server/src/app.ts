@@ -1,7 +1,9 @@
 import express, { type Express } from "express";
 import cors from "cors";
 import router from "./routes";
-import { seedDatabase } from "./lib/seed";
+import { seedDatabase, patchTontineMembers } from "./lib/seed";
+import { globalSanitizer, validatePagination } from "./middleware/validate";
+import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 
 const app: Express = express();
 
@@ -9,15 +11,21 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.use(globalSanitizer);
+app.use(validatePagination);
+
 app.get("/health", (req, res) => {
-  res.json({
-    service: "kowri-backend",
-    status: "running"
-  });
+  res.json({ service: "kowri-backend", status: "running" });
 });
 
 app.use("/api", router);
 
-seedDatabase().catch((err) => console.error("Seed error:", err));
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+seedDatabase()
+  .then(() => patchTontineMembers())
+  .then((result) => { if (result.patched) console.log("✅ Tontine patch applied:", result.message); })
+  .catch((err) => console.error("Seed/patch error:", err));
 
 export default app;

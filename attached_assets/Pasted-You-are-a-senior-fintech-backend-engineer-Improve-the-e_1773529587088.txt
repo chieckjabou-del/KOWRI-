@@ -1,0 +1,126 @@
+You are a senior fintech backend engineer.
+
+Improve the existing KOWRI backend to resolve the issues discovered in the audit.
+
+Do NOT break existing endpoints.
+
+Apply the following architectural corrections.
+
+---
+
+1. WALLET BALANCE DERIVATION (CRITICAL)
+
+Wallet balances must no longer be stored as a mutable field.
+
+Instead they must be derived from the ledger.
+
+Implement a wallet balance calculation:
+
+wallet_balance =
+SUM(ledger.credit_amount) - SUM(ledger.debit_amount)
+
+Create a service method:
+
+getWalletBalance(walletId)
+
+that calculates the balance from ledger entries.
+
+Ensure every transaction writes to the ledger first.
+
+Then update wallet.balance as a cached value derived from the ledger.
+
+Also add a reconciliation check during transaction commits.
+
+---
+
+2. INPUT VALIDATION LAYER
+
+Add a global validation middleware using Zod or Joi.
+
+Validate all query parameters:
+
+limit must be > 0
+page must be >= 1
+status must match allowed enums
+
+If validation fails return:
+
+HTTP 400
+{
+error: "Invalid request parameters"
+}
+
+Do not allow invalid enums to reach the database.
+
+---
+
+3. ERROR HANDLING MIDDLEWARE
+
+Add centralized error handling middleware.
+
+Rules:
+
+400 → client input error
+404 → resource not found
+500 → unexpected internal error
+
+Never expose stack traces.
+
+Return consistent JSON format:
+
+{
+error: true,
+message: "error message"
+}
+
+---
+
+4. SECURITY HARDENING
+
+Sanitize all user inputs.
+
+Ensure:
+
+SQL injection attempts are rejected
+XSS payloads return HTTP 400
+unexpected input types are blocked
+
+---
+
+5. PAGINATION GUARDS
+
+Add parameter guards:
+
+limit <= 100
+page <= 1000
+
+Reject negative numbers.
+
+---
+
+6. TONTINE SEED FIX
+
+Fix the seed script so that:
+
+Abidjan Traders Pool
+has the correct members inserted in tontine_members.
+
+---
+
+7. LEDGER RECONCILIATION TOOL
+
+Create an admin endpoint:
+
+GET /api/admin/reconcile
+
+The endpoint must:
+
+recalculate all wallet balances from ledger entries
+report mismatches
+optionally fix wallet cached balances
+
+---
+
+Ensure the system remains fully compatible with existing endpoints.
+
+Return a summary of all changes after implementation.

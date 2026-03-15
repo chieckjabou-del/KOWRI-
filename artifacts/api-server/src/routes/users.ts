@@ -4,10 +4,11 @@ import { usersTable, walletsTable, tontineMembersTable, transactionsTable } from
 import { eq, count, sql, ilike, or } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { createHash } from "crypto";
+import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
 
 const router = Router();
 
-router.get("/", async (req, res) => {
+router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
@@ -46,7 +47,7 @@ router.get("/", async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 
@@ -85,19 +86,21 @@ router.post("/", async (req, res) => {
     });
   } catch (err: any) {
     if (err?.code === "23505") {
-      return res.status(409).json({ error: "Conflict", message: "Phone number already registered" });
+      res.status(409).json({ error: true, message: "Phone number already registered" });
+      return;
     }
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 
-router.get("/:userId", async (req, res) => {
+router.get("/:userId", async (req, res, next) => {
   try {
     const { userId } = req.params;
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
 
     if (!user) {
-      return res.status(404).json({ error: "Not found", message: "User not found" });
+      res.status(404).json({ error: true, message: "User not found" });
+      return;
     }
 
     const [[walletData], [txData], [tontineData]] = await Promise.all([
@@ -126,7 +129,7 @@ router.get("/:userId", async (req, res) => {
       tontineCount: Number(tontineData.count),
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 

@@ -8,6 +8,7 @@ import creditRouter from "./credit";
 import merchantsRouter from "./merchants";
 import complianceRouter from "./compliance";
 import analyticsRouter from "./analytics";
+import adminRouter from "./admin";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use("/credit", creditRouter);
 router.use("/merchants", merchantsRouter);
 router.use("/compliance", complianceRouter);
 router.use("/analytics", analyticsRouter);
+router.use("/admin", adminRouter);
 
 export default router;

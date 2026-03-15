@@ -5,7 +5,7 @@ import {
   merchantsTable, kycRecordsTable
 } from "@workspace/db";
 import { generateId, generateReference, generateApiKey } from "./id";
-import { eq } from "drizzle-orm";
+import { eq, sql, count } from "drizzle-orm";
 
 export async function seedDatabase() {
   const existingUsers = await db.select().from(usersTable).limit(1);
@@ -40,8 +40,8 @@ export async function seedDatabase() {
     id,
     userId: userIds[i],
     currency: i % 5 === 0 ? "XAF" : "XOF",
-    balance: (Math.random() * 500000 + 10000).toFixed(4),
-    availableBalance: (Math.random() * 400000 + 8000).toFixed(4),
+    balance: "0.0000",
+    availableBalance: "0.0000",
     status: "active" as "active",
     walletType: "personal" as "personal",
     createdAt: users[i].createdAt,
@@ -97,7 +97,7 @@ export async function seedDatabase() {
         id: generateId(),
         transactionId: txId,
         accountId: type !== "deposit" ? walletIds[fromIdx] : "platform_float",
-        accountType: "wallet",
+        accountType: type !== "deposit" ? "wallet" : "platform",
         debitAmount: amount,
         creditAmount: "0",
         currency: "XOF",
@@ -123,6 +123,8 @@ export async function seedDatabase() {
   await db.insert(transactionsTable).values(transactionData);
   await db.insert(ledgerEntriesTable).values(ledgerData);
 
+  await reconcileWalletBalancesFromLedger(walletIds);
+
   const tontineId = generateId();
   const tontineWalletId = generateId();
 
@@ -130,8 +132,8 @@ export async function seedDatabase() {
     id: tontineWalletId,
     userId: userIds[0],
     currency: "XOF",
-    balance: "600000.0000",
-    availableBalance: "600000.0000",
+    balance: "1600000.0000",
+    availableBalance: "1600000.0000",
     status: "active",
     walletType: "tontine",
   });
@@ -154,6 +156,18 @@ export async function seedDatabase() {
   });
 
   const tontineId2 = generateId();
+  const tontineWalletId2 = generateId();
+
+  await db.insert(walletsTable).values({
+    id: tontineWalletId2,
+    userId: userIds[1],
+    currency: "XOF",
+    balance: "180000.0000",
+    availableBalance: "180000.0000",
+    status: "active",
+    walletType: "tontine",
+  });
+
   await db.insert(tontinesTable).values({
     id: tontineId2,
     name: "Abidjan Traders Pool",
@@ -167,11 +181,11 @@ export async function seedDatabase() {
     totalRounds: 6,
     status: "active",
     adminUserId: userIds[1],
-    walletId: null,
+    walletId: tontineWalletId2,
     nextPayoutDate: new Date(now.getTime() + 5 * 24 * 60 * 60 * 1000),
   });
 
-  const tontineMembers = userIds.slice(0, 8).map((userId, i) => ({
+  const tontineMembers1 = userIds.slice(0, 8).map((userId, i) => ({
     id: generateId(),
     tontineId,
     userId,
@@ -180,7 +194,16 @@ export async function seedDatabase() {
     contributionsCount: 4,
   }));
 
-  await db.insert(tontineMembersTable).values(tontineMembers);
+  const tontineMembers2 = userIds.slice(10, 16).map((userId, i) => ({
+    id: generateId(),
+    tontineId: tontineId2,
+    userId,
+    payoutOrder: i + 1,
+    hasReceivedPayout: i < 2 ? 1 : 0,
+    contributionsCount: 2,
+  }));
+
+  await db.insert(tontineMembersTable).values([...tontineMembers1, ...tontineMembers2]);
 
   const creditScores = userIds.slice(0, 15).map((userId, i) => ({
     id: generateId(),
@@ -264,4 +287,87 @@ export async function seedDatabase() {
   });
 
   console.log("✅ Database seeded successfully with KOWRI sample data");
+}
+
+export async function patchTontineMembers(): Promise<{ patched: boolean; message: string; details: string[] }> {
+  const details: string[] = [];
+
+  const tontines = await db.select().from(tontinesTable);
+  const tradersPool = tontines.find((t) => t.name === "Abidjan Traders Pool");
+
+  if (!tradersPool) {
+    return { patched: false, message: "Abidjan Traders Pool not found", details };
+  }
+
+  const [{ memberRows }] = await db
+    .select({ memberRows: count() })
+    .from(tontineMembersTable)
+    .where(eq(tontineMembersTable.tontineId, tradersPool.id));
+
+  if (Number(memberRows) >= 6) {
+    return { patched: false, message: "Abidjan Traders Pool already has members", details: [`Found ${memberRows} existing members`] };
+  }
+
+  const users = await db.select().from(usersTable).limit(20);
+  const memberUserIds = users.slice(10, 16).map((u) => u.id);
+
+  if (tradersPool.walletId === null) {
+    const tontineWalletId = generateId();
+    const admin = users.find((u) => u.id === tradersPool.adminUserId) || users[1];
+    await db.insert(walletsTable).values({
+      id: tontineWalletId,
+      userId: admin.id,
+      currency: "XOF",
+      balance: "180000.0000",
+      availableBalance: "180000.0000",
+      status: "active",
+      walletType: "tontine",
+    });
+    await db.update(tontinesTable)
+      .set({ walletId: tontineWalletId })
+      .where(eq(tontinesTable.id, tradersPool.id));
+    details.push(`Created tontine wallet ${tontineWalletId}`);
+  }
+
+  const newMembers = memberUserIds.map((userId, i) => ({
+    id: generateId(),
+    tontineId: tradersPool.id,
+    userId,
+    payoutOrder: i + 1,
+    hasReceivedPayout: i < 2 ? 1 : 0,
+    contributionsCount: 2,
+  }));
+
+  await db.insert(tontineMembersTable).values(newMembers);
+  details.push(`Inserted ${newMembers.length} members for Abidjan Traders Pool`);
+
+  await db.update(tontinesTable)
+    .set({ memberCount: newMembers.length })
+    .where(eq(tontinesTable.id, tradersPool.id));
+  details.push(`Updated memberCount to ${newMembers.length}`);
+
+  return { patched: true, message: "Abidjan Traders Pool patched successfully", details };
+}
+
+async function reconcileWalletBalancesFromLedger(walletIds: string[]) {
+  for (const walletId of walletIds) {
+    const [result] = await db
+      .select({
+        balance: sql<number>`
+          COALESCE(SUM(CAST(${ledgerEntriesTable.creditAmount} AS NUMERIC)), 0) -
+          COALESCE(SUM(CAST(${ledgerEntriesTable.debitAmount} AS NUMERIC)), 0)
+        `,
+      })
+      .from(ledgerEntriesTable)
+      .where(
+        sql`${ledgerEntriesTable.accountId} = ${walletId} AND ${ledgerEntriesTable.accountType} = 'wallet'`
+      );
+
+    const derived = Math.max(0, Number(result?.balance ?? 0));
+
+    await db
+      .update(walletsTable)
+      .set({ balance: String(derived), availableBalance: String(derived) })
+      .where(eq(walletsTable.id, walletId));
+  }
 }
