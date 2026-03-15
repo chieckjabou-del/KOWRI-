@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { creditScoresTable, loansTable, usersTable, walletsTable, transactionsTable, ledgerEntriesTable } from "@workspace/db";
+import { creditScoresTable, loansTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
-import { generateId, generateReference } from "../lib/id";
+import { generateId } from "../lib/id";
+import { validateQueryParams, VALID_LOAN_STATUSES } from "../middleware/validate";
 
 const router = Router();
 
-router.get("/scores", async (req, res) => {
+router.get("/scores", async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
@@ -18,7 +19,7 @@ router.get("/scores", async (req, res) => {
     ]);
 
     res.json({
-      scores: scores.map(s => ({
+      scores: scores.map((s) => ({
         ...s,
         maxLoanAmount: Number(s.maxLoanAmount),
         interestRate: Number(s.interestRate),
@@ -33,15 +34,17 @@ router.get("/scores", async (req, res) => {
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 
-router.get("/scores/:userId", async (req, res) => {
+router.get("/scores/:userId", async (req, res, next) => {
   try {
     const [score] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, req.params.userId));
-    if (!score) return res.status(404).json({ error: "Not found", message: "Credit score not found" });
-
+    if (!score) {
+      res.status(404).json({ error: true, message: "Credit score not found" });
+      return;
+    }
     res.json({
       ...score,
       maxLoanAmount: Number(score.maxLoanAmount),
@@ -55,11 +58,11 @@ router.get("/scores/:userId", async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 
-router.get("/loans", async (req, res) => {
+router.get("/loans", validateQueryParams({ status: VALID_LOAN_STATUSES }), async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
@@ -74,7 +77,7 @@ router.get("/loans", async (req, res) => {
     ]);
 
     res.json({
-      loans: loans.map(l => ({
+      loans: loans.map((l) => ({
         ...l,
         amount: Number(l.amount),
         interestRate: Number(l.interestRate),
@@ -83,24 +86,27 @@ router.get("/loans", async (req, res) => {
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 
-router.post("/loans", async (req, res) => {
+router.post("/loans", async (req, res, next) => {
   try {
     const { userId, walletId, amount, currency, termDays, purpose } = req.body;
     if (!userId || !walletId || !amount || !currency || !termDays) {
-      return res.status(400).json({ error: "Bad request", message: "Missing required fields" });
+      res.status(400).json({ error: true, message: "Missing required fields: userId, walletId, amount, currency, termDays" });
+      return;
     }
 
     const [creditScore] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, userId));
     if (!creditScore) {
-      return res.status(400).json({ error: "Bad request", message: "No credit score found. Build your credit history first." });
+      res.status(400).json({ error: true, message: "No credit score found. Build your credit history first." });
+      return;
     }
 
     if (Number(amount) > Number(creditScore.maxLoanAmount)) {
-      return res.status(400).json({ error: "Bad request", message: `Loan amount exceeds maximum allowed: ${creditScore.maxLoanAmount}` });
+      res.status(400).json({ error: true, message: `Loan amount exceeds maximum allowed: ${creditScore.maxLoanAmount}` });
+      return;
     }
 
     const dueDate = new Date();
@@ -127,17 +133,25 @@ router.post("/loans", async (req, res) => {
       amountRepaid: Number(loan.amountRepaid),
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 
-router.get("/loans/:loanId", async (req, res) => {
+router.get("/loans/:loanId", async (req, res, next) => {
   try {
     const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, req.params.loanId));
-    if (!loan) return res.status(404).json({ error: "Not found", message: "Loan not found" });
-    res.json({ ...loan, amount: Number(loan.amount), interestRate: Number(loan.interestRate), amountRepaid: Number(loan.amountRepaid) });
+    if (!loan) {
+      res.status(404).json({ error: true, message: "Loan not found" });
+      return;
+    }
+    res.json({
+      ...loan,
+      amount: Number(loan.amount),
+      interestRate: Number(loan.interestRate),
+      amountRepaid: Number(loan.amountRepaid),
+    });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 

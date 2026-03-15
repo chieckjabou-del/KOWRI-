@@ -1,11 +1,12 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { transactionsTable, ledgerEntriesTable } from "@workspace/db";
-import { eq, sql, count, and, inArray } from "drizzle-orm";
+import { eq, sql, count, and } from "drizzle-orm";
+import { validateQueryParams, VALID_TX_STATUSES } from "../middleware/validate";
 
 const router = Router();
 
-router.get("/", async (req, res) => {
+router.get("/", validateQueryParams({ status: VALID_TX_STATUSES }), async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
@@ -29,21 +30,24 @@ router.get("/", async (req, res) => {
     ]);
 
     res.json({
-      transactions: transactions.map(t => ({ ...t, amount: Number(t.amount) })),
+      transactions: transactions.map((t) => ({ ...t, amount: Number(t.amount) })),
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 
-router.get("/:transactionId", async (req, res) => {
+router.get("/:transactionId", async (req, res, next) => {
   try {
     const [tx] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, req.params.transactionId));
-    if (!tx) return res.status(404).json({ error: "Not found", message: "Transaction not found" });
+    if (!tx) {
+      res.status(404).json({ error: true, message: "Transaction not found" });
+      return;
+    }
     res.json({ ...tx, amount: Number(tx.amount) });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    next(err);
   }
 });
 
