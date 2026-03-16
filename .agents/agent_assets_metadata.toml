@@ -1,0 +1,14 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "LICG3zRn6a6okXlC1oDga"
+uri = "file://kowri_platform_audit.pdf"
+type = "pdf"
+title = "KOWRI V5.0 — Platform Audit Report (PDF)"
+
+[[outputs]]
+id = "BsDSwC9bFQb4TTKbjr9t9"
+uri = "file://kowri_platform_audit.md"
+type = "text"
+title = "KOWRI V5.0 — Platform Audit Report (Markdown)"
