@@ -4,13 +4,14 @@
 
 KOWRI is a production-grade neobank backend for African markets, built as a pnpm workspace monorepo using TypeScript (Express + PostgreSQL + Drizzle ORM). Originally designed for West Africa (XOF/XAF), it has scaled to a full global financial infrastructure platform supporting multi-currency operations across Africa, Europe, and Asia.
 
-**Current Phase: Phase 5 COMPLETE — Global Financial Infrastructure**
+**Current Phase: Phase 6 COMPLETE — Product Layer (KOWRI Wallet, Merchant, API Platform)**
 
-All 5 phases validated:
+All 6 phases validated:
 - Phase 1–2: 61/61 tests — core ledger, wallets, sagas, idempotency
 - Phase 3: 80/80 tests — fraud detection, FX, settlements, webhooks
 - Phase 4: 105/105 tests — message queue, microservices, AML, tracing, archival
 - Phase 5: 116/116 tests — clearing, multi-region, fraud intelligence, regulatory, liquidity, security
+- Phase 6: 74/74 tests — KOWRI Wallet (consumer), KOWRI Merchant (business payments), KOWRI API Platform (developer)
 
 ---
 

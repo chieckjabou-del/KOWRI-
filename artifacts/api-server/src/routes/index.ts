@@ -28,6 +28,10 @@ import fxLiquidityRouter  from "./fxLiquidityRoute";
 import securityRouter     from "./securityRoute";
 import failureSimRouter   from "./failureSim";
 import systemReportRouter from "./systemReport";
+import walletProductRouter    from "./walletProduct";
+import merchantProductRouter  from "./merchantProduct";
+import developerRouter        from "./developer";
+import productArchRouter      from "./productArchitecture";
 
 const router: IRouter = Router();
 
@@ -60,5 +64,9 @@ router.use("/fx/liquidity",   fxLiquidityRouter);
 router.use("/security",       securityRouter);
 router.use("/failure-sim",    failureSimRouter);
 router.use("/system/report",  systemReportRouter);
+router.use("/wallet",              walletProductRouter);
+router.use("/merchant",            merchantProductRouter);
+router.use("/developer",           developerRouter);
+router.use("/product/architecture", productArchRouter);
 
 export default router;
