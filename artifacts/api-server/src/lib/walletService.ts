@@ -6,6 +6,8 @@ import { assertValidTransition } from "./stateMachine";
 import { audit } from "./auditLogger";
 import { eventBus } from "./eventBus";
 import { recordMetric } from "./metrics";
+import { checkRateLimit, RateLimitExceededError } from "./rateLimiter";
+import { runFraudCheck } from "./fraudEngine";
 
 export async function getWalletBalance(walletId: string): Promise<number> {
   const [result] = await db
@@ -166,9 +168,16 @@ export async function processTransfer(params: {
   description?: string;
   reference?: string;
   idempotencyKey?: string;
+  skipRateLimitCheck?: boolean;
+  skipFraudCheck?: boolean;
 }): Promise<typeof transactionsTable.$inferSelect> {
-  const { fromWalletId, toWalletId, amount, currency, description, reference, idempotencyKey } = params;
+  const { fromWalletId, toWalletId, amount, currency, description, reference, idempotencyKey, skipRateLimitCheck, skipFraudCheck } = params;
   const start = Date.now();
+
+  if (!skipRateLimitCheck) {
+    await checkRateLimit(fromWalletId, amount);
+  }
+
   const txId = generateId();
   const ref = reference ?? generateReference();
   const now = new Date();
@@ -263,6 +272,14 @@ export async function processTransfer(params: {
     eventBus.publish("wallet.balance.updated", { walletId: fromWalletId, currency }),
     eventBus.publish("wallet.balance.updated", { walletId: toWalletId, currency }),
   ]);
+
+  if (!skipFraudCheck) {
+    setImmediate(() => {
+      runFraudCheck(fromWalletId, amount, currency).catch((err) =>
+        console.error("[FraudEngine] Post-commit check failed:", err)
+      );
+    });
+  }
 
   recordMetric("transaction", Date.now() - start, "transfer");
   return finalTx;

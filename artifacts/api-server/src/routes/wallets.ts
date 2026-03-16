@@ -178,6 +178,10 @@ router.post(
         res.status(404).json({ error: true, message: "One or both wallets not found" });
         return;
       }
+      if (err.name === "RateLimitExceededError") {
+        res.status(429).json({ error: true, message: err.message, retryAfter: 60 });
+        return;
+      }
       next(err);
     }
   }

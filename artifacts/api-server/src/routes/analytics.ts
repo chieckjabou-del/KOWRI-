@@ -94,6 +94,47 @@ router.get("/transactions", async (req, res) => {
   }
 });
 
+router.get("/ledger/partitions", async (_req, res) => {
+  try {
+    const partitions = [
+      { name: "ledger_entries_2026_01", month: "2026-01", gte: new Date("2026-01-01"), lt: new Date("2026-02-01") },
+      { name: "ledger_entries_2026_02", month: "2026-02", gte: new Date("2026-02-01"), lt: new Date("2026-03-01") },
+      { name: "ledger_entries_2026_03", month: "2026-03", gte: new Date("2026-03-01"), lt: new Date("2026-04-01") },
+    ];
+
+    const results = await Promise.all(
+      partitions.map(async (p) => {
+        const [{ cnt, debits, credits }] = await db
+          .select({
+            cnt:     sql<number>`COUNT(*)`,
+            debits:  sql<number>`COALESCE(SUM(CAST(${ledgerEntriesTable.debitAmount}  AS NUMERIC)), 0)`,
+            credits: sql<number>`COALESCE(SUM(CAST(${ledgerEntriesTable.creditAmount} AS NUMERIC)), 0)`,
+          })
+          .from(ledgerEntriesTable)
+          .where(sql`${ledgerEntriesTable.createdAt} >= ${p.gte} AND ${ledgerEntriesTable.createdAt} < ${p.lt}`);
+
+        return {
+          name:          p.name,
+          month:         p.month,
+          count:         Number(cnt),
+          totalDebits:   Number(debits),
+          totalCredits:  Number(credits),
+          balanced:      Math.abs(Number(debits) - Number(credits)) < 0.01,
+        };
+      })
+    );
+
+    res.json({
+      partitions: results,
+      strategy: "monthly_views",
+      description: "Ledger partitioned by calendar month. Each partition is a PostgreSQL view over ledger_entries.",
+      totalEntries: results.reduce((a, b) => a + b.count, 0),
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Internal server error", message: String(err) });
+  }
+});
+
 router.get("/ledger", async (req, res) => {
   try {
     const page = Number(req.query.page) || 1;

@@ -4,6 +4,9 @@ import { creditScoresTable, loansTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { validateQueryParams, VALID_LOAN_STATUSES } from "../middleware/validate";
+import { sagaOrchestrator } from "../lib/sagaOrchestrator";
+import { processDeposit } from "../lib/walletService";
+import { eventBus } from "../lib/eventBus";
 
 const router = Router();
 
@@ -111,26 +114,116 @@ router.post("/loans", async (req, res, next) => {
 
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + Number(termDays));
+    const loanId = generateId();
 
-    const [loan] = await db.insert(loansTable).values({
-      id: generateId(),
-      userId,
-      walletId,
-      amount: String(amount),
-      currency,
-      interestRate: creditScore.interestRate,
-      termDays: Number(termDays),
-      status: "approved",
-      amountRepaid: "0",
-      purpose: purpose || null,
-      dueDate,
-    }).returning();
+    interface LoanCtx extends Record<string, unknown> {
+      loanId: string;
+      userId: string;
+      walletId: string;
+      amount: number;
+      currency: string;
+      termDays: number;
+      dueDate: Date;
+      purpose: string | null;
+      interestRate: string;
+      disbursed: boolean;
+    }
 
+    const ctx = await sagaOrchestrator.execute<LoanCtx>(
+      "loan_disbursement",
+      {
+        loanId,
+        userId,
+        walletId,
+        amount: Number(amount),
+        currency,
+        termDays: Number(termDays),
+        dueDate,
+        purpose: purpose || null,
+        interestRate: creditScore.interestRate,
+        disbursed: false,
+      },
+      [
+        {
+          name: "create_loan_record",
+          execute: async (ctx) => {
+            await db.insert(loansTable).values({
+              id: ctx.loanId,
+              userId: ctx.userId,
+              walletId: ctx.walletId,
+              amount: String(ctx.amount),
+              currency: ctx.currency,
+              interestRate: ctx.interestRate,
+              termDays: ctx.termDays,
+              status: "approved",
+              amountRepaid: "0",
+              purpose: ctx.purpose,
+              dueDate: ctx.dueDate,
+            });
+            return ctx;
+          },
+          compensate: async (ctx) => {
+            await db.delete(loansTable).where(eq(loansTable.id, ctx.loanId));
+          },
+        },
+        {
+          name: "disburse_funds",
+          execute: async (ctx) => {
+            await processDeposit({
+              walletId: ctx.walletId,
+              amount: ctx.amount,
+              currency: ctx.currency,
+              reference: `LOAN-${ctx.loanId}`,
+              description: `Loan disbursement #${ctx.loanId}`,
+            });
+            await db.update(loansTable)
+              .set({ status: "disbursed" as any, disbursedAt: new Date() })
+              .where(eq(loansTable.id, ctx.loanId));
+            return { ...ctx, disbursed: true };
+          },
+          compensate: async (ctx) => {
+            await db.update(loansTable)
+              .set({ status: "defaulted" as any })
+              .where(eq(loansTable.id, ctx.loanId));
+          },
+        },
+        {
+          name: "emit_loan_disbursed",
+          execute: async (ctx) => {
+            await eventBus.publish("loan.disbursed", {
+              loanId: ctx.loanId,
+              userId: ctx.userId,
+              walletId: ctx.walletId,
+              amount: ctx.amount,
+              currency: ctx.currency,
+            });
+            return ctx;
+          },
+          compensate: async (ctx) => {
+            await eventBus.publish("loan.failed", {
+              loanId: ctx.loanId,
+              userId: ctx.userId,
+              reason: "saga_compensation",
+            });
+          },
+        },
+        {
+          name: "notify_borrower",
+          execute: async (ctx) => {
+            console.log(`[Notify] Loan ${ctx.loanId} disbursed to user ${ctx.userId}: ${ctx.amount} ${ctx.currency}`);
+            return ctx;
+          },
+        },
+      ]
+    );
+
+    const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, loanId));
     res.status(201).json({
       ...loan,
       amount: Number(loan.amount),
       interestRate: Number(loan.interestRate),
       amountRepaid: Number(loan.amountRepaid),
+      saga: { loanId: ctx.loanId, disbursed: ctx.disbursed },
     });
   } catch (err) {
     next(err);

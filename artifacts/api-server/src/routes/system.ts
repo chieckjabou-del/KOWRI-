@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { eventLogTable, auditLogsTable, idempotencyKeysTable } from "@workspace/db";
-import { count, desc } from "drizzle-orm";
+import { eventLogTable, auditLogsTable, idempotencyKeysTable, sagasTable, riskAlertsTable, settlementsTable } from "@workspace/db";
+import { count, desc, sql } from "drizzle-orm";
 import { getMetrics } from "../lib/metrics";
 import { STATE_MACHINE_DIAGRAM } from "../lib/stateMachine";
 
@@ -80,6 +80,82 @@ router.get("/audit", async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+router.get("/health", async (_req, res, next) => {
+  try {
+    const healthStart = Date.now();
+
+    const dbStart = Date.now();
+    await db.execute(sql`SELECT 1`);
+    const dbLatencyMs = Date.now() - dbStart;
+
+    const [
+      [{ totalLedger }],
+      ledgerBalance,
+      [{ pendingSagas }],
+      [{ pendingSettlements }],
+      [{ openAlerts }],
+    ] = await Promise.all([
+      db.select({ totalLedger: count() }).from(eventLogTable),
+      db.execute(sql`
+        SELECT
+          COALESCE(SUM(CAST(credit_amount AS NUMERIC)), 0) AS credits,
+          COALESCE(SUM(CAST(debit_amount AS NUMERIC)), 0) AS debits
+        FROM ledger_entries
+      `),
+      db.select({ pendingSagas: count() }).from(sagasTable).where(sql`status IN ('started','in_progress')`),
+      db.select({ pendingSettlements: count() }).from(settlementsTable).where(sql`status IN ('pending','processing')`),
+      db.select({ openAlerts: count() }).from(riskAlertsTable).where(sql`resolved = false`),
+    ]);
+
+    const ledgerRow = (ledgerBalance as any).rows?.[0];
+    const credits = Number(ledgerRow?.credits ?? 0);
+    const debits  = Number(ledgerRow?.debits ?? 0);
+    const ledgerDrift = Math.abs(credits - debits);
+    const ledgerIntact = ledgerDrift < 0.01;
+
+    const mem = process.memoryUsage();
+    const uptimeSec = Math.floor(process.uptime());
+
+    const status = dbLatencyMs < 500 && ledgerIntact ? "healthy" : "degraded";
+
+    res.json({
+      status,
+      timestamp: new Date().toISOString(),
+      latencyMs: Date.now() - healthStart,
+      components: {
+        database: {
+          status: dbLatencyMs < 500 ? "healthy" : "slow",
+          latencyMs: dbLatencyMs,
+        },
+        eventBus: {
+          status: "healthy",
+          totalEventsLogged: Number(totalLedger),
+        },
+        ledger: {
+          status: ledgerIntact ? "balanced" : "drift_detected",
+          totalCredits: credits,
+          totalDebits: debits,
+          drift: ledgerDrift,
+        },
+        queues: {
+          pendingSagas: Number(pendingSagas),
+          pendingSettlements: Number(pendingSettlements),
+          openFraudAlerts: Number(openAlerts),
+        },
+        memory: {
+          heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024),
+          heapTotalMb: Math.round(mem.heapTotal / 1024 / 1024),
+          rssM: Math.round(mem.rss / 1024 / 1024),
+        },
+        uptime: {
+          seconds: uptimeSec,
+          human: `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m ${uptimeSec % 60}s`,
+        },
+      },
+    });
+  } catch (err) { next(err); }
 });
 
 export default router;
