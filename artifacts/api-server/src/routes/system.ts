@@ -1,9 +1,12 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { eventLogTable, auditLogsTable, idempotencyKeysTable, sagasTable, riskAlertsTable, settlementsTable } from "@workspace/db";
+import { eventLogTable, auditLogsTable, idempotencyKeysTable, sagasTable, riskAlertsTable, settlementsTable, serviceTracesTable, messageQueueTable, amlFlagsTable, connectorsTable, ledgerShardsTable } from "@workspace/db";
 import { count, desc, sql } from "drizzle-orm";
 import { getMetrics } from "../lib/metrics";
 import { STATE_MACHINE_DIAGRAM } from "../lib/stateMachine";
+import { tracer } from "../lib/tracer";
+import { messageQueue } from "../lib/messageQueue";
+import { SERVICES } from "../services/index";
 
 const router = Router();
 
@@ -154,6 +157,26 @@ router.get("/health", async (_req, res, next) => {
           human: `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m ${uptimeSec % 60}s`,
         },
       },
+    });
+  } catch (err) { next(err); }
+});
+
+router.get("/tracing", async (req, res, next) => {
+  try {
+    const traceId = req.query.traceId as string | undefined;
+    const graph   = await tracer.getCallGraph(traceId);
+    const mqStats = messageQueue.getStats();
+
+    const [traceCount]  = await db.select({ cnt: count() }).from(serviceTracesTable);
+    const [mqCount]     = await db.select({ cnt: count() }).from(messageQueueTable);
+
+    res.json({
+      ...graph,
+      services:     SERVICES,
+      tracingMode:  "distributed",
+      sampleRate:   1.0,
+      messageQueue: { ...mqStats, totalMessages: Number(mqCount.cnt) },
+      totalTraces:  Number(traceCount.cnt),
     });
   } catch (err) { next(err); }
 });

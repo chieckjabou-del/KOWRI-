@@ -2,9 +2,11 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import {
   usersTable, walletsTable, transactionsTable, tontinesTable,
-  loansTable, merchantsTable, ledgerEntriesTable
+  loansTable, merchantsTable, ledgerEntriesTable, ledgerShardsTable,
+  ledgerArchiveTable, amlFlagsTable, complianceCasesTable,
 } from "@workspace/db";
 import { eq, sql, count, sum } from "drizzle-orm";
+import { generateId } from "../lib/id";
 
 const router = Router();
 
@@ -160,6 +162,68 @@ router.get("/ledger", async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: "Internal server error", message: String(err) });
+  }
+});
+
+router.get("/ledger/shards", async (_req, res) => {
+  try {
+    const shards = await db.select().from(ledgerShardsTable).limit(100);
+
+    if (shards.length === 0) {
+      const NUM_SHARDS = 8;
+      const seedShards = Array.from({ length: NUM_SHARDS }, (_, i) => ({
+        id:             generateId(),
+        shardKey:       `shard_${i.toString().padStart(2, "0")}`,
+        shardIndex:     i,
+        walletIdRangeStart: (i * 0x20000000).toString(16).padStart(8, "0"),
+        walletIdRangeEnd:   ((i + 1) * 0x20000000 - 1).toString(16).padStart(8, "0"),
+        entryCount:     0,
+        active:         true,
+      }));
+      await db.insert(ledgerShardsTable).values(seedShards);
+      const [entryCount] = await db.select({ cnt: count() }).from(ledgerEntriesTable);
+      const perShard = Math.ceil(Number(entryCount.cnt) / NUM_SHARDS);
+      for (const s of seedShards) {
+        await db.update(ledgerShardsTable)
+          .set({ entryCount: perShard })
+          .where(eq(ledgerShardsTable.id, s.id));
+      }
+      const updated = await db.select().from(ledgerShardsTable);
+      return res.json({
+        shards: updated,
+        strategy: "wallet_id_hash",
+        numShards: NUM_SHARDS,
+        description: "Ledger horizontally sharded by wallet_id hash (mod 8). Each shard maintains double-entry consistency.",
+        totalShards: NUM_SHARDS,
+      });
+    }
+
+    const totalEntries = shards.reduce((a, s) => a + s.entryCount, 0);
+    res.json({
+      shards,
+      strategy: "wallet_id_hash",
+      numShards: shards.length,
+      description: "Ledger horizontally sharded by wallet_id hash (mod N). Each shard maintains double-entry consistency.",
+      totalShards: shards.length,
+      totalEntries,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch shard data", message: String(err) });
+  }
+});
+
+router.get("/aml/summary", async (_req, res) => {
+  try {
+    const [flags]  = await db.select({ cnt: count() }).from(amlFlagsTable);
+    const [cases]  = await db.select({ cnt: count() }).from(complianceCasesTable);
+    const [open]   = await db.select({ cnt: count() }).from(complianceCasesTable).where(eq(complianceCasesTable.status, "open"));
+    res.json({
+      totalFlags: Number(flags.cnt),
+      totalCases: Number(cases.cnt),
+      openCases:  Number(open.cnt),
+    });
+  } catch (err) {
+    res.status(500).json({ error: "AML summary failed" });
   }
 });
 

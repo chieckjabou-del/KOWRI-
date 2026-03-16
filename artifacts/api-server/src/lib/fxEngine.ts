@@ -53,7 +53,7 @@ export async function upsertRate(
     .insert(exchangeRatesTable)
     .values({ id, baseCurrency, targetCurrency, rate: String(rate), updatedAt: new Date() })
     .onConflictDoUpdate({
-      target: [exchangeRatesTable.baseCurrency, exchangeRatesTable.targetCurrency],
+      target: exchangeRatesTable.id,
       set: { rate: String(rate), updatedAt: new Date() },
     });
 }

@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { getAllRates, convertAmount, upsertRate, getRate, FXNotFoundError } from "../lib/fxEngine";
 import { generateId } from "../lib/id";
+import { db } from "@workspace/db";
+import { fxRateHistoryTable, exchangeRatesTable } from "@workspace/db";
+import { eq, and, desc, asc } from "drizzle-orm";
+import { messageQueue, MESSAGE_TOPICS } from "../lib/messageQueue";
 
 const router = Router();
 
@@ -57,7 +61,7 @@ router.post("/convert", async (req, res, next) => {
 
 router.put("/rates", async (req, res, next) => {
   try {
-    const { base_currency, target_currency, rate } = req.body;
+    const { base_currency, target_currency, rate, source = "manual" } = req.body;
     if (!base_currency || !target_currency || !rate) {
       res.status(400).json({ error: true, message: "base_currency, target_currency, and rate are required" });
       return;
@@ -68,10 +72,51 @@ router.put("/rates", async (req, res, next) => {
       return;
     }
     const from = base_currency.toUpperCase();
-    const to = target_currency.toUpperCase();
-    const id = `fx-${from.toLowerCase()}-${to.toLowerCase()}`;
+    const to   = target_currency.toUpperCase();
+    const id   = `fx-${from.toLowerCase()}-${to.toLowerCase()}`;
     await upsertRate(id, from, to, numRate);
-    res.json({ baseCurrency: from, targetCurrency: to, rate: numRate, updated: true });
+    await db.insert(fxRateHistoryTable).values({
+      id:             generateId(),
+      baseCurrency:   from,
+      targetCurrency: to,
+      rate:           String(numRate),
+      source,
+    });
+    await messageQueue.produce(MESSAGE_TOPICS.FX_RATES, {
+      event: "rate.updated", from, to, rate: numRate, source,
+    });
+    res.json({ baseCurrency: from, targetCurrency: to, rate: numRate, updated: true, source });
+  } catch (err) { next(err); }
+});
+
+router.get("/rates/history/:from/:to", async (req, res, next) => {
+  try {
+    const from  = req.params.from.toUpperCase();
+    const to    = req.params.to.toUpperCase();
+    const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    const rows  = await db.select()
+      .from(fxRateHistoryTable)
+      .where(and(eq(fxRateHistoryTable.baseCurrency, from), eq(fxRateHistoryTable.targetCurrency, to)))
+      .orderBy(desc(fxRateHistoryTable.recordedAt))
+      .limit(limit);
+    res.json({ baseCurrency: from, targetCurrency: to, history: rows, count: rows.length });
+  } catch (err) { next(err); }
+});
+
+router.post("/rates/snapshot", async (req, res, next) => {
+  try {
+    const rates = await getAllRates();
+    const entries = rates.map((r) => ({
+      id:             generateId(),
+      baseCurrency:   r.baseCurrency,
+      targetCurrency: r.targetCurrency,
+      rate:           r.rate,
+      source:         "scheduled_snapshot",
+    }));
+    if (entries.length > 0) {
+      await db.insert(fxRateHistoryTable).values(entries);
+    }
+    res.json({ snapshotted: entries.length, timestamp: new Date().toISOString() });
   } catch (err) { next(err); }
 });
 

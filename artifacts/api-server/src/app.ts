@@ -4,6 +4,9 @@ import router from "./routes";
 import { seedDatabase, patchTontineMembers } from "./lib/seed";
 import { globalSanitizer, validatePagination } from "./middleware/validate";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
+import { paymentRouter } from "./lib/paymentRouter";
+import { seedConnectors } from "./lib/connectors";
+import "./services/index";
 
 const app: Express = express();
 
@@ -26,6 +29,8 @@ app.use(errorHandler);
 seedDatabase()
   .then(() => patchTontineMembers())
   .then((result) => { if (result.patched) console.log("✅ Tontine patch applied:", result.message); })
+  .then(() => paymentRouter.seedDefaultRoutes())
+  .then(() => seedConnectors())
   .catch((err) => console.error("Seed/patch error:", err));
 
 export default app;
