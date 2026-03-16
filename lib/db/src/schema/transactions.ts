@@ -7,7 +7,10 @@ export const transactionTypeEnum = pgEnum("transaction_type", [
   "deposit", "transfer", "loan_disbursement", "loan_repayment",
   "subscription", "tontine_contribution", "tontine_payout", "merchant_payment"
 ]);
-export const transactionStatusEnum = pgEnum("transaction_status", ["pending", "completed", "failed", "reversed"]);
+
+export const transactionStatusEnum = pgEnum("transaction_status", [
+  "pending", "processing", "completed", "failed", "reversed"
+]);
 
 export const transactionsTable = pgTable("transactions", {
   id: text("id").primaryKey(),
@@ -35,6 +38,9 @@ export const ledgerEntriesTable = pgTable("ledger_entries", {
   currency: text("currency").notNull(),
   eventType: text("event_type").notNull(),
   description: text("description"),
+  entryType: text("entry_type"),
+  walletId: text("wallet_id"),
+  reference: text("reference"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

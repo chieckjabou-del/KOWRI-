@@ -1,13 +1,13 @@
 import { Request, Response, NextFunction } from "express";
 
-const VALID_CURRENCIES = new Set(["XOF", "XAF"]);
-const VALID_WALLET_STATUSES = new Set(["active", "suspended", "frozen"]);
-const VALID_TX_STATUSES = new Set(["pending", "completed", "failed", "reversed"]);
-const VALID_KYC_STATUSES = new Set(["pending", "verified", "rejected", "expired"]);
-const VALID_LOAN_STATUSES = new Set(["pending", "approved", "disbursed", "repaid", "defaulted"]);
-const VALID_USER_STATUSES = new Set(["active", "suspended", "pending_kyc"]);
+const VALID_CURRENCIES       = new Set(["XOF", "XAF"]);
+const VALID_WALLET_STATUSES  = new Set(["active", "suspended", "frozen"]);
+const VALID_TX_STATUSES      = new Set(["pending", "processing", "completed", "failed", "reversed"]);
+const VALID_KYC_STATUSES     = new Set(["pending", "verified", "rejected", "expired"]);
+const VALID_LOAN_STATUSES    = new Set(["pending", "approved", "disbursed", "repaid", "defaulted"]);
+const VALID_USER_STATUSES    = new Set(["active", "suspended", "pending_kyc"]);
 
-const XSS_PATTERN = /<[^>]*>|javascript:|on\w+\s*=/i;
+const XSS_PATTERN  = /<[^>]*>|javascript:|on\w+\s*=/i;
 const SQLI_PATTERN = /('|--|;|\/\*|\*\/|xp_|UNION\s+SELECT|DROP\s+TABLE|INSERT\s+INTO|DELETE\s+FROM)/i;
 
 function isMalicious(value: string): boolean {
@@ -17,7 +17,7 @@ function isMalicious(value: string): boolean {
 function sanitizeParams(params: Record<string, unknown>): string | null {
   for (const [, val] of Object.entries(params)) {
     if (typeof val === "string" && isMalicious(val)) {
-      return `Potentially malicious input detected`;
+      return "Potentially malicious input detected";
     }
   }
   return null;
@@ -77,4 +77,7 @@ export const globalSanitizer = (req: Request, res: Response, next: NextFunction)
   next();
 };
 
-export { VALID_CURRENCIES, VALID_WALLET_STATUSES, VALID_TX_STATUSES, VALID_KYC_STATUSES, VALID_LOAN_STATUSES, VALID_USER_STATUSES };
+export {
+  VALID_CURRENCIES, VALID_WALLET_STATUSES, VALID_TX_STATUSES,
+  VALID_KYC_STATUSES, VALID_LOAN_STATUSES, VALID_USER_STATUSES,
+};

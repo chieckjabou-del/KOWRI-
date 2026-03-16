@@ -9,6 +9,7 @@ import merchantsRouter from "./merchants";
 import complianceRouter from "./compliance";
 import analyticsRouter from "./analytics";
 import adminRouter from "./admin";
+import systemRouter from "./system";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use("/merchants", merchantsRouter);
 router.use("/compliance", complianceRouter);
 router.use("/analytics", analyticsRouter);
 router.use("/admin", adminRouter);
+router.use("/system", systemRouter);
 
 export default router;

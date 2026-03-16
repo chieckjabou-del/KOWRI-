@@ -1,12 +1,15 @@
 import { Router } from "express";
 import { reconcileAllWallets, syncWalletBalance } from "../lib/walletService";
 import { patchTontineMembers } from "../lib/seed";
+import { audit } from "../lib/auditLogger";
+import { generateId } from "../lib/id";
 
 const router = Router();
 
 router.get("/reconcile", async (req, res, next) => {
   try {
     const fix = req.query.fix === "true";
+    const runId = generateId();
 
     const report = await reconcileAllWallets();
     const mismatchesBefore = report.filter((r) => r.mismatch);
@@ -16,11 +19,24 @@ router.get("/reconcile", async (req, res, next) => {
       for (const m of mismatchesBefore) {
         await syncWalletBalance(m.walletId);
         fixes.push(m.walletId);
+        await audit({
+          action: "reconciliation.fixed",
+          entity: "wallet",
+          entityId: m.walletId,
+          metadata: { stored: m.stored, derived: m.derived, runId },
+        });
       }
     }
 
     const reportAfter = fix ? await reconcileAllWallets() : report;
     const mismatchesAfter = reportAfter.filter((r) => r.mismatch);
+
+    await audit({
+      action: "reconciliation.run",
+      entity: "system",
+      entityId: runId,
+      metadata: { fix, totalWallets: report.length, mismatchesBefore: mismatchesBefore.length, fixed: fixes.length, mismatchesAfter: mismatchesAfter.length },
+    });
 
     res.json({
       summary: {
@@ -51,6 +67,7 @@ router.get("/reconcile", async (req, res, next) => {
 router.post("/patch-tontines", async (req, res, next) => {
   try {
     const result = await patchTontineMembers();
+    await audit({ action: "admin.patch_tontines", entity: "system", entityId: "tontines", metadata: result });
     res.json(result);
   } catch (err) {
     next(err);
