@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { paymentRoutesTable } from "@workspace/db";
 import { eq, asc } from "drizzle-orm";
 import { paymentRouter } from "../lib/paymentRouter";
+import { selectOptimal } from "../lib/processorRouter";
 import { generateId } from "../lib/id";
 
 const router = Router();
@@ -50,12 +51,31 @@ router.patch("/:id", async (req, res) => {
 
 router.post("/select", async (req, res) => {
   try {
-    const { amount, currency, fromWalletId, toWalletId, merchantId, partnerId } = req.body;
-    if (!amount || !currency || !fromWalletId) {
-      return res.status(400).json({ error: "amount, currency, fromWalletId are required" });
+    const { amount, currency, fromWalletId, toWalletId, merchantId, partnerId, strategy, region } = req.body;
+    if (!amount || !currency) {
+      return res.status(400).json({ error: "amount and currency are required" });
     }
-    const decision = await paymentRouter.selectRoute({ amount: Number(amount), currency, fromWalletId, toWalletId, merchantId, partnerId });
-    res.json({ decision, context: req.body });
+
+    const processorDecision = selectOptimal({
+      strategy: strategy as any,
+      currency,
+      region: region ?? "africa",
+      amount: Number(amount),
+    });
+
+    if (fromWalletId) {
+      const internalDecision = await paymentRouter.selectRoute({
+        amount: Number(amount), currency, fromWalletId, toWalletId, merchantId, partnerId,
+      });
+      return res.json({ decision: internalDecision, processor: processorDecision?.processor ?? null, context: req.body });
+    }
+
+    res.json({
+      decision:  processorDecision ?? { routeType: "processor_direct", processor: "interswitch-africa" },
+      processor: processorDecision?.processor ?? null,
+      strategy:  processorDecision?.strategy ?? "lowest_cost",
+      context:   req.body,
+    });
   } catch (err) {
     res.status(500).json({ error: "Route selection failed" });
   }

@@ -7,3 +7,4 @@ export * from "./merchants";
 export * from "./phase2";
 export * from "./phase3";
 export * from "./phase4";
+export * from "./phase5";

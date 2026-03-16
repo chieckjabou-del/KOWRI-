@@ -20,6 +20,14 @@ import paymentRoutesRouter from "./paymentRoutes";
 import connectorsRouter    from "./connectors";
 import mqRouter            from "./mq";
 import archiveRouter       from "./archive";
+import clearingRouter     from "./clearing";
+import multiRegionRouter  from "./multiRegion";
+import fraudIntelRouter   from "./fraudIntel";
+import regulatoryRouter   from "./regulatory";
+import fxLiquidityRouter  from "./fxLiquidityRoute";
+import securityRouter     from "./securityRoute";
+import failureSimRouter   from "./failureSim";
+import systemReportRouter from "./systemReport";
 
 const router: IRouter = Router();
 
@@ -44,5 +52,13 @@ router.use("/payment-routes", paymentRoutesRouter);
 router.use("/connectors",     connectorsRouter);
 router.use("/mq",             mqRouter);
 router.use("/archive",        archiveRouter);
+router.use("/clearing",       clearingRouter);
+router.use("/regions",        multiRegionRouter);
+router.use("/fraud/intel",    fraudIntelRouter);
+router.use("/regulatory",     regulatoryRouter);
+router.use("/fx/liquidity",   fxLiquidityRouter);
+router.use("/security",       securityRouter);
+router.use("/failure-sim",    failureSimRouter);
+router.use("/system/report",  systemReportRouter);
 
 export default router;
