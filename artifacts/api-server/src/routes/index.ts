@@ -32,6 +32,12 @@ import walletProductRouter    from "./walletProduct";
 import merchantProductRouter  from "./merchantProduct";
 import developerRouter        from "./developer";
 import productArchRouter      from "./productArchitecture";
+import communityFinanceRouter from "./communityFinance";
+import investmentPoolsRouter  from "./investmentPools";
+import insurancePoolsRouter   from "./insurancePools";
+import savingsRouter          from "./savings";
+import diasporaRouter         from "./diaspora";
+import creatorEconomyRouter   from "./creatorEconomy";
 
 const router: IRouter = Router();
 
@@ -68,5 +74,11 @@ router.use("/wallet",              walletProductRouter);
 router.use("/merchant",            merchantProductRouter);
 router.use("/developer",           developerRouter);
 router.use("/product/architecture", productArchRouter);
+router.use("/community",           communityFinanceRouter);
+router.use("/pools/investment",    investmentPoolsRouter);
+router.use("/pools/insurance",     insurancePoolsRouter);
+router.use("/savings",             savingsRouter);
+router.use("/diaspora",            diasporaRouter);
+router.use("/creator",             creatorEconomyRouter);
 
 export default router;

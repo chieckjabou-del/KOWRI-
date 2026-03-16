@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { creditScoresTable, loansTable } from "@workspace/db";
-import { eq, sql, count } from "drizzle-orm";
+import { creditScoresTable, loansTable, loanRepaymentsTable, walletsTable } from "@workspace/db";
+import { eq, sql, count, desc } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { validateQueryParams, VALID_LOAN_STATUSES } from "../middleware/validate";
 import { sagaOrchestrator } from "../lib/sagaOrchestrator";
-import { processDeposit } from "../lib/walletService";
+import { processDeposit, processTransfer } from "../lib/walletService";
 import { eventBus } from "../lib/eventBus";
+import { computeCreditScoreFromActivity } from "../lib/reputationEngine";
 
 const router = Router();
 
@@ -245,6 +246,141 @@ router.get("/loans/:loanId", async (req, res, next) => {
     });
   } catch (err) {
     next(err);
+  }
+});
+
+router.get("/loans/:loanId/repayments", async (req, res, next) => {
+  try {
+    const repayments = await db.select().from(loanRepaymentsTable)
+      .where(eq(loanRepaymentsTable.loanId, req.params.loanId))
+      .orderBy(desc(loanRepaymentsTable.createdAt));
+    res.json({
+      repayments: repayments.map(r => ({ ...r, amount: Number(r.amount) })),
+      count: repayments.length,
+    });
+  } catch (err) { next(err); }
+});
+
+router.post("/loans/:loanId/repay", async (req, res, next) => {
+  try {
+    const { walletId, amount, userId } = req.body;
+    if (!walletId || !amount || !userId) {
+      return res.status(400).json({ error: true, message: "walletId, amount, userId required" });
+    }
+
+    const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, req.params.loanId));
+    if (!loan) return res.status(404).json({ error: true, message: "Loan not found" });
+    if (loan.userId !== userId) return res.status(403).json({ error: true, message: "Forbidden" });
+    if (!["approved", "disbursed"].includes(loan.status)) {
+      return res.status(400).json({ error: true, message: `Cannot repay loan with status: ${loan.status}` });
+    }
+
+    const loanWallet = await db.select().from(walletsTable).where(eq(walletsTable.userId, "system")).limit(1);
+    const systemWalletId = loanWallet[0]?.id;
+
+    let txId: string | null = null;
+    if (systemWalletId) {
+      const tx = await processTransfer({
+        fromWalletId: walletId,
+        toWalletId:   systemWalletId,
+        amount:       Number(amount),
+        currency:     loan.currency,
+        description:  `Loan repayment – ${loan.id}`,
+        skipFraudCheck: true,
+      });
+      txId = tx.id;
+    }
+
+    const repaymentId = generateId();
+    await db.insert(loanRepaymentsTable).values({
+      id:            repaymentId,
+      loanId:        loan.id,
+      userId,
+      amount:        String(amount),
+      currency:      loan.currency,
+      transactionId: txId,
+      paidAt:        new Date(),
+      status:        "completed",
+    });
+
+    const newRepaid = Number(loan.amountRepaid) + Number(amount);
+    const isFullyRepaid = newRepaid >= Number(loan.amount);
+
+    await db.update(loansTable).set({
+      amountRepaid: String(newRepaid),
+      status:       isFullyRepaid ? "repaid" : loan.status,
+      updatedAt:    new Date(),
+    }).where(eq(loansTable.id, loan.id));
+
+    await eventBus.publish("loan.repayment.made", {
+      loanId: loan.id, userId, amount: Number(amount), newRepaid, isFullyRepaid,
+    });
+
+    res.status(201).json({
+      repaymentId,
+      loanId:       loan.id,
+      amount:       Number(amount),
+      newRepaid,
+      remaining:    Math.max(0, Number(loan.amount) - newRepaid),
+      isFullyRepaid,
+      message:      isFullyRepaid ? "Loan fully repaid!" : "Repayment recorded",
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: true, message: err.message });
+  }
+});
+
+router.post("/scores/:userId/compute", async (req, res, next) => {
+  try {
+    const factors = await computeCreditScoreFromActivity(req.params.userId);
+
+    const score = factors.composite;
+    const tier = score >= 80 ? "platinum" : score >= 60 ? "gold" : score >= 40 ? "silver" : "bronze";
+    const maxLoanAmount = { bronze: 50000, silver: 200000, gold: 500000, platinum: 2000000 }[tier] ?? 50000;
+    const interestRate  = { bronze: 12, silver: 10, gold: 8, platinum: 6 }[tier] ?? 12;
+
+    const existing = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, req.params.userId));
+
+    let result;
+    if (existing[0]) {
+      const [updated] = await db.update(creditScoresTable).set({
+        score,
+        tier,
+        maxLoanAmount:       String(maxLoanAmount),
+        interestRate:        String(interestRate),
+        paymentHistory:      factors.paymentHistory,
+        savingsRegularity:   factors.savingsRegularity,
+        transactionVolume:   factors.transactionVolume,
+        tontineParticipation: factors.tontineParticipation,
+        networkScore:        factors.networkScore,
+        updatedAt:           new Date(),
+      }).where(eq(creditScoresTable.userId, req.params.userId)).returning();
+      result = updated;
+    } else {
+      const [created] = await db.insert(creditScoresTable).values({
+        id:                  generateId(),
+        userId:              req.params.userId,
+        score,
+        tier,
+        maxLoanAmount:       String(maxLoanAmount),
+        interestRate:        String(interestRate),
+        paymentHistory:      factors.paymentHistory,
+        savingsRegularity:   factors.savingsRegularity,
+        transactionVolume:   factors.transactionVolume,
+        tontineParticipation: factors.tontineParticipation,
+        networkScore:        factors.networkScore,
+      }).returning();
+      result = created;
+    }
+
+    res.json({
+      ...result,
+      maxLoanAmount: Number(result.maxLoanAmount),
+      interestRate:  Number(result.interestRate),
+      factors,
+    });
+  } catch (err: any) {
+    res.status(400).json({ error: true, message: err.message });
   }
 });
 

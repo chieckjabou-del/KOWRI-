@@ -1,17 +1,20 @@
-# KOWRI V5.0 — Global Financial Infrastructure Platform
+# KOWRI V5.0 — African Financial Super-App
 
 ## Overview
 
-KOWRI is a production-grade neobank backend for African markets, built as a pnpm workspace monorepo using TypeScript (Express + PostgreSQL + Drizzle ORM). Originally designed for West Africa (XOF/XAF), it has scaled to a full global financial infrastructure platform supporting multi-currency operations across Africa, Europe, and Asia.
+KOWRI is a production-grade neobank and community finance super-app for African markets — "PayPal + Stripe + Tontine + Community Credit for Africa" — built as a pnpm workspace monorepo using TypeScript (Express + PostgreSQL + Drizzle ORM).
 
-**Current Phase: Phase 6 COMPLETE — Product Layer (KOWRI Wallet, Merchant, API Platform)**
+**Current Phase: Phase 7 COMPLETE — Community Finance Super-App**
 
-All 6 phases validated:
+All 7 phases validated:
 - Phase 1–2: 61/61 tests — core ledger, wallets, sagas, idempotency
 - Phase 3: 80/80 tests — fraud detection, FX, settlements, webhooks
 - Phase 4: 105/105 tests — message queue, microservices, AML, tracing, archival
 - Phase 5: 116/116 tests — clearing, multi-region, fraud intelligence, regulatory, liquidity, security
 - Phase 6: 74/74 tests — KOWRI Wallet (consumer), KOWRI Merchant (business payments), KOWRI API Platform (developer)
+- **Phase 7: 151/151 tests — Tontine Scheduler, Savings Engine, Investment Pools, Insurance, Diaspora/Remittance, Creator Economy, Reputation Engine**
+
+Full architecture reference: `artifacts/api-server/KOWRI_V5_ARCHITECTURE.md`
 
 ---
 
