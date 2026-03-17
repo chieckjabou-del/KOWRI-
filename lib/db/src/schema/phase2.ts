@@ -38,6 +38,18 @@ export const outboxEventsTable = pgTable("outbox_events", {
   processAt: timestamp("process_at").notNull().defaultNow(),
 });
 
+/**
+ * Idempotency fence for outbox consumers.
+ * One row per outbox_event_id — unique constraint is the guard.
+ * Hard-delete rows older than 7 days via nightly job.
+ */
+export const processedEventsTable = pgTable("processed_events", {
+  id:            text("id").primaryKey(),
+  outboxEventId: text("outbox_event_id").notNull().unique(),
+  topic:         text("topic").notNull(),
+  processedAt:   timestamp("processed_at").notNull().defaultNow(),
+});
+
 export const insertIdempotencyKeySchema = createInsertSchema(idempotencyKeysTable).omit({ id: true, createdAt: true });
 export const insertEventLogSchema = createInsertSchema(eventLogTable).omit({ id: true, createdAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogsTable).omit({ id: true, timestamp: true });
