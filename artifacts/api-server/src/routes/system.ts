@@ -196,6 +196,53 @@ router.get("/outbox/status", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── Snapshot — batches all 4 war-room endpoints into one round-trip ───────────
+// ROLLBACK: delete this route; revert war-room.tsx to 4 individual useQuery calls.
+router.get("/snapshot", async (_req, res, next) => {
+  try {
+    const [health, outboxStats, replicaStats, advisorStats] = await Promise.all([
+      (async () => {
+        const dbStart = Date.now();
+        let dbOk = true;
+        try { await db.execute(sql`SELECT 1`); } catch { dbOk = false; }
+        const dbLatencyMs = Date.now() - dbStart;
+        const dbStatus    = dbOk && dbLatencyMs < 500 ? "healthy" : "degraded";
+
+        const [[{ pendingSagas }], [{ pendingSettlements }], [{ openFraudAlerts }]] =
+          await Promise.all([
+            db.select({ pendingSagas:       count() }).from(sagasTable)    .where(sql`status IN ('started','in_progress')`),
+            db.select({ pendingSettlements: count() }).from(settlementsTable).where(sql`status IN ('pending','processing')`),
+            db.select({ openFraudAlerts:    count() }).from(riskAlertsTable) .where(sql`resolved = false`),
+          ]);
+
+        return {
+          latencyMs:  dbLatencyMs,
+          status:     dbStatus,
+          components: {
+            database: { status: dbStatus, latencyMs: dbLatencyMs },
+            queues:   {
+              pendingSagas:       Number(pendingSagas),
+              pendingSettlements: Number(pendingSettlements),
+              openFraudAlerts:    Number(openFraudAlerts),
+            },
+          },
+        };
+      })(),
+      getOutboxStats(),
+      Promise.resolve({ ...getReplicaStats(), stickyStore: getStickyStoreStats() }),
+      Promise.resolve(getAdvisorStats()),
+    ]);
+
+    res.json({
+      health:  health,
+      outbox:  { outbox: outboxStats },
+      replica: replicaStats,
+      advisor: advisorStats,
+      fetchedAt: new Date().toISOString(),
+    });
+  } catch (err) { next(err); }
+});
+
 router.get("/tracing", async (req, res, next) => {
   try {
     const traceId = req.query.traceId as string | undefined;

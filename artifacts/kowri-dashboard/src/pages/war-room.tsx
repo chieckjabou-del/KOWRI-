@@ -3,32 +3,35 @@ import { Activity, AlertTriangle, CheckCircle2, XCircle, RefreshCw, Clock } from
 import { cn } from "@/lib/utils";
 
 // ── API fetchers ──────────────────────────────────────────────────────────────
+// OPTIMISATION OPT-002: single /api/system/snapshot call replaces 4 parallel
+// useQuery calls. Reduces HTTP round-trips from 4 → 1 per 5-second poll cycle.
+// ROLLBACK: revert this function to the 4 individual useQuery calls below.
 const fetchJson = (url: string) => fetch(url).then(r => r.json());
 
 const POLL_MS = 5_000;
 
 function useWarRoomData() {
-  const health = useQuery({
-    queryKey: ["war-room-health"],
-    queryFn: () => fetchJson("/api/system/health"),
+  const snapshot = useQuery({
+    queryKey: ["war-room-snapshot"],
+    queryFn: () => fetchJson("/api/system/snapshot"),
     refetchInterval: POLL_MS,
   });
-  const outbox = useQuery({
-    queryKey: ["war-room-outbox"],
-    queryFn: () => fetchJson("/api/system/outbox/status"),
-    refetchInterval: POLL_MS,
+
+  // Shape each sub-query to match the original { data, dataUpdatedAt } contract
+  // so all downstream metric reads are unchanged.
+  const wrap = (key: "health" | "outbox" | "replica" | "advisor") => ({
+    data:          snapshot.data?.[key] ?? null,
+    dataUpdatedAt: snapshot.dataUpdatedAt,
+    isLoading:     snapshot.isLoading,
+    isError:       snapshot.isError,
   });
-  const replica = useQuery({
-    queryKey: ["war-room-replica"],
-    queryFn: () => fetchJson("/api/system/replica/status"),
-    refetchInterval: POLL_MS,
-  });
-  const advisor = useQuery({
-    queryKey: ["war-room-advisor"],
-    queryFn: () => fetchJson("/api/system/sticky/advisor"),
-    refetchInterval: POLL_MS,
-  });
-  return { health, outbox, replica, advisor };
+
+  return {
+    health:  wrap("health"),
+    outbox:  wrap("outbox"),
+    replica: wrap("replica"),
+    advisor: wrap("advisor"),
+  };
 }
 
 // ── Threshold helpers ─────────────────────────────────────────────────────────
