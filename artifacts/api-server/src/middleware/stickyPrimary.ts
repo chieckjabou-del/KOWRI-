@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from "express";
-import { STICKY_MS } from "../lib/dbRouter";
+import { computeStickyWindowMs, recordRequest, recordErrorEvent } from "../lib/windowAdvisor";
 
 const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const HEADER_FLAG   = "x-read-primary";
@@ -30,7 +30,7 @@ function pruneStore(): void {
 setInterval(pruneStore, 60_000).unref();
 
 function storeSet(identity: string): void {
-  store.set(identity, Date.now() + STICKY_MS);
+  store.set(identity, Date.now() + computeStickyWindowMs());
 }
 
 function storeHas(identity: string): boolean {
@@ -64,12 +64,14 @@ function extractIdentity(req: Request, responseBody?: Record<string, unknown>): 
 //   3. ?fresh=1 is present.
 
 export function stickyPrimaryRequest(req: Request, _res: Response, next: NextFunction): void {
+  recordRequest();
+
   const clientFlag  = req.headers[HEADER_FLAG];
   const clientUntil = req.headers[HEADER_UNTIL];
   const fresh       = req.query["fresh"] === "1";
 
-  const clientSticky  = clientFlag === "1" && !!clientUntil && Date.now() < Number(clientUntil);
-  const serverSticky  = storeHas(extractIdentity(req));
+  const clientSticky = clientFlag === "1" && !!clientUntil && Date.now() < Number(clientUntil);
+  const serverSticky = storeHas(extractIdentity(req));
 
   req.forcePrimary = fresh || clientSticky || serverSticky;
 
@@ -85,7 +87,7 @@ export function stickyPrimaryRequest(req: Request, _res: Response, next: NextFun
 export function stickyPrimaryResponse(req: Request, res: Response, next: NextFunction): void {
   if (!WRITE_METHODS.has(req.method)) { next(); return; }
 
-  const primaryUntil = Date.now() + STICKY_MS;
+  const primaryUntil = Date.now() + computeStickyWindowMs();
 
   const originalJson = res.json.bind(res);
   res.json = function (body: unknown) {
@@ -114,5 +116,5 @@ export function stickyPrimaryResponse(req: Request, res: Response, next: NextFun
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 export function getStickyStoreStats() {
   pruneStore();
-  return { activeEntries: store.size, stickyWindowMs: STICKY_MS };
+  return { activeEntries: store.size, stickyWindowMs: computeStickyWindowMs() };
 }

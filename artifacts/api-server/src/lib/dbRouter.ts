@@ -89,12 +89,22 @@ export function getReadDb(opts?: { forcePrimary?: boolean }): typeof db {
   return dbRead as typeof db;
 }
 
+/** Consumed by windowAdvisor to feed the dynamic window calculation. */
+export function getReplicaLagState() {
+  return {
+    healthy:      replicaHealthy,
+    lagSec:       lastLagSec,
+    lagNull:      lastLagNullSeen,
+    thresholdSec: LAG_THRESHOLD_S,
+  };
+}
+
 export function getReplicaStats() {
   return {
     enabled:        REPLICA_ENABLED,
     healthy:        replicaHealthy,
-    lagSec:         lastLagSec,          // -1 = NULL from replica (not streaming)
-    lagNull:        lastLagNullSeen,     // true = pg_last_xact_replay_timestamp() was NULL
+    lagSec:         lastLagSec,
+    lagNull:        lastLagNullSeen,
     thresholdSec:   LAG_THRESHOLD_S,
     stickyWindowMs: STICKY_MS,
   };

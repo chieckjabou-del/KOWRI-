@@ -4,6 +4,7 @@ import { eventLogTable, auditLogsTable, idempotencyKeysTable, sagasTable, riskAl
 import { getOutboxStats } from "../lib/outboxWorker";
 import { getReplicaStats } from "../lib/dbRouter";
 import { getStickyStoreStats } from "../middleware/stickyPrimary";
+import { getAdvisorStats } from "../lib/windowAdvisor";
 import { count, desc, sql } from "drizzle-orm";
 import { getMetrics } from "../lib/metrics";
 import { STATE_MACHINE_DIAGRAM } from "../lib/stateMachine";
@@ -166,6 +167,10 @@ router.get("/health", async (_req, res, next) => {
 
 router.get("/replica/status", (_req, res) => {
   res.json({ ...getReplicaStats(), stickyStore: getStickyStoreStats() });
+});
+
+router.get("/sticky/advisor", (_req, res) => {
+  res.json(getAdvisorStats());
 });
 
 router.get("/outbox/status", async (req, res, next) => {
