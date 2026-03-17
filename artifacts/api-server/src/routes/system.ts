@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { eventLogTable, auditLogsTable, idempotencyKeysTable, sagasTable, riskAlertsTable, settlementsTable, serviceTracesTable, messageQueueTable, amlFlagsTable, connectorsTable, ledgerShardsTable, outboxEventsTable } from "@workspace/db";
 import { getOutboxStats } from "../lib/outboxWorker";
+import { getReplicaStats } from "../lib/dbRouter";
 import { count, desc, sql } from "drizzle-orm";
 import { getMetrics } from "../lib/metrics";
 import { STATE_MACHINE_DIAGRAM } from "../lib/stateMachine";
@@ -160,6 +161,10 @@ router.get("/health", async (_req, res, next) => {
       },
     });
   } catch (err) { next(err); }
+});
+
+router.get("/replica/status", (_req, res) => {
+  res.json(getReplicaStats());
 });
 
 router.get("/outbox/status", async (req, res, next) => {

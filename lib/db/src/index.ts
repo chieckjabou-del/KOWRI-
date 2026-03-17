@@ -13,4 +13,13 @@ if (!process.env.DATABASE_URL) {
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 export const db = drizzle(pool, { schema });
 
+/**
+ * Creates a second Drizzle client pointed at a replica (or any alternate URL).
+ * Lives here so callers don't need to depend on `pg` directly.
+ */
+export function createReplicaDb(replicaUrl: string) {
+  const replicaPool = new Pool({ connectionString: replicaUrl, max: 10 });
+  return drizzle(replicaPool, { schema });
+}
+
 export * from "./schema";
