@@ -24,6 +24,7 @@
 import { CollectedMetrics }                               from "./metricsCollector";
 import { getBatchSize, setBatchSize, DEFAULT_BATCH_SIZE } from "./outboxWorker";
 import { insertIncident }                                  from "./incidentStore";
+import { getStrategyMode }                                 from "./strategyEngine";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -243,7 +244,14 @@ export async function learningEngine(metrics: CollectedMetrics): Promise<void> {
   const currentBatch = getBatchSize();
   if (currentBatch <= MIN_BATCH_SIZE) return;   // already at floor — nothing to reduce
 
-  const after = Math.max(MIN_BATCH_SIZE, currentBatch - PREDICT_REDUCE_STEP);
+  // If the strategy engine already has the system in LATENCY_FIRST mode, apply a
+  // lighter pre-adjustment (1 unit instead of 2) — the strategy layer is already
+  // handling the latency concern more aggressively, so we avoid double-punishing.
+  const effectiveStep = getStrategyMode() === "LATENCY_FIRST"
+    ? Math.max(1, PREDICT_REDUCE_STEP - 1)
+    : PREDICT_REDUCE_STEP;
+
+  const after = Math.max(MIN_BATCH_SIZE, currentBatch - effectiveStep);
   if (after >= currentBatch) return;             // no room (shouldn't happen given guard above)
 
   setBatchSize(after);
@@ -253,7 +261,8 @@ export async function learningEngine(metrics: CollectedMetrics): Promise<void> {
   const result =
     `pattern_detected hour=${hourOfDay} occurrences=${pattern.occurrences} ` +
     `avg_high_lat=${pattern.avgHighLat.toFixed(1)}ms confidence=${confidence.toFixed(2)} ` +
-    `decision=reduce_batch batchSize=${currentBatch}→${after}`;
+    `decision=reduce_batch batchSize=${currentBatch}→${after} ` +
+    `mode=${getStrategyMode()} step=${effectiveStep}`;
 
   console.info(`[LearningEngine] predictive_adjustment: ${result}`);
   await insertIncident({ type: "learning_engine", action: "predictive_adjustment", result });

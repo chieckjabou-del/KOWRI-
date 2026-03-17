@@ -30,6 +30,7 @@ import {
   restoreReplicaReads,
 }                                                                 from "./actionExecutor";
 import { autoHeal }                                               from "./healingEngine";
+import { strategyEngine }                                        from "./strategyEngine";
 import { learningEngine }                                        from "./learningEngine";
 import { selfOptimize }                                          from "./selfOptimizer";
 
@@ -167,18 +168,24 @@ export async function runAutopilotCycle(): Promise<void> {
     console.error("[Autopilot] healingEngine error:", err);
   }
 
-  // Step 6 — run learning engine AFTER healing so emergency switches are in
-  // place, but BEFORE selfOptimize so soft predictive adjustments are visible
-  // to the trend-based optimizer in the same cycle.  Isolated — errors here
-  // must never abort the cycle.
+  // Step 6 — determine strategic mode (LATENCY_FIRST / THROUGHPUT_FIRST / BALANCED).
+  // Runs after autoHeal so emergency state is already reflected in metrics,
+  // and before learningEngine / selfOptimize so both layers can read the mode
+  // synchronously via getStrategyMode().  Isolated — errors must never abort.
+  try {
+    await strategyEngine(metrics);
+  } catch (err) {
+    console.error("[Autopilot] strategyEngine error:", err);
+  }
+
+  // Step 7 — run learning engine; uses current strategy mode to scale pre-adjustments.
   try {
     await learningEngine(metrics);
   } catch (err) {
     console.error("[Autopilot] learningEngine error:", err);
   }
 
-  // Step 7 — run self-optimizer last so it operates on the final batch-size
-  // state after all higher-priority layers have acted.  Isolated.
+  // Step 8 — run self-optimizer last; uses current strategy mode for step sizing.
   try {
     await selfOptimize(metrics);
   } catch (err) {

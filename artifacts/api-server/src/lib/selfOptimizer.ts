@@ -20,9 +20,10 @@
 //
 // ROLLBACK: remove `await selfOptimize(metrics)` from autopilot.ts; delete this file.
 
-import { CollectedMetrics }                       from "./metricsCollector";
+import { CollectedMetrics }                               from "./metricsCollector";
 import { getBatchSize, setBatchSize, DEFAULT_BATCH_SIZE } from "./outboxWorker";
-import { insertIncident }                          from "./incidentStore";
+import { insertIncident }                                  from "./incidentStore";
+import { getStrategyMode }                                 from "./strategyEngine";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -196,7 +197,14 @@ function computeThresholds(): AdaptiveThresholds {
 function reduceStep(): number {
   // If recent reduce attempts showed no improvement, fall back to minimum nudge.
   if (isIneffective("reduce_batch_opt")) return REDUCE_STEP_MIN;
-  return Math.max(REDUCE_STEP_MIN, Math.floor(getBatchSize() * REDUCE_FACTOR));
+  // LATENCY_FIRST: more aggressive reduction (15% vs 10%).
+  const factor = getStrategyMode() === "LATENCY_FIRST" ? 0.15 : REDUCE_FACTOR;
+  return Math.max(REDUCE_STEP_MIN, Math.floor(getBatchSize() * factor));
+}
+
+function increaseStep(): number {
+  // THROUGHPUT_FIRST: larger steps to restore processing capacity faster (+2 vs +1).
+  return getStrategyMode() === "THROUGHPUT_FIRST" ? 2 : INCREASE_STEP;
 }
 
 // ── Observability ─────────────────────────────────────────────────────────────
@@ -243,25 +251,29 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
   // ── Decision A: latency strictly rising → gradual reduce ─────────────────
   // Guard: only fires BELOW the high threshold — autoHeal owns the emergency zone.
   // Guard: batch size must have room to reduce.
-  if (
-    latTrend === "rising" &&
-    metrics.db_latency < t.db_latency_high &&
-    currentBatch > MIN_BATCH_SIZE
-  ) {
-    const step  = reduceStep();
-    const after = Math.max(MIN_BATCH_SIZE, currentBatch - step);
+  // THROUGHPUT_FIRST: skip entirely — we do not reduce batch for latency concerns
+  //   when the priority is event throughput.  Return to consume the 1-decision slot
+  //   so no lower-priority decision also fires this cycle.
+  if (latTrend === "rising" && metrics.db_latency < t.db_latency_high) {
+    if (getStrategyMode() === "THROUGHPUT_FIRST") return;  // latency concern suppressed
 
-    if (after < currentBatch) {                            // actual change guard
-      setBatchSize(after);
-      recordAction("reduce_batch_opt", metrics.db_latency);
+    if (currentBatch > MIN_BATCH_SIZE) {
+      const step  = reduceStep();   // LATENCY_FIRST → 15%, BALANCED → 10%
+      const after = Math.max(MIN_BATCH_SIZE, currentBatch - step);
 
-      const result =
-        `reason=trend_rising latency=${metrics.db_latency}ms avg=${t.avgLatency.toFixed(1)}ms ` +
-        `decision=reduce_batch batchSize=${currentBatch}→${after} ` +
-        `adaptive=${t.hasAdaptive} ineffective=${isIneffective("reduce_batch_opt")}`;
+      if (after < currentBatch) {
+        setBatchSize(after);
+        recordAction("reduce_batch_opt", metrics.db_latency);
 
-      console.info(`[SelfOptimize] ${result}`);
-      await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+        const result =
+          `reason=trend_rising latency=${metrics.db_latency}ms avg=${t.avgLatency.toFixed(1)}ms ` +
+          `decision=reduce_batch batchSize=${currentBatch}→${after} ` +
+          `mode=${getStrategyMode()} adaptive=${t.hasAdaptive} ` +
+          `ineffective=${isIneffective("reduce_batch_opt")}`;
+
+        console.info(`[SelfOptimize] ${result}`);
+        await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+      }
     }
     return;   // max 1 decision per cycle
   }
@@ -269,55 +281,67 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
   // ── Decision B: latency strictly falling AND comfortably below low threshold
   //               → gradual increase ─────────────────────────────────────────
   // Guard: batch size must have room to grow.
-  if (
-    latTrend === "falling" &&
-    metrics.db_latency < t.db_latency_low &&
-    currentBatch < DEFAULT_BATCH_SIZE
-  ) {
-    const after = Math.min(DEFAULT_BATCH_SIZE, currentBatch + INCREASE_STEP);
+  // LATENCY_FIRST: skip — do not restore batch capacity while DB is stressed.
+  //   Return to consume the slot so Decision C cannot also fire.
+  // THROUGHPUT_FIRST: step = +2 instead of +1 (increaseStep() handles this).
+  if (latTrend === "falling" && metrics.db_latency < t.db_latency_low) {
+    if (getStrategyMode() === "LATENCY_FIRST") return;  // no batch growth under latency pressure
 
-    if (after > currentBatch) {                            // actual change guard
-      setBatchSize(after);
-      recordAction("increase_batch_opt", metrics.db_latency);
+    if (currentBatch < DEFAULT_BATCH_SIZE) {
+      const step  = increaseStep();   // THROUGHPUT_FIRST → 2, BALANCED → 1
+      const after = Math.min(DEFAULT_BATCH_SIZE, currentBatch + step);
 
-      const result =
-        `reason=trend_falling latency=${metrics.db_latency}ms avg=${t.avgLatency.toFixed(1)}ms ` +
-        `decision=increase_batch batchSize=${currentBatch}→${after} ` +
-        `adaptive=${t.hasAdaptive}`;
+      if (after > currentBatch) {
+        setBatchSize(after);
+        recordAction("increase_batch_opt", metrics.db_latency);
 
-      console.info(`[SelfOptimize] ${result}`);
-      await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+        const result =
+          `reason=trend_falling latency=${metrics.db_latency}ms avg=${t.avgLatency.toFixed(1)}ms ` +
+          `decision=increase_batch batchSize=${currentBatch}→${after} ` +
+          `mode=${getStrategyMode()} adaptive=${t.hasAdaptive}`;
+
+        console.info(`[SelfOptimize] ${result}`);
+        await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+      }
     }
     return;   // max 1 decision per cycle
   }
 
   // ── Decision C: pending queue rising AND approaching DLQ risk ────────────
-  // Pre-emptive: acts when pending is at 80% of high threshold AND DLQ is at
-  // 50% of spike threshold.  Catches queue pile-ups before they trigger autoHeal.
+  // Pre-emptive: acts when pending crosses a fraction of the high threshold AND
+  // DLQ is climbing.  Catches queue pile-ups before they trigger autoHeal.
   // Guard: does NOT fire if latency is already above the low threshold (let
   //        autoHeal handle that case instead).
-  if (
-    pendTrend === "rising" &&
-    metrics.outbox_pending > t.pending_high * 0.8 &&
-    metrics.dlq_rate       > t.dlq_spike    * 0.5 &&
-    metrics.db_latency     < t.db_latency_low      &&
-    currentBatch           > MIN_BATCH_SIZE
-  ) {
-    const step  = reduceStep();
-    const after = Math.max(MIN_BATCH_SIZE, currentBatch - step);
+  // THROUGHPUT_FIRST: skip — maximising throughput; reducing batch here is
+  //   counter-productive.  autoHeal handles the true emergency.
+  // LATENCY_FIRST: tighter trigger — fire at 60% of pending_high (vs 80%)
+  //   to shed load sooner while the system is already under latency pressure.
+  const mode = getStrategyMode();
+  if (mode !== "THROUGHPUT_FIRST" && pendTrend === "rising") {
+    const pendFraction = mode === "LATENCY_FIRST" ? 0.60 : 0.80;
 
-    if (after < currentBatch) {                            // actual change guard
-      setBatchSize(after);
-      recordAction("reduce_batch_opt", metrics.outbox_pending);
+    if (
+      metrics.outbox_pending > t.pending_high * pendFraction &&
+      metrics.dlq_rate       > t.dlq_spike    * 0.5         &&
+      metrics.db_latency     < t.db_latency_low             &&
+      currentBatch           > MIN_BATCH_SIZE
+    ) {
+      const step  = reduceStep();
+      const after = Math.max(MIN_BATCH_SIZE, currentBatch - step);
 
-      const result =
-        `reason=trend_rising_pending pending=${metrics.outbox_pending} ` +
-        `avg_pending=${t.avgPending.toFixed(0)} dlq=${metrics.dlq_rate} ` +
-        `decision=reduce_batch batchSize=${currentBatch}→${after} ` +
-        `adaptive=${t.hasAdaptive}`;
+      if (after < currentBatch) {
+        setBatchSize(after);
+        recordAction("reduce_batch_opt", metrics.outbox_pending);
 
-      console.info(`[SelfOptimize] ${result}`);
-      await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+        const result =
+          `reason=trend_rising_pending pending=${metrics.outbox_pending} ` +
+          `avg_pending=${t.avgPending.toFixed(0)} dlq=${metrics.dlq_rate} ` +
+          `decision=reduce_batch batchSize=${currentBatch}→${after} ` +
+          `mode=${mode} pendFraction=${pendFraction} adaptive=${t.hasAdaptive}`;
+
+        console.info(`[SelfOptimize] ${result}`);
+        await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+      }
     }
     return;   // max 1 decision per cycle
   }
