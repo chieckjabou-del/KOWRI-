@@ -27,8 +27,9 @@ function currentBucket(): Bucket {
   return b;
 }
 
-export function recordRequest(): void  { currentBucket().requests++; }
-export function recordErrorEvent(): void { const b = currentBucket(); b.errors++; b.requests++; }
+export function recordRequest(): void    { currentBucket().requests++; }
+// Only increments errors — recordRequest() already counted this request on the way in.
+export function recordErrorEvent(): void { currentBucket().errors++; }
 
 function slidingErrorRate(): number {
   const cutoff = Date.now() - BUCKET_COUNT * BUCKET_MS;
@@ -61,7 +62,17 @@ function slidingErrorRate(): number {
 //
 //  Final clamp: always within [MIN_STICKY_MS, MAX_STICKY_MS]
 
+// ── 1-second result cache ─────────────────────────────────────────────────────
+// Inputs (lag, p99 latency, error rate) change on timescales of seconds to
+// minutes.  Recomputing on every write request is wasteful: getMetrics() sorts
+// up to 1 000 latency samples each call.  Cache the result for 1 s.
+let _cachedWindow = BASE_MS;
+let _cachedAt     = 0;
+
 export function computeStickyWindowMs(): number {
+  const now = Date.now();
+  if (now - _cachedAt < 1_000) return _cachedWindow;
+
   const { lagSec, healthy, thresholdSec } = getReplicaLagState();
   const metrics   = getMetrics();
   const p99Ms     = metrics.transactions.latency.p99 ?? 0;
@@ -88,7 +99,9 @@ export function computeStickyWindowMs(): number {
     windowMs = BASE_MS * Math.max(1, ratio);
   }
 
-  return Math.round(Math.min(MAX_STICKY_MS, Math.max(MIN_STICKY_MS, windowMs)));
+  _cachedWindow = Math.round(Math.min(MAX_STICKY_MS, Math.max(MIN_STICKY_MS, windowMs)));
+  _cachedAt     = now;
+  return _cachedWindow;
 }
 
 export function getAdvisorStats() {

@@ -76,12 +76,17 @@ export function classifyError(err: unknown): ErrorClass {
 
   if (code === "57014" || (msg.includes("timeout") && msg.includes("query")))        return "timeout";
 
-  // Permanent data/constraint errors — retrying will never fix these
+  // Permanent data/constraint errors — retrying will never fix these.
+  // "does not exist" is intentionally scoped to schema-level objects (column /
+  // relation / function) and must NOT match application-level "user does not
+  // exist" messages, which are recoverable once the resource is created.
   if (["23000","23001","23502","23503","23505",
        "22001","22003","22007","22P02"].includes(code ?? "") ||
       msg.includes("invalid input syntax") ||
       msg.includes("violates")             ||
-      msg.includes("does not exist"))                                                 return "permanent";
+      (msg.includes("does not exist") &&
+       (msg.includes("column") || msg.includes("relation") ||
+        msg.includes("function") || msg.includes("table"))))                         return "permanent";
 
   // ── Node.js / network codes ───────────────────────────────────────────────
   if (["ECONNRESET","ECONNREFUSED","EHOSTUNREACH",
@@ -90,6 +95,8 @@ export function classifyError(err: unknown): ErrorClass {
       msg.includes("econnreset")       ||
       msg.includes("network"))                                                        return "network";
 
+  // ETIMEDOUT must come after the other network codes — it is a timeout, not
+  // a connectivity failure, and gets a different retry policy (longer base delay).
   if (code === "ETIMEDOUT" || msg.includes("timed out") ||
       msg.includes("etimedout"))                                                      return "timeout";
 
@@ -229,20 +236,30 @@ async function processOne(row: typeof outboxEventsTable.$inferSelect): Promise<v
 async function processBatch(): Promise<void> {
   const now = new Date();
 
-  const rows = await db
-    .select()
-    .from(outboxEventsTable)
-    .where(and(eq(outboxEventsTable.status, "pending"), lte(outboxEventsTable.processAt, now)))
-    .orderBy(asc(outboxEventsTable.priority), asc(outboxEventsTable.processAt))
-    .limit(BATCH_SIZE)
-    .for("update", { skipLocked: true });
+  // SELECT and UPDATE must be in the same transaction so the FOR UPDATE SKIP
+  // LOCKED row locks are held until the status flip commits.  Outside a tx the
+  // lock releases immediately after the SELECT, leaving a window where a second
+  // worker instance could pick the same rows.
+  const rows = await db.transaction(async (tx) => {
+    const selected = await tx
+      .select()
+      .from(outboxEventsTable)
+      .where(and(eq(outboxEventsTable.status, "pending"), lte(outboxEventsTable.processAt, now)))
+      .orderBy(asc(outboxEventsTable.priority), asc(outboxEventsTable.processAt))
+      .limit(BATCH_SIZE)
+      .for("update", { skipLocked: true });
+
+    if (selected.length === 0) return [];
+
+    await tx
+      .update(outboxEventsTable)
+      .set({ status: "processing" })
+      .where(sql`id = ANY(ARRAY[${sql.join(selected.map(r => sql`${r.id}`), sql`, `)}]::text[])`);
+
+    return selected;
+  });
 
   if (rows.length === 0) return;
-
-  await db
-    .update(outboxEventsTable)
-    .set({ status: "processing" })
-    .where(sql`id = ANY(ARRAY[${sql.join(rows.map(r => sql`${r.id}`), sql`, `)}]::text[])`);
 
   await Promise.allSettled(
     rows.map(async (row) => {
@@ -272,6 +289,37 @@ async function processBatch(): Promise<void> {
   );
 }
 
+// ── Startup recovery: reset stuck "processing" rows ──────────────────────────
+// If the process crashed after marking rows "processing" but before completing
+// them, they are permanently invisible to processBatch (which only selects
+// "pending").  On every startup, reset those rows to "pending" so they're
+// retried.  This is safe because processOne is idempotent via the
+// processed_events fence: even if a row completed before the crash, the fence
+// prevents a duplicate emit on re-processing.
+
+// ── One-time index: ensure priority-aware batch SELECT is efficient ───────────
+// A partial index on pending rows avoids a full-table scan on every poll cycle.
+// CREATE INDEX IF NOT EXISTS is idempotent — safe to run on every startup.
+
+async function ensureOutboxIndex(): Promise<void> {
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS outbox_priority_pending_idx
+      ON outbox_events (priority ASC, process_at ASC)
+      WHERE status = 'pending'
+  `);
+}
+
+async function recoverStuckProcessing(): Promise<void> {
+  const result = await db.execute<{ count: string }>(sql`
+    UPDATE outbox_events
+    SET status = 'pending', process_at = now()
+    WHERE status = 'processing'
+    RETURNING id
+  `);
+  const n = result.rows?.length ?? 0;
+  if (n > 0) console.warn(`[OutboxWorker] recovered ${n} stuck-processing rows`);
+}
+
 // ── Nightly prune: keep processed_events table bounded ───────────────────────
 
 async function pruneProcessedEvents(): Promise<void> {
@@ -287,6 +335,14 @@ let pruneInterval:  ReturnType<typeof setInterval> | null = null;
 
 export function startOutboxWorker(): void {
   if (workerInterval) return;
+
+  // Both tasks are fire-and-forget before the first poll cycle.
+  ensureOutboxIndex().catch((err) =>
+    console.error("[OutboxWorker] index creation failed:", err),
+  );
+  recoverStuckProcessing().catch((err) =>
+    console.error("[OutboxWorker] startup recovery failed:", err),
+  );
 
   workerInterval = setInterval(async () => {
     try { await processBatch(); } catch (err) {
@@ -316,25 +372,29 @@ export function stopOutboxWorker(): void {
 //  into lastError — no schema change required.
 
 export async function getOutboxStats() {
-  const [outbox, [{ fenceTotal }], deadRows] = await Promise.all([
+  // deadByClass: group dead events by the "[class]" prefix in last_error
+  // entirely in SQL — avoids fetching every last_error string into Node.js.
+  const [outbox, [{ fenceTotal }], deadClassRows] = await Promise.all([
     db.execute<{ status: string; cnt: string }>(
       sql`SELECT status, COUNT(*)::text AS cnt FROM outbox_events GROUP BY status`,
     ),
     db.select({ fenceTotal: sql<number>`COUNT(*)::int` }).from(processedEventsTable),
-    db.execute<{ last_error: string | null }>(
-      sql`SELECT last_error FROM outbox_events WHERE status = 'dead'`,
-    ),
+    db.execute<{ cls: string | null; cnt: string }>(sql`
+      SELECT
+        COALESCE(substring(last_error FROM '^\[([a-z_]+)\]'), 'unknown') AS cls,
+        COUNT(*)::text AS cnt
+      FROM outbox_events
+      WHERE status = 'dead'
+      GROUP BY cls
+    `),
   ]);
 
   const stats: Record<string, number> = {};
   for (const r of outbox.rows) stats[r.status] = Number(r.cnt);
 
-  // Tally dead events by error class
   const deadByClass: Record<string, number> = {};
-  for (const r of deadRows.rows) {
-    const match = r.last_error?.match(/^\[([a-z_]+)\]/);
-    const cls   = match?.[1] ?? "unknown";
-    deadByClass[cls] = (deadByClass[cls] ?? 0) + 1;
+  for (const r of deadClassRows.rows) {
+    deadByClass[r.cls ?? "unknown"] = Number(r.cnt);
   }
 
   return {
@@ -353,13 +413,20 @@ export async function insertOutboxEvent(
   payload: Record<string, unknown>,
   priority?: number,
 ): Promise<void> {
+  // Clamp to the valid range so a caller cannot accidentally jump ahead of
+  // CRITICAL (1) or lag behind ANALYTICS (9) without an explicit PRIORITY value.
+  const resolvedPriority = Math.min(
+    PRIORITY.ANALYTICS,
+    Math.max(PRIORITY.CRITICAL, priority ?? topicPriority(topic)),
+  );
+
   await tx.insert(outboxEventsTable).values({
     id:        generateId(),
     topic,
     payload:   payload as any,
     status:    "pending",
     attempts:  0,
-    priority:  priority ?? topicPriority(topic),
+    priority:  resolvedPriority,
     processAt: new Date(),
   });
 }

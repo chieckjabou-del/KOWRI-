@@ -29,8 +29,10 @@ function pruneStore(): void {
 
 setInterval(pruneStore, 60_000).unref();
 
-function storeSet(identity: string): void {
-  store.set(identity, Date.now() + computeStickyWindowMs());
+// windowMs is computed once per response and passed in so the server store
+// and the X-Primary-Until client header always use the identical value.
+function storeSet(identity: string, windowMs: number): void {
+  store.set(identity, Date.now() + windowMs);
 }
 
 function storeHas(identity: string): boolean {
@@ -87,24 +89,26 @@ export function stickyPrimaryRequest(req: Request, _res: Response, next: NextFun
 export function stickyPrimaryResponse(req: Request, res: Response, next: NextFunction): void {
   if (!WRITE_METHODS.has(req.method)) { next(); return; }
 
-  const primaryUntil = Date.now() + computeStickyWindowMs();
-
   const originalJson = res.json.bind(res);
   res.json = function (body: unknown) {
     const status = res.statusCode ?? 200;
 
-    // Only pin to primary when the write actually succeeded (2xx)
     if (status >= 200 && status < 300) {
-      // ── Server-side store write ─────────────────────────────────────────────
-      const responseBody = (body && typeof body === "object") ? body as Record<string, unknown> : undefined;
-      const identity = extractIdentity(req, responseBody);
-      storeSet(identity);
+      // ── Compute window once so store TTL and client header are identical ─────
+      const windowMs     = computeStickyWindowMs();
+      const primaryUntil = Date.now() + windowMs;
 
-      // ── Client headers (cooperative clients echo these back) ────────────────
+      const responseBody = (body && typeof body === "object") ? body as Record<string, unknown> : undefined;
+      const identity     = extractIdentity(req, responseBody);
+      storeSet(identity, windowMs);
+
       if (!res.headersSent) {
         res.setHeader(HEADER_FLAG,  "1");
         res.setHeader(HEADER_UNTIL, String(primaryUntil));
       }
+    } else if (status >= 500) {
+      // ── Feed error rate tracker so window advisor rules 4+5 can activate ────
+      recordErrorEvent();
     }
 
     return originalJson(body);
