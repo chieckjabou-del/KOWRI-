@@ -15,6 +15,7 @@ import Credit from "./pages/credit";
 import Merchants from "./pages/merchants";
 import Compliance from "./pages/compliance";
 import Ledger from "./pages/ledger";
+import WarRoom from "./pages/war-room";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,6 +31,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
+      <Route path="/war-room" component={WarRoom} />
       <Route path="/users" component={Users} />
       <Route path="/wallets" component={Wallets} />
       <Route path="/transactions" component={Transactions} />

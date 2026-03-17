@@ -13,6 +13,7 @@ import {
   LogOut,
   Bell,
   Search,
+  Siren,
 } from "lucide-react";
 import {
   Sidebar,
@@ -33,6 +34,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
+  { title: "War Room",  url: "/war-room", icon: Siren },
   { title: "Users", url: "/users", icon: Users },
   { title: "Wallets", url: "/wallets", icon: Wallet },
   { title: "Transactions", url: "/transactions", icon: ArrowLeftRight },
