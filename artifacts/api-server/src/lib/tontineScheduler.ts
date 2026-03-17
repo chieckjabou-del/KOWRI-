@@ -36,8 +36,13 @@ export async function runContributionCycle(tontineId: string): Promise<{
       continue;
     }
 
-    const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, member.userId));
-    if (!wallet) { failed.push(member.userId); continue; }
+    const memberWallets = await db.select().from(walletsTable)
+      .where(and(eq(walletsTable.userId, member.userId), eq(walletsTable.status, "active")));
+    const wallet =
+      memberWallets.find(w => w.walletType === "personal") ??
+      memberWallets.find(w => w.walletType !== "tontine") ??
+      memberWallets[0];
+    if (!wallet || wallet.id === poolWalletId) { failed.push(member.userId); continue; }
 
     try {
       await processTransfer({
@@ -91,8 +96,14 @@ export async function runPayoutCycle(tontineId: string): Promise<{
   if (!memberLocked.length) throw new Error("Payout already in progress or completed for this member");
 
   try {
-    const [recipientWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, recipient.userId));
+    const recipientWallets = await db.select().from(walletsTable)
+      .where(and(eq(walletsTable.userId, recipient.userId), eq(walletsTable.status, "active")));
+    const recipientWallet =
+      recipientWallets.find(w => w.walletType === "personal") ??
+      recipientWallets.find(w => w.walletType !== "tontine") ??
+      recipientWallets[0];
     if (!recipientWallet) throw new Error(`Recipient wallet not found`);
+    if (recipientWallet.id === tontine.walletId) throw new Error(`Recipient wallet resolves to the pool wallet — check adminUserId wallet setup`);
 
     const payoutAmount = Number(tontine.contributionAmount) * tontine.memberCount;
 

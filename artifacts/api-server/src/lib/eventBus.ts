@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { eventLogTable } from "@workspace/db";
 import { generateId } from "./id";
 import { recordMetric } from "./metrics";
+import { eventBusCircuitBreaker } from "./circuitBreaker";
 
 export type KowriEventType =
   | "transaction.created"
@@ -20,6 +21,52 @@ export interface KowriEvent {
   timestamp: Date;
 }
 
+interface BufferedEvent {
+  type: string;
+  payload: Record<string, unknown>;
+  attempts: number;
+  firstFailedAt: Date;
+}
+
+const fallbackBuffer: BufferedEvent[] = [];
+const BUFFER_MAX       = 5_000;
+const BUFFER_MAX_AGE_MS = 10 * 60 * 1000;
+const DRAIN_INTERVAL_MS = 15_000;
+const MAX_EVENT_ATTEMPTS = 5;
+
+async function persistEvent(type: string, payload: Record<string, unknown>): Promise<void> {
+  await eventBusCircuitBreaker.call(() =>
+    db.insert(eventLogTable).values({
+      id:        generateId(),
+      eventType: type,
+      payload:   payload as any,
+    })
+  );
+}
+
+async function drainBuffer(): Promise<void> {
+  if (fallbackBuffer.length === 0) return;
+
+  const now = Date.now();
+  const toRetry = fallbackBuffer.splice(0, 100);
+
+  for (const evt of toRetry) {
+    if (evt.attempts >= MAX_EVENT_ATTEMPTS) continue;
+    if (now - evt.firstFailedAt.getTime() > BUFFER_MAX_AGE_MS) continue;
+
+    try {
+      await persistEvent(evt.type, evt.payload);
+    } catch {
+      evt.attempts++;
+      if (evt.attempts < MAX_EVENT_ATTEMPTS) {
+        fallbackBuffer.push(evt);
+      }
+    }
+  }
+}
+
+setInterval(drainBuffer, DRAIN_INTERVAL_MS).unref();
+
 class KowriEventBus extends EventEmitter {
   async publish(type: KowriEventType | string, payload: Record<string, unknown>): Promise<void> {
     const event: KowriEvent = { type, payload, timestamp: new Date() };
@@ -29,13 +76,14 @@ class KowriEventBus extends EventEmitter {
     this.emit("*", event);
 
     try {
-      await db.insert(eventLogTable).values({
-        id: generateId(),
-        eventType: type,
-        payload: payload as any,
-      });
+      await persistEvent(type, payload);
     } catch (err) {
-      console.error("[EventBus] Failed to persist event:", type, err);
+      console.error("[EventBus] DB write failed — buffering event:", type, err);
+      if (fallbackBuffer.length < BUFFER_MAX) {
+        fallbackBuffer.push({ type, payload, attempts: 1, firstFailedAt: new Date() });
+      } else {
+        console.error("[EventBus] Buffer full — event dropped:", type);
+      }
     }
 
     setImmediate(async () => {
@@ -46,6 +94,14 @@ class KowriEventBus extends EventEmitter {
     });
 
     recordMetric("event", Date.now() - start, type);
+  }
+
+  getBufferStats() {
+    return {
+      bufferedEvents: fallbackBuffer.length,
+      bufferMax:      BUFFER_MAX,
+      circuitBreaker: eventBusCircuitBreaker.getStats(),
+    };
   }
 }
 

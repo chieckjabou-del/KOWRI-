@@ -26,18 +26,66 @@ const DEFAULTS: WalletLimits = {
   maxDailyVolume: 20_000_000,
 };
 
-async function getLimits(walletId: string): Promise<WalletLimits> {
-  const [row] = await db.select().from(walletLimitsTable).where(eq(walletLimitsTable.walletId, walletId));
-  if (!row) return DEFAULTS;
-  return {
-    maxTxPerMinute: row.maxTxPerMinute,
-    maxHourlyVolume: Number(row.maxHourlyVolume),
-    maxDailyVolume: Number(row.maxDailyVolume),
-  };
+interface CacheEntry { data: WalletLimits; expiresAt: number; }
+const limitsCache = new Map<string, CacheEntry>();
+const LIMITS_TTL_MS = 60_000;
+
+function evictStaleEntries(): void {
+  const now = Date.now();
+  for (const [k, v] of limitsCache) {
+    if (now >= v.expiresAt) limitsCache.delete(k);
+  }
 }
+setInterval(evictStaleEntries, LIMITS_TTL_MS).unref();
+
+async function getLimits(walletId: string): Promise<WalletLimits> {
+  const cached = limitsCache.get(walletId);
+  if (cached && Date.now() < cached.expiresAt) return cached.data;
+
+  const [row] = await db.select().from(walletLimitsTable).where(eq(walletLimitsTable.walletId, walletId));
+  const limits: WalletLimits = !row ? DEFAULTS : {
+    maxTxPerMinute:  row.maxTxPerMinute,
+    maxHourlyVolume: Number(row.maxHourlyVolume),
+    maxDailyVolume:  Number(row.maxDailyVolume),
+  };
+
+  limitsCache.set(walletId, { data: limits, expiresAt: Date.now() + LIMITS_TTL_MS });
+  return limits;
+}
+
+export function invalidateLimitsCache(walletId: string): void {
+  limitsCache.delete(walletId);
+}
+
+interface SlidingWindowEntry { count: number; volumeSum: number; windowStart: number; }
+const inMemoryCounters = new Map<string, SlidingWindowEntry>();
+const COUNTER_WINDOW_MS = 60_000;
+
+function getInMemoryCount(walletId: string): SlidingWindowEntry {
+  const now = Date.now();
+  const existing = inMemoryCounters.get(walletId);
+  if (!existing || now - existing.windowStart > COUNTER_WINDOW_MS) {
+    const entry: SlidingWindowEntry = { count: 0, volumeSum: 0, windowStart: now };
+    inMemoryCounters.set(walletId, entry);
+    return entry;
+  }
+  return existing;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of inMemoryCounters) {
+    if (now - v.windowStart > COUNTER_WINDOW_MS * 2) inMemoryCounters.delete(k);
+  }
+}, COUNTER_WINDOW_MS).unref();
 
 export async function checkRateLimit(walletId: string, transferAmount: number): Promise<void> {
   const limits = await getLimits(walletId);
+
+  const counter = getInMemoryCount(walletId);
+  if (counter.count >= limits.maxTxPerMinute) {
+    throw new RateLimitExceededError("too many transfers", limits.maxTxPerMinute, counter.count, "1 minute");
+  }
 
   const now = new Date();
   const oneMinAgo  = new Date(now.getTime() -  60 * 1000);
@@ -73,6 +121,9 @@ export async function checkRateLimit(walletId: string, transferAmount: number): 
   if (dailyVol > limits.maxDailyVolume) {
     throw new RateLimitExceededError("daily volume exceeded", limits.maxDailyVolume, dailyVol, "24 hours");
   }
+
+  counter.count++;
+  counter.volumeSum += transferAmount;
 }
 
 export async function setWalletLimits(
@@ -88,4 +139,5 @@ export async function setWalletLimits(
       target: walletLimitsTable.walletId,
       set: { maxTxPerMinute, maxHourlyVolume: String(maxHourlyVolume), maxDailyVolume: String(maxDailyVolume), updatedAt: new Date() },
     });
+  invalidateLimitsCache(walletId);
 }
