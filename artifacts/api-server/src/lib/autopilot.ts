@@ -30,6 +30,7 @@ import {
   restoreReplicaReads,
 }                                                                 from "./actionExecutor";
 import { autoHeal }                                               from "./healingEngine";
+import { selfOptimize }                                          from "./selfOptimizer";
 
 const POLL_MS = 5_000;
 
@@ -163,6 +164,16 @@ export async function runAutopilotCycle(): Promise<void> {
     await autoHeal(metrics);
   } catch (err) {
     console.error("[Autopilot] healingEngine error:", err);
+  }
+
+  // Step 6 — run self-optimizer AFTER healing engine so that emergency actions
+  // from both the rules engine and the healer are already applied before the
+  // optimizer reads batch size or makes trend decisions.  Isolated — errors
+  // here must never abort the cycle.
+  try {
+    await selfOptimize(metrics);
+  } catch (err) {
+    console.error("[Autopilot] selfOptimizer error:", err);
   }
 }
 
