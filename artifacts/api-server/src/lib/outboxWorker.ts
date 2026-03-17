@@ -10,6 +10,19 @@ const MAX_DELAY_S       = 300;      // 5-minute ceiling on any single backoff
 const JITTER_FACTOR     = 0.15;     // ±15% randomised jitter
 const PRUNE_AFTER_DAYS  = 7;
 
+// ── Analytics deferral ────────────────────────────────────────────────────────
+// When the last batch took > DEFER_LATENCY_MS to execute, analytics events
+// (priority = 9) are excluded from the next sweep so payment and fraud events
+// drain without competing for DB write capacity.
+// Resets automatically the moment batch duration drops back below the threshold.
+// ROLLBACK: remove this block and the two references in processBatch below.
+const DEFER_LATENCY_MS  = 150;
+let   deferAnalytics    = false;    // toggled by processBatch; read at sweep start
+
+export function getAnalyticsDeferralState() {
+  return { deferAnalytics, thresholdMs: DEFER_LATENCY_MS };
+}
+
 // ── Priority levels ───────────────────────────────────────────────────────────
 // Lower number = processed first.  Column default = MEDIUM (5).
 // All existing rows with no priority column value inherit MEDIUM via DB default.
@@ -234,17 +247,26 @@ async function processOne(row: typeof outboxEventsTable.$inferSelect): Promise<v
 // ── Batch processor ───────────────────────────────────────────────────────────
 
 async function processBatch(): Promise<void> {
-  const now = new Date();
+  const now       = new Date();
+  const batchStart = Date.now();
+  const skipAnalytics = deferAnalytics;   // snapshot flag before any await
 
   // SELECT and UPDATE must be in the same transaction so the FOR UPDATE SKIP
   // LOCKED row locks are held until the status flip commits.  Outside a tx the
   // lock releases immediately after the SELECT, leaving a window where a second
   // worker instance could pick the same rows.
   const rows = await db.transaction(async (tx) => {
+    const baseWhere = and(
+      eq(outboxEventsTable.status, "pending"),
+      lte(outboxEventsTable.processAt, now),
+      // ANALYTICS DEFERRAL: exclude priority=9 events when last batch was slow
+      skipAnalytics ? lt(outboxEventsTable.priority, PRIORITY.ANALYTICS) : undefined,
+    );
+
     const selected = await tx
       .select()
       .from(outboxEventsTable)
-      .where(and(eq(outboxEventsTable.status, "pending"), lte(outboxEventsTable.processAt, now)))
+      .where(baseWhere)
       .orderBy(asc(outboxEventsTable.priority), asc(outboxEventsTable.processAt))
       .limit(BATCH_SIZE)
       .for("update", { skipLocked: true });
@@ -287,6 +309,15 @@ async function processBatch(): Promise<void> {
       }
     }),
   );
+
+  // ANALYTICS DEFERRAL: update flag based on this batch's wall-clock duration.
+  // Next sweep reads the updated flag before issuing its SELECT.
+  const batchMs    = Date.now() - batchStart;
+  const wasDeferred = deferAnalytics;
+  deferAnalytics    = batchMs > DEFER_LATENCY_MS;
+  if (deferAnalytics !== wasDeferred) {
+    console.info(`[OutboxWorker] analytics deferral ${deferAnalytics ? "ON" : "OFF"} — batchMs=${batchMs}`);
+  }
 }
 
 // ── Startup recovery: reset stuck "processing" rows ──────────────────────────
