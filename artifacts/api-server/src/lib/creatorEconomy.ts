@@ -118,7 +118,7 @@ export async function distributeCreatorEarnings(communityId: string, transaction
   }
 
   await db.update(creatorCommunitiesTable).set({
-    totalVolume: sql`${creatorCommunitiesTable.totalVolume} + ${String(transactionAmount)}`,
+    totalVolume: sql`COALESCE(${creatorCommunitiesTable.totalVolume}, '0')::numeric + ${String(transactionAmount)}`,
     updatedAt: new Date(),
   }).where(eq(creatorCommunitiesTable.id, communityId));
 

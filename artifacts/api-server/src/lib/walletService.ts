@@ -284,3 +284,19 @@ export async function processTransfer(params: {
   recordMetric("transaction", Date.now() - start, "transfer");
   return finalTx;
 }
+
+export async function withDeadlockRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const isDeadlock = err?.code === "40P01" || err?.code === "40001";
+      if (isDeadlock && attempt < maxAttempts) {
+        await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 50 + Math.random() * 30));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Unreachable");
+}

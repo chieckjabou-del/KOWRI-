@@ -26,11 +26,16 @@ export async function runContributionCycle(tontineId: string): Promise<{
   const amount = Number(tontine.contributionAmount);
   const currency = tontine.currency;
   const poolWalletId = tontine.walletId!;
+  const expectedRound = tontine.currentRound + 1;
 
   let collected = 0;
   const failed: string[] = [];
 
   for (const member of members) {
+    if (member.contributionsCount >= expectedRound) {
+      continue;
+    }
+
     const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, member.userId));
     if (!wallet) { failed.push(member.userId); continue; }
 
@@ -40,7 +45,7 @@ export async function runContributionCycle(tontineId: string): Promise<{
         toWalletId:   poolWalletId,
         amount,
         currency,
-        description:  `Tontine contribution – Round ${tontine.currentRound + 1}`,
+        description:  `Tontine contribution – Round ${expectedRound}`,
         skipFraudCheck: true,
       });
       await db.update(tontineMembersTable)
@@ -52,7 +57,7 @@ export async function runContributionCycle(tontineId: string): Promise<{
     }
   }
 
-  await eventBus.publish("tontine.contributions.collected", { tontineId, collected, failed, round: tontine.currentRound + 1 });
+  await eventBus.publish("tontine.contributions.collected", { tontineId, collected, failed, round: expectedRound });
 
   await createSchedulerJob("tontine_payout", tontineId, "tontine", new Date());
 
@@ -64,6 +69,7 @@ export async function runPayoutCycle(tontineId: string): Promise<{
 }> {
   const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
   if (!tontine) throw new Error(`Tontine ${tontineId} not found`);
+  if (tontine.status !== "active") throw new Error(`Tontine ${tontineId} is not active`);
 
   const nextOrder = tontine.currentRound + 1;
   const [recipient] = await db.select().from(tontineMembersTable)
@@ -74,48 +80,66 @@ export async function runPayoutCycle(tontineId: string): Promise<{
 
   if (!recipient) throw new Error(`No recipient found for round ${nextOrder}`);
 
-  const [recipientWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, recipient.userId));
-  if (!recipientWallet) throw new Error(`Recipient wallet not found`);
+  const memberLocked = await db.update(tontineMembersTable)
+    .set({ hasReceivedPayout: 2 })
+    .where(and(
+      eq(tontineMembersTable.id, recipient.id),
+      eq(tontineMembersTable.hasReceivedPayout, 0),
+    ))
+    .returning({ id: tontineMembersTable.id });
 
-  const payoutAmount = Number(tontine.contributionAmount) * tontine.memberCount;
+  if (!memberLocked.length) throw new Error("Payout already in progress or completed for this member");
 
-  await processTransfer({
-    fromWalletId: tontine.walletId!,
-    toWalletId:   recipientWallet.id,
-    amount:       payoutAmount,
-    currency:     tontine.currency,
-    description:  `Tontine payout – Round ${nextOrder}`,
-    skipFraudCheck: true,
-  });
+  try {
+    const [recipientWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, recipient.userId));
+    if (!recipientWallet) throw new Error(`Recipient wallet not found`);
 
-  await db.update(tontineMembersTable)
-    .set({ hasReceivedPayout: 1 })
-    .where(eq(tontineMembersTable.id, recipient.id));
+    const payoutAmount = Number(tontine.contributionAmount) * tontine.memberCount;
 
-  const newRound = nextOrder;
-  const isComplete = newRound >= tontine.totalRounds;
+    await processTransfer({
+      fromWalletId: tontine.walletId!,
+      toWalletId:   recipientWallet.id,
+      amount:       payoutAmount,
+      currency:     tontine.currency,
+      description:  `Tontine payout – Round ${nextOrder}`,
+      skipFraudCheck: true,
+    });
 
-  const nextPayoutDate = computeNextDate(tontine.frequency);
+    const newRound = nextOrder;
+    const isComplete = newRound >= tontine.totalRounds;
+    const nextPayoutDate = computeNextDate(tontine.frequency);
 
-  await db.update(tontinesTable).set({
-    currentRound: newRound,
-    status: isComplete ? "completed" : "active",
-    nextPayoutDate: isComplete ? null : nextPayoutDate,
-    updatedAt: new Date(),
-  }).where(eq(tontinesTable.id, tontineId));
+    await db.transaction(async (tx) => {
+      await tx.update(tontineMembersTable)
+        .set({ hasReceivedPayout: 1 })
+        .where(eq(tontineMembersTable.id, recipient.id));
 
-  await audit({
-    action: "tontine.payout.completed",
-    entity: "tontine",
-    entityId: tontineId,
-    metadata: { round: newRound, recipientUserId: recipient.userId, payoutAmount },
-  });
+      await tx.update(tontinesTable).set({
+        currentRound: newRound,
+        status: isComplete ? "completed" : "active",
+        nextPayoutDate: isComplete ? null : nextPayoutDate,
+        updatedAt: new Date(),
+      }).where(eq(tontinesTable.id, tontineId));
+    });
 
-  await eventBus.publish("tontine.payout.completed", {
-    tontineId, round: newRound, recipientUserId: recipient.userId, payoutAmount,
-  });
+    await audit({
+      action: "tontine.payout.completed",
+      entity: "tontine",
+      entityId: tontineId,
+      metadata: { round: newRound, recipientUserId: recipient.userId, payoutAmount },
+    });
 
-  return { recipientUserId: recipient.userId, amount: payoutAmount, round: newRound };
+    await eventBus.publish("tontine.payout.completed", {
+      tontineId, round: newRound, recipientUserId: recipient.userId, payoutAmount,
+    });
+
+    return { recipientUserId: recipient.userId, amount: payoutAmount, round: newRound };
+  } catch (err) {
+    await db.update(tontineMembersTable)
+      .set({ hasReceivedPayout: 0 })
+      .where(eq(tontineMembersTable.id, recipient.id));
+    throw err;
+  }
 }
 
 export function computeNextDate(frequency: string): Date {
@@ -184,46 +208,67 @@ export async function listPositionForSale(params: {
 }
 
 export async function buyTontinePosition(listingId: string, buyerId: string): Promise<void> {
-  const [listing] = await db.select().from(tontinePositionListingsTable)
-    .where(eq(tontinePositionListingsTable.id, listingId));
-  if (!listing) throw new Error("Listing not found");
-  if (listing.status !== "open") throw new Error("Listing is not available");
-  if (listing.sellerId === buyerId) throw new Error("Cannot buy your own position");
-
-  const buyerWallets  = await db.select().from(walletsTable).where(and(eq(walletsTable.userId, buyerId),  eq(walletsTable.status, "active")));
-  const sellerWallets = await db.select().from(walletsTable).where(and(eq(walletsTable.userId, listing.sellerId), eq(walletsTable.status, "active")));
-
-  const prefer = (ws: typeof walletsTable.$inferSelect[]) =>
-    ws.find(w => w.walletType === "personal") ?? ws.find(w => Number(w.availableBalance) > 0) ?? ws[0];
-
-  const buyerWallet  = prefer(buyerWallets);
-  const sellerWallet = prefer(sellerWallets);
-  if (!buyerWallet || !sellerWallet) throw new Error("Wallet not found");
-
-  const tx = await processTransfer({
-    fromWalletId: buyerWallet.id,
-    toWalletId:   sellerWallet.id,
-    amount:       Number(listing.askPrice),
-    currency:     listing.currency,
-    description:  `Tontine position purchase – listing ${listingId}`,
-    skipFraudCheck: true,
-  });
-
-  await db.update(tontineMembersTable)
-    .set({ userId: buyerId })
+  const claimed = await db.update(tontinePositionListingsTable)
+    .set({ status: "processing" })
     .where(and(
-      eq(tontineMembersTable.tontineId, listing.tontineId),
-      eq(tontineMembersTable.payoutOrder, listing.payoutOrder),
-    ));
+      eq(tontinePositionListingsTable.id, listingId),
+      eq(tontinePositionListingsTable.status, "open"),
+    ))
+    .returning();
 
-  await db.update(tontinePositionListingsTable).set({
-    status: "sold", buyerId, soldAt: new Date(), transactionId: tx.id,
-  }).where(eq(tontinePositionListingsTable.id, listingId));
+  if (!claimed.length) throw new Error("Listing not available or already purchased");
+  const listing = claimed[0];
 
-  await eventBus.publish("tontine.position.sold", {
-    tontineId: listing.tontineId, buyerId, sellerId: listing.sellerId,
-    payoutOrder: listing.payoutOrder, price: listing.askPrice,
-  });
+  if (listing.sellerId === buyerId) {
+    await db.update(tontinePositionListingsTable)
+      .set({ status: "open" })
+      .where(eq(tontinePositionListingsTable.id, listingId));
+    throw new Error("Cannot buy your own position");
+  }
+
+  try {
+    const buyerWallets  = await db.select().from(walletsTable).where(and(eq(walletsTable.userId, buyerId),  eq(walletsTable.status, "active")));
+    const sellerWallets = await db.select().from(walletsTable).where(and(eq(walletsTable.userId, listing.sellerId), eq(walletsTable.status, "active")));
+
+    const prefer = (ws: typeof walletsTable.$inferSelect[]) =>
+      ws.find(w => w.walletType === "personal") ?? ws.find(w => Number(w.availableBalance) > 0) ?? ws[0];
+
+    const buyerWallet  = prefer(buyerWallets);
+    const sellerWallet = prefer(sellerWallets);
+    if (!buyerWallet || !sellerWallet) throw new Error("Wallet not found");
+
+    const tx = await processTransfer({
+      fromWalletId: buyerWallet.id,
+      toWalletId:   sellerWallet.id,
+      amount:       Number(listing.askPrice),
+      currency:     listing.currency,
+      description:  `Tontine position purchase – listing ${listingId}`,
+      skipFraudCheck: true,
+    });
+
+    await db.transaction(async (dbTx) => {
+      await dbTx.update(tontineMembersTable)
+        .set({ userId: buyerId })
+        .where(and(
+          eq(tontineMembersTable.tontineId, listing.tontineId),
+          eq(tontineMembersTable.payoutOrder, listing.payoutOrder),
+        ));
+
+      await dbTx.update(tontinePositionListingsTable).set({
+        status: "sold", buyerId, soldAt: new Date(), transactionId: tx.id,
+      }).where(eq(tontinePositionListingsTable.id, listingId));
+    });
+
+    await eventBus.publish("tontine.position.sold", {
+      tontineId: listing.tontineId, buyerId, sellerId: listing.sellerId,
+      payoutOrder: listing.payoutOrder, price: listing.askPrice,
+    });
+  } catch (err) {
+    await db.update(tontinePositionListingsTable)
+      .set({ status: "open" })
+      .where(eq(tontinePositionListingsTable.id, listingId));
+    throw err;
+  }
 }
 
 export async function createSchedulerJob(

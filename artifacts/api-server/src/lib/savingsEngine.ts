@@ -35,11 +35,6 @@ export async function createSavingsPlan(params: {
     skipFraudCheck: true,
   });
 
-  await db.update(walletsTable).set({
-    availableBalance: "0",
-    updatedAt: new Date(),
-  }).where(eq(walletsTable.id, params.savingsWalletId));
-
   const maturityDate = new Date();
   maturityDate.setDate(maturityDate.getDate() + params.termDays);
 
@@ -93,9 +88,16 @@ export async function accrueYield(planId: string): Promise<number> {
 export async function matureSavingsPlan(planId: string, targetWalletId: string): Promise<{
   principal: number; yield: number; total: number; penalty: number;
 }> {
-  const [plan] = await db.select().from(savingsPlansTable).where(eq(savingsPlansTable.id, planId));
-  if (!plan) throw new Error(`Savings plan ${planId} not found`);
-  if (plan.status !== "active") throw new Error("Plan is not active");
+  const locked = await db.update(savingsPlansTable)
+    .set({ status: "maturing", updatedAt: new Date() })
+    .where(and(eq(savingsPlansTable.id, planId), eq(savingsPlansTable.status, "active")))
+    .returning({ id: savingsPlansTable.id, lockedAmount: savingsPlansTable.lockedAmount,
+      accruedYield: savingsPlansTable.accruedYield, earlyBreakPenalty: savingsPlansTable.earlyBreakPenalty,
+      maturityDate: savingsPlansTable.maturityDate, walletId: savingsPlansTable.walletId,
+      currency: savingsPlansTable.currency, name: savingsPlansTable.name });
+
+  if (!locked.length) throw new Error("Plan is not active or concurrent maturation in progress");
+  const plan = locked[0];
 
   const now = new Date();
   const isEarlyBreak = now < new Date(plan.maturityDate);
@@ -107,11 +109,6 @@ export async function matureSavingsPlan(planId: string, targetWalletId: string):
     penalty    = accruedYield * (Number(plan.earlyBreakPenalty) / 100);
     finalYield = accruedYield - penalty;
   }
-
-  await db.update(walletsTable).set({
-    availableBalance: sql`${walletsTable.balance}`,
-    updatedAt: new Date(),
-  }).where(eq(walletsTable.id, plan.walletId));
 
   const principal = Number(plan.lockedAmount);
   const total     = principal + finalYield;

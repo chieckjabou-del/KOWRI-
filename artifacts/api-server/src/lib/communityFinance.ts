@@ -61,22 +61,24 @@ export async function investInPool(params: {
     ? params.amount
     : (params.amount / Number(pool.goalAmount)) * totalShares;
 
-  await db.update(investmentPoolsTable).set({
-    currentAmount: String(totalInvested),
-    totalShares:   String(totalShares + newShares),
-    status:        totalInvested >= Number(pool.goalAmount) ? "funded" : "open",
-    updatedAt:     new Date(),
-  }).where(eq(investmentPoolsTable.id, params.poolId));
+  const [position] = await db.transaction(async (dbTx) => {
+    await dbTx.update(investmentPoolsTable).set({
+      currentAmount: String(totalInvested),
+      totalShares:   String(totalShares + newShares),
+      status:        totalInvested >= Number(pool.goalAmount) ? "funded" : "open",
+      updatedAt:     new Date(),
+    }).where(eq(investmentPoolsTable.id, params.poolId));
 
-  const [position] = await db.insert(poolPositionsTable).values({
-    id:             generateId(),
-    poolId:         params.poolId,
-    userId:         params.userId,
-    shares:         String(newShares.toFixed(8)),
-    investedAmount: String(params.amount),
-    currency:       pool.currency,
-    transactionId:  tx.id,
-  }).returning();
+    return dbTx.insert(poolPositionsTable).values({
+      id:             generateId(),
+      poolId:         params.poolId,
+      userId:         params.userId,
+      shares:         String(newShares.toFixed(8)),
+      investedAmount: String(params.amount),
+      currency:       pool.currency,
+      transactionId:  tx.id,
+    }).returning();
+  });
 
   await eventBus.publish("investment.pool.invested", {
     poolId: params.poolId, userId: params.userId, amount: params.amount, shares: newShares,
@@ -95,6 +97,8 @@ export async function distributePoolReturns(poolId: string, totalReturn: number)
   let distributed = 0;
 
   for (const pos of positions) {
+    if (Number(pos.returnAmount) > 0) continue;
+
     const posShares = Number(pos.shares);
     const share     = totalShares > 0 ? (posShares / totalShares) * totalReturn : 0;
     if (share <= 0) continue;
@@ -102,18 +106,22 @@ export async function distributePoolReturns(poolId: string, totalReturn: number)
     const [userWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, pos.userId));
     if (!userWallet) continue;
 
-    await processDeposit({
-      walletId:    userWallet.id,
-      amount:      share,
-      currency:    pool.currency,
-      reference:   `RETURN-${poolId}-${pos.userId}`,
-      description: `Investment return from ${pool.name}`,
-    });
+    try {
+      await processDeposit({
+        walletId:    userWallet.id,
+        amount:      share,
+        currency:    pool.currency,
+        reference:   `RETURN-${poolId}-${pos.userId}`,
+        description: `Investment return from ${pool.name}`,
+      });
 
-    await db.update(poolPositionsTable).set({ returnAmount: String(Number(pos.returnAmount) + share) })
-      .where(eq(poolPositionsTable.id, pos.id));
+      await db.update(poolPositionsTable).set({ returnAmount: String(Number(pos.returnAmount) + share) })
+        .where(eq(poolPositionsTable.id, pos.id));
 
-    distributed += share;
+      distributed += share;
+    } catch {
+      // skip failed distribution; position.returnAmount remains 0 for retry
+    }
   }
 
   await db.update(investmentPoolsTable).set({ status: "matured", updatedAt: new Date() })
@@ -124,36 +132,50 @@ export async function distributePoolReturns(poolId: string, totalReturn: number)
 }
 
 export async function redeemPoolPosition(positionId: string, userId: string): Promise<void> {
-  const [pos] = await db.select().from(poolPositionsTable)
-    .where(and(eq(poolPositionsTable.id, positionId), eq(poolPositionsTable.userId, userId)));
-  if (!pos) throw new Error("Position not found");
-  if (pos.status !== "active") throw new Error("Position already redeemed");
+  const claimed = await db.update(poolPositionsTable)
+    .set({ status: "redeeming" })
+    .where(and(
+      eq(poolPositionsTable.id, positionId),
+      eq(poolPositionsTable.userId, userId),
+      eq(poolPositionsTable.status, "active"),
+    ))
+    .returning();
 
-  const [pool] = await db.select().from(investmentPoolsTable).where(eq(investmentPoolsTable.id, pos.poolId));
-  if (!pool) throw new Error("Pool not found");
-  if (pool.status !== "matured" && pool.status !== "open") {
-    throw new Error("Pool not yet matured");
+  if (!claimed.length) throw new Error("Position not found or already redeemed");
+  const pos = claimed[0];
+
+  try {
+    const [pool] = await db.select().from(investmentPoolsTable).where(eq(investmentPoolsTable.id, pos.poolId));
+    if (!pool) throw new Error("Pool not found");
+    if (pool.status !== "matured" && pool.status !== "open") {
+      throw new Error("Pool not yet matured");
+    }
+
+    const [userWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, userId));
+    if (!userWallet) throw new Error("User wallet not found");
+
+    const redeemAmount = Number(pos.investedAmount) + Number(pos.returnAmount);
+
+    await processTransfer({
+      fromWalletId: pool.walletId,
+      toWalletId:   userWallet.id,
+      amount:       redeemAmount,
+      currency:     pool.currency,
+      description:  `Redemption from ${pool.name}`,
+      skipFraudCheck: true,
+    });
+
+    await db.update(poolPositionsTable).set({
+      status: "redeemed", redeemedAt: new Date(),
+    }).where(eq(poolPositionsTable.id, positionId));
+
+    await eventBus.publish("investment.pool.redeemed", { poolId: pos.poolId, userId, amount: redeemAmount });
+  } catch (err) {
+    await db.update(poolPositionsTable)
+      .set({ status: "active" })
+      .where(eq(poolPositionsTable.id, positionId));
+    throw err;
   }
-
-  const [userWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, userId));
-  if (!userWallet) throw new Error("User wallet not found");
-
-  const redeemAmount = Number(pos.investedAmount) + Number(pos.returnAmount);
-
-  await processTransfer({
-    fromWalletId: pool.walletId,
-    toWalletId:   userWallet.id,
-    amount:       redeemAmount,
-    currency:     pool.currency,
-    description:  `Redemption from ${pool.name}`,
-    skipFraudCheck: true,
-  });
-
-  await db.update(poolPositionsTable).set({
-    status: "redeemed", redeemedAt: new Date(),
-  }).where(eq(poolPositionsTable.id, positionId));
-
-  await eventBus.publish("investment.pool.redeemed", { poolId: pos.poolId, userId, amount: redeemAmount });
 }
 
 export async function createInsurancePool(params: {
@@ -201,18 +223,22 @@ export async function joinInsurancePool(poolId: string, userId: string, walletId
     skipFraudCheck: true,
   });
 
-  const [policy] = await db.insert(insurancePoliciesTable).values({
-    id:              generateId(),
-    poolId, userId, walletId,
-    premiumPaidAt:   new Date(),
-    nextPremiumAt,
-    totalPremiumPaid: pool.premiumAmount,
-  }).returning();
+  const [policy] = await db.transaction(async (tx) => {
+    const [p] = await tx.insert(insurancePoliciesTable).values({
+      id:              generateId(),
+      poolId, userId, walletId,
+      premiumPaidAt:   new Date(),
+      nextPremiumAt,
+      totalPremiumPaid: pool.premiumAmount,
+    }).returning();
 
-  await db.update(insurancePoolsTable).set({
-    memberCount: sql`${insurancePoolsTable.memberCount} + 1`,
-    updatedAt: new Date(),
-  }).where(eq(insurancePoolsTable.id, poolId));
+    await tx.update(insurancePoolsTable).set({
+      memberCount: sql`${insurancePoolsTable.memberCount} + 1`,
+      updatedAt: new Date(),
+    }).where(eq(insurancePoolsTable.id, poolId));
+
+    return [p];
+  });
 
   await eventBus.publish("insurance.policy.created", { poolId, userId, policyId: policy.id });
   return policy;
@@ -250,15 +276,21 @@ export async function fileClaim(params: {
 }
 
 export async function adjudicateClaim(claimId: string, adjudicatorId: string, approved: boolean, payoutAmount?: number, rejectionReason?: string): Promise<void> {
-  const [claim] = await db.select().from(insuranceClaimsTable).where(eq(insuranceClaimsTable.id, claimId));
-  if (!claim) throw new Error("Claim not found");
-  if (claim.status !== "pending") throw new Error("Claim already processed");
+  const locked = await db.update(insuranceClaimsTable)
+    .set({ status: "processing" })
+    .where(and(eq(insuranceClaimsTable.id, claimId), eq(insuranceClaimsTable.status, "pending")))
+    .returning();
 
-  if (approved && payoutAmount) {
-    const [pool] = await db.select().from(insurancePoolsTable).where(eq(insurancePoolsTable.id, claim.poolId));
-    const [userWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, claim.userId));
+  if (!locked.length) throw new Error("Claim not found or already processed");
+  const claim = locked[0];
 
-    if (pool && userWallet) {
+  try {
+    if (approved && payoutAmount) {
+      const [pool] = await db.select().from(insurancePoolsTable).where(eq(insurancePoolsTable.id, claim.poolId));
+      const [userWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, claim.userId));
+
+      if (!pool || !userWallet) throw new Error("Pool or user wallet not found");
+
       const tx = await processTransfer({
         fromWalletId: pool.walletId,
         toWalletId:   userWallet.id,
@@ -268,20 +300,27 @@ export async function adjudicateClaim(claimId: string, adjudicatorId: string, ap
         skipFraudCheck: true,
       });
 
-      await db.update(insuranceClaimsTable).set({
-        status: "approved", adjudicatorId, payoutAmount: String(payoutAmount),
-        transactionId: tx.id, resolvedAt: new Date(),
-      }).where(eq(insuranceClaimsTable.id, claimId));
+      await db.transaction(async (dbTx) => {
+        await dbTx.update(insuranceClaimsTable).set({
+          status: "approved", adjudicatorId, payoutAmount: String(payoutAmount),
+          transactionId: tx.id, resolvedAt: new Date(),
+        }).where(eq(insuranceClaimsTable.id, claimId));
 
-      await db.update(insurancePoliciesTable).set({
-        claimsCount: sql`${insurancePoliciesTable.claimsCount} + 1`,
-      }).where(eq(insurancePoliciesTable.id, claim.policyId));
+        await dbTx.update(insurancePoliciesTable).set({
+          claimsCount: sql`${insurancePoliciesTable.claimsCount} + 1`,
+        }).where(eq(insurancePoliciesTable.id, claim.policyId));
+      });
+    } else {
+      await db.update(insuranceClaimsTable).set({
+        status: "rejected", adjudicatorId, rejectionReason: rejectionReason ?? "Rejected",
+        resolvedAt: new Date(),
+      }).where(eq(insuranceClaimsTable.id, claimId));
     }
-  } else {
-    await db.update(insuranceClaimsTable).set({
-      status: "rejected", adjudicatorId, rejectionReason: rejectionReason ?? "Rejected",
-      resolvedAt: new Date(),
-    }).where(eq(insuranceClaimsTable.id, claimId));
+  } catch (err) {
+    await db.update(insuranceClaimsTable)
+      .set({ status: "pending" })
+      .where(eq(insuranceClaimsTable.id, claimId));
+    throw err;
   }
 
   await eventBus.publish("insurance.claim.adjudicated", { claimId, approved, adjudicatorId });
