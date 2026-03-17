@@ -33,6 +33,7 @@ export const outboxEventsTable = pgTable("outbox_events", {
   payload:   jsonb("payload").notNull(),
   status:    text("status").notNull().default("pending"),
   attempts:  smallint("attempts").notNull().default(0),
+  priority:  smallint("priority").notNull().default(5),
   lastError: text("last_error"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   processAt: timestamp("process_at").notNull().defaultNow(),

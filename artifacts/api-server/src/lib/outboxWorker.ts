@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
 import { outboxEventsTable, processedEventsTable } from "@workspace/db";
-import { eq, lte, and, sql, lt } from "drizzle-orm";
+import { eq, lte, and, sql, lt, asc } from "drizzle-orm";
 import { generateId } from "./id";
 import { EventEmitter } from "events";
 
@@ -9,6 +9,28 @@ const POLL_MS           = 5_000;
 const MAX_DELAY_S       = 300;      // 5-minute ceiling on any single backoff
 const JITTER_FACTOR     = 0.15;     // ±15% randomised jitter
 const PRUNE_AFTER_DAYS  = 7;
+
+// ── Priority levels ───────────────────────────────────────────────────────────
+// Lower number = processed first.  Column default = MEDIUM (5).
+// All existing rows with no priority column value inherit MEDIUM via DB default.
+export const PRIORITY = {
+  CRITICAL:  1,   // payments, fraud, compliance — must not wait behind any other event
+  HIGH:      3,   // wallet ops, ledger writes, tontine payouts
+  MEDIUM:    5,   // default — general business events
+  LOW:       7,   // notifications, webhooks
+  ANALYTICS: 9,   // analytics, reporting — acceptable to lag behind everything else
+} as const;
+
+// ── Topic → priority auto-mapper ──────────────────────────────────────────────
+// Called by insertOutboxEvent when caller does not supply an explicit priority.
+// Falls back to MEDIUM for unrecognised prefixes.
+export function topicPriority(topic: string): number {
+  if (/^(payment|fraud|compliance|aml)\./.test(topic))            return PRIORITY.CRITICAL;
+  if (/^(wallet|ledger|tontine|insurance|transfer)\./.test(topic)) return PRIORITY.HIGH;
+  if (/^(analytics|report|metric)\./.test(topic))                  return PRIORITY.ANALYTICS;
+  if (/^(notification|webhook|email|sms)\./.test(topic))           return PRIORITY.LOW;
+  return PRIORITY.MEDIUM;
+}
 
 export const outboxInternalBus = new EventEmitter();
 outboxInternalBus.setMaxListeners(200);
@@ -211,6 +233,7 @@ async function processBatch(): Promise<void> {
     .select()
     .from(outboxEventsTable)
     .where(and(eq(outboxEventsTable.status, "pending"), lte(outboxEventsTable.processAt, now)))
+    .orderBy(asc(outboxEventsTable.priority), asc(outboxEventsTable.processAt))
     .limit(BATCH_SIZE)
     .for("update", { skipLocked: true });
 
@@ -328,6 +351,7 @@ export async function insertOutboxEvent(
   tx: typeof db,
   topic: string,
   payload: Record<string, unknown>,
+  priority?: number,
 ): Promise<void> {
   await tx.insert(outboxEventsTable).values({
     id:        generateId(),
@@ -335,6 +359,7 @@ export async function insertOutboxEvent(
     payload:   payload as any,
     status:    "pending",
     attempts:  0,
+    priority:  priority ?? topicPriority(topic),
     processAt: new Date(),
   });
 }
