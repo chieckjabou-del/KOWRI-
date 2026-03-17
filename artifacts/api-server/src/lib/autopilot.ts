@@ -29,6 +29,7 @@ import {
   forcePrimaryReads,
   restoreReplicaReads,
 }                                                                 from "./actionExecutor";
+import { autoHeal }                                               from "./healingEngine";
 
 const POLL_MS = 5_000;
 
@@ -146,13 +147,22 @@ export async function runAutopilotCycle(): Promise<void> {
   // Step 3 — evaluate all rules against the snapshot.
   const evaluations = evaluateRules(metrics);
 
-  // Step 4 — apply actions.  Each rule is isolated; one failure doesn't stop others.
+  // Step 4 — apply autopilot rules.  Each rule is isolated; one failure doesn't stop others.
   for (const ev of evaluations) {
     try {
       applyEvaluation(ev);
     } catch (err) {
       console.error(`[Autopilot] unexpected error processing rule=${ev.ruleId}:`, err);
     }
+  }
+
+  // Step 5 — run healing engine AFTER rules so protective switches are already
+  // in place before healing actions are evaluated.  Any error is isolated —
+  // it must never propagate to the caller.
+  try {
+    await autoHeal(metrics);
+  } catch (err) {
+    console.error("[Autopilot] healingEngine error:", err);
   }
 }
 

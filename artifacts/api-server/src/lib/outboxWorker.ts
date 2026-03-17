@@ -4,7 +4,23 @@ import { eq, lte, and, sql, lt, asc } from "drizzle-orm";
 import { generateId } from "./id";
 import { EventEmitter } from "events";
 
-const BATCH_SIZE        = 50;
+// ── Batch size — mutable for runtime load-shedding ───────────────────────────
+// Use setBatchSize() to reduce pressure under DB latency spikes.
+// Resets to DEFAULT on process restart; never reduced below MIN_BATCH_SIZE.
+const DEFAULT_BATCH_SIZE = 50;
+const MIN_BATCH_SIZE     = 5;
+let   currentBatchSize   = DEFAULT_BATCH_SIZE;
+
+export function getBatchSize():          number { return currentBatchSize; }
+export function resetBatchSize():        void   { currentBatchSize = DEFAULT_BATCH_SIZE; }
+export function setBatchSize(n: number): void {
+  const clamped = Math.max(MIN_BATCH_SIZE, Math.min(DEFAULT_BATCH_SIZE, Math.round(n)));
+  if (clamped !== currentBatchSize) {
+    console.info(`[OutboxWorker] batchSize ${currentBatchSize}→${clamped}`);
+    currentBatchSize = clamped;
+  }
+}
+
 const POLL_MS           = 5_000;
 const MAX_DELAY_S       = 300;      // 5-minute ceiling on any single backoff
 const JITTER_FACTOR     = 0.15;     // ±15% randomised jitter
@@ -268,7 +284,7 @@ async function processBatch(): Promise<void> {
       .from(outboxEventsTable)
       .where(baseWhere)
       .orderBy(asc(outboxEventsTable.priority), asc(outboxEventsTable.processAt))
-      .limit(BATCH_SIZE)
+      .limit(currentBatchSize)
       .for("update", { skipLocked: true });
 
     if (selected.length === 0) return [];
