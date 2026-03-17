@@ -21,8 +21,9 @@
 //
 // ROLLBACK: remove the step-6 block from autopilot.ts; delete this file.
 
-import { CollectedMetrics } from "./metricsCollector";
-import { insertIncident }   from "./incidentStore";
+import { CollectedMetrics }  from "./metricsCollector";
+import { insertIncident }    from "./incidentStore";
+import { isModeSuppressed }  from "./globalEvaluator";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -51,9 +52,17 @@ let cyclesInMode: number       = 0;
 function computeDesiredMode(metrics: CollectedMetrics): StrategyMode {
   // THROUGHPUT_FIRST takes precedence over LATENCY_FIRST so that a queue backup
   // is never inadvertently made worse by latency-driven batch reductions.
-  if (metrics.outbox_pending > PENDING_HIGH) return "THROUGHPUT_FIRST";
-  if (metrics.db_latency     > LATENCY_HIGH_MS) return "LATENCY_FIRST";
-  return "BALANCED";
+  let desired: StrategyMode;
+  if (metrics.outbox_pending > PENDING_HIGH) desired = "THROUGHPUT_FIRST";
+  else if (metrics.db_latency > LATENCY_HIGH_MS)  desired = "LATENCY_FIRST";
+  else                                             desired = "BALANCED";
+
+  // If globalEvaluator has suppressed this mode due to observed ineffectiveness,
+  // fall back to BALANCED.  BALANCED itself is never suppressed.
+  if (desired !== "BALANCED" && isModeSuppressed(desired)) {
+    return "BALANCED";
+  }
+  return desired;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────

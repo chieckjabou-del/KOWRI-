@@ -30,6 +30,7 @@ import {
   restoreReplicaReads,
 }                                                                 from "./actionExecutor";
 import { autoHeal }                                               from "./healingEngine";
+import { globalEvaluator }                                       from "./globalEvaluator";
 import { strategyEngine }                                        from "./strategyEngine";
 import { learningEngine }                                        from "./learningEngine";
 import { selfOptimize }                                          from "./selfOptimizer";
@@ -168,24 +169,31 @@ export async function runAutopilotCycle(): Promise<void> {
     console.error("[Autopilot] healingEngine error:", err);
   }
 
-  // Step 6 — determine strategic mode (LATENCY_FIRST / THROUGHPUT_FIRST / BALANCED).
-  // Runs after autoHeal so emergency state is already reflected in metrics,
-  // and before learningEngine / selfOptimize so both layers can read the mode
-  // synchronously via getStrategyMode().  Isolated — errors must never abort.
+  // Step 6 — audit whether the active strategy mode is producing improvement.
+  // Runs BEFORE strategyEngine so that any suppression flags are visible when
+  // the mode is computed for this cycle.  Isolated — errors must never abort.
+  try {
+    await globalEvaluator(metrics);
+  } catch (err) {
+    console.error("[Autopilot] globalEvaluator error:", err);
+  }
+
+  // Step 7 — determine strategic mode (LATENCY_FIRST / THROUGHPUT_FIRST / BALANCED).
+  // Respects any suppressions set by globalEvaluator this cycle.
   try {
     await strategyEngine(metrics);
   } catch (err) {
     console.error("[Autopilot] strategyEngine error:", err);
   }
 
-  // Step 7 — run learning engine; uses current strategy mode to scale pre-adjustments.
+  // Step 8 — run learning engine; uses current strategy mode to scale pre-adjustments.
   try {
     await learningEngine(metrics);
   } catch (err) {
     console.error("[Autopilot] learningEngine error:", err);
   }
 
-  // Step 8 — run self-optimizer last; uses current strategy mode for step sizing.
+  // Step 9 — run self-optimizer last; uses current strategy mode for step sizing.
   try {
     await selfOptimize(metrics);
   } catch (err) {
