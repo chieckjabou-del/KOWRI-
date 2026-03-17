@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { creditScoresTable, loansTable, loanRepaymentsTable, walletsTable } from "@workspace/db";
-import { eq, sql, count, desc } from "drizzle-orm";
+import { eq, and, sql, count, desc } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { validateQueryParams, VALID_LOAN_STATUSES } from "../middleware/validate";
 import { sagaOrchestrator } from "../lib/sagaOrchestrator";
@@ -247,6 +247,34 @@ router.get("/loans/:loanId", async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+router.get("/repayments", async (req, res, next) => {
+  try {
+    const { userId, loanId, status } = req.query;
+    if (!userId && !loanId) {
+      return res.status(400).json({ error: true, message: "userId or loanId required" });
+    }
+
+    const conditions = [
+      userId ? eq(loanRepaymentsTable.userId, userId as string) : undefined,
+      loanId ? eq(loanRepaymentsTable.loanId, loanId as string) : undefined,
+      status ? eq(loanRepaymentsTable.status, status as string) : undefined,
+    ].filter(Boolean) as any[];
+
+    const repayments = await db.select().from(loanRepaymentsTable)
+      .where(conditions.length === 1 ? conditions[0] : and(...conditions))
+      .orderBy(desc(loanRepaymentsTable.createdAt))
+      .limit(100);
+
+    const totalAmount = repayments.reduce((s, r) => s + Number(r.amount), 0);
+
+    res.json({
+      repayments: repayments.map(r => ({ ...r, amount: Number(r.amount) })),
+      count:       repayments.length,
+      totalAmount,
+    });
+  } catch (err) { next(err); }
 });
 
 router.get("/loans/:loanId/repayments", async (req, res, next) => {

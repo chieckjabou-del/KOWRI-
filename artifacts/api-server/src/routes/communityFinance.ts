@@ -220,6 +220,28 @@ router.post("/tontines/positions/:listingId/buy", async (req, res, next) => {
   }
 });
 
+router.get("/tontines/positions", async (req, res, next) => {
+  try {
+    const page   = Number(req.query.page)  || 1;
+    const limit  = Number(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+
+    const listings = await db.select().from(tontinePositionListingsTable)
+      .where(eq(tontinePositionListingsTable.status, "open"))
+      .orderBy(desc(tontinePositionListingsTable.createdAt))
+      .limit(limit).offset(offset);
+
+    const [{ total }] = await db.select({ total: count() })
+      .from(tontinePositionListingsTable)
+      .where(eq(tontinePositionListingsTable.status, "open"));
+
+    res.json({
+      listings: listings.map(l => ({ ...l, askPrice: l.askPrice ? Number(l.askPrice) : null })),
+      pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
+    });
+  } catch (err) { next(err); }
+});
+
 router.get("/reputation/:userId", async (req, res, next) => {
   try {
     const score = await getReputationScore(req.params.userId);
