@@ -7,28 +7,45 @@
 // Safety contract (MANDATORY — do not relax):
 //   • NEVER touch ledger_entries
 //   • NEVER retry financial transactions automatically
-//   • NEVER re-enable / auto-recover a kill switch — only the autopilot or
-//     an operator may do that
-//   • ONLY reduce load or restart safe, idempotent components
+//   • NEVER re-enable / auto-recover a kill switch
+//   • ONLY reduce load, restore safe throughput params, or restart idempotent components
 //
-// Cooldown: each action has its own 30-second cooldown to prevent thrashing.
+// Cooldown: each action key has its own 30-second cooldown enforced before any
+// logic executes — isCooling() is always the first check in every branch.
 //
 // ROLLBACK: remove `await autoHeal(metrics)` from autopilot.ts; delete this file.
 
-import { CollectedMetrics }              from "./metricsCollector";
-import { insertIncident }                from "./incidentStore";
-import { getSwitch }                     from "./killSwitch";
+import { CollectedMetrics }                    from "./metricsCollector";
+import { insertIncident }                       from "./incidentStore";
+import { getSwitch }                            from "./killSwitch";
 import { forcePrimaryReads, pauseOutboxWorker } from "./actionExecutor";
-import { getBatchSize, setBatchSize, stopOutboxWorker, startOutboxWorker } from "./outboxWorker";
+import {
+  getBatchSize,
+  setBatchSize,
+  stopOutboxWorker,
+  startOutboxWorker,
+  isWorkerRunning,
+  DEFAULT_BATCH_SIZE,
+}                                               from "./outboxWorker";
+
+// ── Thresholds (env-overridable) ──────────────────────────────────────────────
+
+const DB_LATENCY_HIGH_MS  = Number(process.env.HEAL_DB_LATENCY_MS        ?? 800);
+const DB_LATENCY_OK_MS    = Number(process.env.HEAL_DB_LATENCY_OK_MS     ?? 300);
+const DLQ_THRESHOLD       = Number(process.env.AUTOPILOT_DLQ_THRESHOLD   ?? 5);
+const LAG_THRESHOLD_S     = Number(process.env.AUTOPILOT_LAG_THRESHOLD_S ?? 5);
+const STUCK_THRESHOLD     = Number(process.env.HEAL_STUCK_THRESHOLD      ?? 500);
+const BATCH_RECOVER_STEP  = 5;    // units to re-add per recovery tick
+const BATCH_RECOVER_CYCLES = 3;   // consecutive ok cycles required before recovery
 
 // ── Cooldown registry ─────────────────────────────────────────────────────────
+// isCooling() is the FIRST check in every branch. No logic runs while cooling.
 
-const COOLDOWN_MS = 30_000;   // 30 s between identical healing actions
+const COOLDOWN_MS = 30_000;
 const cooldowns   = new Map<string, number>();
 
 function isCooling(actionId: string): boolean {
-  const last = cooldowns.get(actionId) ?? 0;
-  return Date.now() - last < COOLDOWN_MS;
+  return Date.now() - (cooldowns.get(actionId) ?? 0) < COOLDOWN_MS;
 }
 
 function arm(actionId: string): void {
@@ -45,67 +62,106 @@ export function getCooldownState(): Record<string, { coolsDownAt: number; remain
   return out;
 }
 
-// ── Stuck-pending detector ────────────────────────────────────────────────────
-// Two consecutive cycles with outbox_pending > STUCK_THRESHOLD and no decrease
-// indicates the worker is not making progress.
+// ── Batch-size recovery state ─────────────────────────────────────────────────
+// Counts consecutive cycles where db_latency < DB_LATENCY_OK_MS.
+// Resets to 0 on any high-latency cycle so recovery only happens after a
+// sustained healthy window — not after a single lucky probe.
 
-const STUCK_PENDING_THRESHOLD = 500;
-let   lastPendingCount        = -1;   // -1 = first cycle, no baseline yet
+let consecutiveOkCycles = 0;
+
+// ── Stuck-pending detector (2-cycle window) ───────────────────────────────────
+// pendingHistory holds the pending counts from [cycle-2, cycle-1].
+// Stuck = current > STUCK_THRESHOLD AND all three values (history[0], history[1],
+// current) are above threshold AND current >= history[0] (no net decrease over
+// two full cycles).  Two readings required to avoid false positives on transient
+// spikes that clear in the next cycle.
+
+const pendingHistory: [number, number] = [-1, -1];   // [-1] = not yet observed
 
 function isOutboxStuck(current: number): boolean {
-  if (current <= STUCK_PENDING_THRESHOLD) return false;
-  if (lastPendingCount < 0)              return false;  // no baseline
-  return current >= lastPendingCount;                   // flat or growing
+  const [prev2, prev1] = pendingHistory;
+  if (current <= STUCK_THRESHOLD)  return false;   // below threshold — fine
+  if (prev2 < 0 || prev1 < 0)     return false;   // need 2 full cycles of data
+  if (prev1 <= STUCK_THRESHOLD)   return false;   // previous cycle was clear
+  return current >= prev2;                         // no net decrease across 2 cycles
 }
 
-// ── Thresholds ────────────────────────────────────────────────────────────────
-
-const DB_LATENCY_HIGH_MS = Number(process.env.HEAL_DB_LATENCY_MS    ?? 800);
-const DLQ_THRESHOLD      = Number(process.env.AUTOPILOT_DLQ_THRESHOLD ?? 5);
-const LAG_THRESHOLD_S    = Number(process.env.AUTOPILOT_LAG_THRESHOLD_S ?? 5);
+function advancePendingHistory(current: number): void {
+  pendingHistory[0] = pendingHistory[1];
+  pendingHistory[1] = current;
+}
 
 // ── Main heal function ────────────────────────────────────────────────────────
 
 export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
 
-  // ── Case A: DB_LATENCY_HIGH ───────────────────────────────────────────────
-  // Reduce outbox batch size by 50% to lower DB write pressure.
-  // Does NOT stop events — just throttles throughput.
-  // Batch size resets on process restart; no automatic re-expansion.
+  // ── Case A: DB_LATENCY_HIGH — reduce batch size ───────────────────────────
+  // Throttle outbox throughput to shed DB write pressure.
+  // Does NOT pause events — just reduces the batch window.
   if (metrics.db_latency > DB_LATENCY_HIGH_MS && !isCooling("reduce_batch")) {
-    const before  = getBatchSize();
-    const after   = Math.max(5, Math.floor(before * 0.5));
+    const before = getBatchSize();
+    const after  = Math.max(5, Math.floor(before * 0.5));
     setBatchSize(after);
     arm("reduce_batch");
+    consecutiveOkCycles = 0;   // reset recovery counter on any high-latency cycle
 
-    const result = `batchSize ${before}→${after} db_latency=${metrics.db_latency}ms`;
+    const result = `batchSize=${before}→${after} db_latency=${metrics.db_latency}ms`;
     console.warn(`[HealingEngine] reduce_batch: ${result}`);
     await insertIncident({ type: "auto_heal", action: "reduce_batch", result });
   }
 
-  // ── Case B: OUTBOX_STUCK ──────────────────────────────────────────────────
-  // Restart the outbox worker when pending count is high and not draining.
-  // Safe because processOne() is idempotent via the processed_events fence —
-  // any event that already committed is silently skipped on re-processing.
-  // recoverStuckProcessing() runs at startup and resets "processing" → "pending"
-  // so in-flight rows from the killed interval are retried.
-  if (isOutboxStuck(metrics.outbox_pending) && !isCooling("restart_worker")) {
-    stopOutboxWorker();
-    startOutboxWorker();       // triggers recoverStuckProcessing() internally
-    arm("restart_worker");
+  // ── Case A recovery: DB_LATENCY_OK — restore batch size gradually ─────────
+  // Increase batch size by BATCH_RECOVER_STEP after BATCH_RECOVER_CYCLES
+  // consecutive cycles under DB_LATENCY_OK_MS.  Clamps to DEFAULT_BATCH_SIZE.
+  // This is NOT a kill switch re-enable — it restores a throughput parameter only.
+  else if (metrics.db_latency < DB_LATENCY_OK_MS) {
+    consecutiveOkCycles++;
 
-    const result = `pending=${metrics.outbox_pending} (prev=${lastPendingCount}) — worker restarted`;
-    console.warn(`[HealingEngine] restart_worker: ${result}`);
-    await insertIncident({ type: "auto_heal", action: "restart_worker", result });
+    if (consecutiveOkCycles >= BATCH_RECOVER_CYCLES && !isCooling("increase_batch")) {
+      const before = getBatchSize();
+      if (before < DEFAULT_BATCH_SIZE) {
+        const after = Math.min(DEFAULT_BATCH_SIZE, before + BATCH_RECOVER_STEP);
+        setBatchSize(after);
+        arm("increase_batch");
+        consecutiveOkCycles = 0;   // reset so next recovery waits another 3 cycles
+
+        const result = `batchSize=${before}→${after} db_latency=${metrics.db_latency}ms consecutiveOk=${BATCH_RECOVER_CYCLES}`;
+        console.info(`[HealingEngine] increase_batch: ${result}`);
+        await insertIncident({ type: "auto_heal", action: "increase_batch", result });
+      }
+    }
+  } else {
+    // Latency is between OK and HIGH — neither reduce nor recover, but reset
+    // the consecutive counter so we don't restore too eagerly.
+    consecutiveOkCycles = 0;
   }
 
-  // Update stuck-detection baseline AFTER the restart check (post-action baseline).
-  lastPendingCount = metrics.outbox_pending;
+  // ── Case B: OUTBOX_STUCK — safe worker restart ────────────────────────────
+  // Restart only when stuck across TWO consecutive cycles to avoid false positives.
+  // Safe: processOne() is idempotent via the processed_events fence.
+  // Safe restart protocol: check running state before stopping, then start.
+  if (isOutboxStuck(metrics.outbox_pending) && !isCooling("safe_restart_worker")) {
+    const [prev2] = pendingHistory;
 
-  // ── Case C: REPLICA_LAG_HIGH ──────────────────────────────────────────────
-  // Belt-and-suspenders: autopilot handles this via the replica_lag rule, but
-  // the healing engine fires independently if the switch is still ENABLED.
-  // No auto-recovery here — the autopilot rule handles that.
+    if (isWorkerRunning()) {
+      stopOutboxWorker();
+    }
+    startOutboxWorker();   // no-op if somehow still running; triggers recoverStuckProcessing()
+    arm("safe_restart_worker");
+
+    const result = `pending=${metrics.outbox_pending} prev2=${prev2} — safe_restart_worker`;
+    console.warn(`[HealingEngine] safe_restart_worker: ${result}`);
+    await insertIncident({ type: "auto_heal", action: "safe_restart_worker", result });
+  }
+
+  // Advance the 2-cycle history AFTER the stuck check so the check uses the
+  // values from before this cycle's restart (accurate baseline).
+  advancePendingHistory(metrics.outbox_pending);
+
+  // ── Case C: REPLICA_LAG_HIGH — force primary reads ────────────────────────
+  // Belt-and-suspenders: autopilot's replica_lag rule fires first.
+  // Healing engine fires only if switch is still ENABLED (idempotent guard).
+  // No recovery here — autopilot handles that when lag drops.
   if (metrics.replica_lag > LAG_THRESHOLD_S && !isCooling("force_primary")) {
     const sw = getSwitch("replica_reads");
     if (sw.state === "ENABLED") {
@@ -115,19 +171,20 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
       });
       arm("force_primary");
 
-      const result = `replica_lag=${metrics.replica_lag.toFixed(1)}s`;
+      const result = `replica_lag=${metrics.replica_lag.toFixed(1)}s threshold=${LAG_THRESHOLD_S}s`;
       console.warn(`[HealingEngine] force_primary: ${result}`);
       await insertIncident({ type: "auto_heal", action: "force_primary", result });
     }
+    // If sw.state !== "ENABLED": already paused by autopilot or operator — do nothing.
   }
 
-  // ── Case D: DLQ_SPIKE ────────────────────────────────────────────────────
-  // Belt-and-suspenders: autopilot handles this via the dlq_rate rule.
-  // Healing engine fires if the switch is still ENABLED.
-  // No auto-recovery — the outbox must be manually inspected before resuming.
+  // ── Case D: DLQ_SPIKE — pause outbox dispatch ─────────────────────────────
+  // Belt-and-suspenders: autopilot's dlq_rate rule fires first.
+  // Guard: if outbox already paused (switch TRIGGERED or FORCED_OFF), skip entirely —
+  // avoids duplicate incidents and prevents double-fire on the kill switch.
   if (metrics.dlq_rate >= DLQ_THRESHOLD && !isCooling("pause_outbox")) {
     const sw = getSwitch("outbox_dispatch");
-    if (sw.state === "ENABLED") {
+    if (sw.state === "ENABLED") {   // explicitly: do nothing if already paused
       pauseOutboxWorker({
         triggeredBy: "heal",
         reason:      `dlq_rate=${metrics.dlq_rate} >= threshold=${DLQ_THRESHOLD}`,
@@ -138,5 +195,6 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
       console.warn(`[HealingEngine] pause_outbox: ${result}`);
       await insertIncident({ type: "auto_heal", action: "pause_outbox", result });
     }
+    // sw.state !== "ENABLED": already paused — do nothing, no incident logged.
   }
 }

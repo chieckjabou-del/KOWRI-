@@ -7,8 +7,8 @@ import { EventEmitter } from "events";
 // ── Batch size — mutable for runtime load-shedding ───────────────────────────
 // Use setBatchSize() to reduce pressure under DB latency spikes.
 // Resets to DEFAULT on process restart; never reduced below MIN_BATCH_SIZE.
-const DEFAULT_BATCH_SIZE = 50;
-const MIN_BATCH_SIZE     = 5;
+export const DEFAULT_BATCH_SIZE = 50;
+const        MIN_BATCH_SIZE     = 5;
 let   currentBatchSize   = DEFAULT_BATCH_SIZE;
 
 export function getBatchSize():          number { return currentBatchSize; }
@@ -412,6 +412,11 @@ export function startOutboxWorker(): void {
 export function stopOutboxWorker(): void {
   if (workerInterval) { clearInterval(workerInterval); workerInterval = null; }
   if (pruneInterval)  { clearInterval(pruneInterval);  pruneInterval  = null; }
+}
+
+/** True when the poll interval is active. Used by healingEngine for safe restart. */
+export function isWorkerRunning(): boolean {
+  return workerInterval !== null;
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
