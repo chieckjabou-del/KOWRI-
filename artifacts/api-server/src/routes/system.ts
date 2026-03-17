@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { eventLogTable, auditLogsTable, idempotencyKeysTable, sagasTable, riskAlertsTable, settlementsTable, serviceTracesTable, messageQueueTable, amlFlagsTable, connectorsTable, ledgerShardsTable } from "@workspace/db";
+import { eventLogTable, auditLogsTable, idempotencyKeysTable, sagasTable, riskAlertsTable, settlementsTable, serviceTracesTable, messageQueueTable, amlFlagsTable, connectorsTable, ledgerShardsTable, outboxEventsTable } from "@workspace/db";
+import { getOutboxStats } from "../lib/outboxWorker";
 import { count, desc, sql } from "drizzle-orm";
 import { getMetrics } from "../lib/metrics";
 import { STATE_MACHINE_DIAGRAM } from "../lib/stateMachine";
@@ -157,6 +158,29 @@ router.get("/health", async (_req, res, next) => {
           human: `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m ${uptimeSec % 60}s`,
         },
       },
+    });
+  } catch (err) { next(err); }
+});
+
+router.get("/outbox/status", async (req, res, next) => {
+  try {
+    const stats = await getOutboxStats();
+    const [{ eventLogTotal }] = await db.select({ eventLogTotal: count() }).from(eventLogTable);
+    const phase = process.env.OUTBOX_ONLY === "true" ? 3
+                : process.env.OUTBOX_ENABLED === "true" ? 1 : 0;
+
+    const ready = stats.pending === 0 && stats.dead === 0;
+
+    res.json({
+      phase,
+      ready,
+      outbox: stats,
+      eventLogTotal:   Number(eventLogTotal),
+      bufferDisabled:  phase === 3,
+      alerts: [
+        ...(stats.dead    > 0  ? [`${stats.dead} dead-letter event(s) — manual replay required`] : []),
+        ...(stats.pending > 50 ? [`outbox backlog ${stats.pending} — worker may be stalled`]     : []),
+      ],
     });
   } catch (err) { next(err); }
 });

@@ -1,4 +1,4 @@
-import { pgTable, text, jsonb, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, jsonb, timestamp, smallint } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -25,6 +25,17 @@ export const auditLogsTable = pgTable("audit_logs", {
   actor: text("actor").notNull().default("system"),
   timestamp: timestamp("timestamp").notNull().defaultNow(),
   metadata: jsonb("metadata"),
+});
+
+export const outboxEventsTable = pgTable("outbox_events", {
+  id:        text("id").primaryKey(),
+  topic:     text("topic").notNull(),
+  payload:   jsonb("payload").notNull(),
+  status:    text("status").notNull().default("pending"),
+  attempts:  smallint("attempts").notNull().default(0),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  processAt: timestamp("process_at").notNull().defaultNow(),
 });
 
 export const insertIdempotencyKeySchema = createInsertSchema(idempotencyKeysTable).omit({ id: true, createdAt: true });

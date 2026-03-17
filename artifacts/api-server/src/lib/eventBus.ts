@@ -4,6 +4,13 @@ import { eventLogTable } from "@workspace/db";
 import { generateId } from "./id";
 import { recordMetric } from "./metrics";
 import { eventBusCircuitBreaker } from "./circuitBreaker";
+import { insertOutboxEvent, outboxInternalBus } from "./outboxWorker";
+
+// ── Phase flags ───────────────────────────────────────────────────────────────
+// OUTBOX_ENABLED=true → Phase 1: dual write (event_log + outbox_events)
+// OUTBOX_ONLY=true    → Phase 3: outbox is sole path; in-memory buffer disabled
+const OUTBOX_ENABLED = process.env.OUTBOX_ENABLED === "true";
+const OUTBOX_ONLY    = process.env.OUTBOX_ONLY    === "true";
 
 export type KowriEventType =
   | "transaction.created"
@@ -45,6 +52,7 @@ async function persistEvent(type: string, payload: Record<string, unknown>): Pro
 }
 
 async function drainBuffer(): Promise<void> {
+  if (OUTBOX_ONLY) return;
   if (fallbackBuffer.length === 0) return;
 
   const now = Date.now();
@@ -72,20 +80,34 @@ class KowriEventBus extends EventEmitter {
     const event: KowriEvent = { type, payload, timestamp: new Date() };
     const start = Date.now();
 
+    // ── In-process subscribers ────────────────────────────────────────────────
     this.emit(type, event);
     this.emit("*", event);
 
-    try {
-      await persistEvent(type, payload);
-    } catch (err) {
-      console.error("[EventBus] DB write failed — buffering event:", type, err);
-      if (fallbackBuffer.length < BUFFER_MAX) {
-        fallbackBuffer.push({ type, payload, attempts: 1, firstFailedAt: new Date() });
-      } else {
-        console.error("[EventBus] Buffer full — event dropped:", type);
+    // ── Phase 1 / Phase 3: write to outbox_events ────────────────────────────
+    if (OUTBOX_ENABLED || OUTBOX_ONLY) {
+      try {
+        await insertOutboxEvent(db, type, payload);
+      } catch (err) {
+        console.error("[EventBus] Outbox write failed:", type, err);
       }
     }
 
+    // ── Phase 0 / Phase 1: write to event_log (skipped in Phase 3) ───────────
+    if (!OUTBOX_ONLY) {
+      try {
+        await persistEvent(type, payload);
+      } catch (err) {
+        console.error("[EventBus] DB write failed — buffering event:", type, err);
+        if (fallbackBuffer.length < BUFFER_MAX) {
+          fallbackBuffer.push({ type, payload, attempts: 1, firstFailedAt: new Date() });
+        } else {
+          console.error("[EventBus] Buffer full — event dropped:", type);
+        }
+      }
+    }
+
+    // ── Webhook dispatch ──────────────────────────────────────────────────────
     setImmediate(async () => {
       try {
         const { dispatchWebhooks } = await import("./webhookDispatcher");
@@ -98,7 +120,8 @@ class KowriEventBus extends EventEmitter {
 
   getBufferStats() {
     return {
-      bufferedEvents: fallbackBuffer.length,
+      phase:          OUTBOX_ONLY ? 3 : OUTBOX_ENABLED ? 1 : 0,
+      bufferedEvents: OUTBOX_ONLY ? 0 : fallbackBuffer.length,
       bufferMax:      BUFFER_MAX,
       circuitBreaker: eventBusCircuitBreaker.getStats(),
     };
@@ -107,6 +130,11 @@ class KowriEventBus extends EventEmitter {
 
 export const eventBus = new KowriEventBus();
 eventBus.setMaxListeners(100);
+
+// ── Re-broadcast outbox-drained events to in-process subscribers (Phase 3) ───
+outboxInternalBus.on("*", (event: KowriEvent) => {
+  if (OUTBOX_ONLY) eventBus.emit(event.type, event);
+});
 
 eventBus.on("transaction.created", (event: KowriEvent) => {
   const { txId, type, amount, currency } = event.payload;
