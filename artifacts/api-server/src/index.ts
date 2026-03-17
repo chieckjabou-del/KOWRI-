@@ -1,6 +1,7 @@
 import app from "./app";
 import { startOutboxWorker } from "./lib/outboxWorker";
-import { initKillSwitches } from "./lib/killSwitch";
+import { initKillSwitches }  from "./lib/killSwitch";
+import { startAutopilot }    from "./lib/autopilot";
 
 const rawPort = process.env["PORT"];
 
@@ -19,7 +20,13 @@ if (Number.isNaN(port) || port <= 0) {
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
   startOutboxWorker();
-  initKillSwitches().catch((err) =>
-    console.error("[KillSwitch] init failed:", err),
-  );
+  // Hydrate kill switch cache from DB before starting autopilot so the first
+  // cycle sees operator-set state rather than the in-memory defaults.
+  initKillSwitches()
+    .then(() => startAutopilot())
+    .catch((err) => {
+      console.error("[KillSwitch] init failed:", err);
+      // Start autopilot anyway — it reads safe in-memory defaults.
+      startAutopilot();
+    });
 });
