@@ -20,23 +20,48 @@ if (REPLICA_ENABLED && REPLICA_URL) {
 }
 
 // ── Lag monitor ───────────────────────────────────────────────────────────────
-let replicaHealthy = true;
-let lastLagSec     = 0;
+let replicaHealthy  = true;
+let lastLagSec      = 0;
+let lastLagNullSeen = false;   // true when pg_last_xact_replay_timestamp() returned NULL
 
 async function pollReplicaLag(): Promise<void> {
   if (!REPLICA_ENABLED) return;
   try {
-    const result = await (dbRead as any).execute<{ lag_sec: string }>(
-      sql`SELECT EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))::numeric AS lag_sec`,
+    // Return lag_sec as NULL explicitly when the replay timestamp is NULL
+    // (primary server, or replica that has never replayed a transaction).
+    // Casting NULL to numeric still produces NULL — we detect it in application code.
+    const result = await (dbRead as any).execute<{ lag_sec: string | null; has_replay: boolean }>(
+      sql`SELECT
+            CASE WHEN pg_last_xact_replay_timestamp() IS NULL
+                 THEN NULL
+                 ELSE EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp()))::numeric
+            END  AS lag_sec,
+            pg_last_xact_replay_timestamp() IS NOT NULL AS has_replay`,
     );
-    const lag      = Number(result.rows?.[0]?.lag_sec ?? 0);
+
+    const row      = result.rows?.[0];
+    const rawLag   = row?.lag_sec;
+    const hasReplay = row?.has_replay === true || row?.has_replay === "true";
+
+    // NULL lag means either: pointed at primary, or replica never replayed → unhealthy
+    if (rawLag === null || rawLag === undefined || !hasReplay) {
+      lastLagSec      = -1;          // sentinel: unknown / not a replica
+      lastLagNullSeen = true;
+      replicaHealthy  = false;
+      console.warn("[DbRouter] pg_last_xact_replay_timestamp() is NULL — replica not streaming or URL points to primary");
+      return;
+    }
+
+    const lag      = Number(rawLag);
     lastLagSec     = lag;
+    lastLagNullSeen = false;
     replicaHealthy = lag <= LAG_THRESHOLD_S;
     if (!replicaHealthy) {
       console.warn(`[DbRouter] Replica lag ${lag.toFixed(1)}s > threshold ${LAG_THRESHOLD_S}s — routing reads to primary`);
     }
   } catch (err) {
-    replicaHealthy = false;
+    replicaHealthy  = false;
+    lastLagNullSeen = false;
     console.error("[DbRouter] Replica lag poll failed — routing reads to primary:", err);
   }
 }
@@ -68,7 +93,8 @@ export function getReplicaStats() {
   return {
     enabled:        REPLICA_ENABLED,
     healthy:        replicaHealthy,
-    lagSec:         lastLagSec,
+    lagSec:         lastLagSec,          // -1 = NULL from replica (not streaming)
+    lagNull:        lastLagNullSeen,     // true = pg_last_xact_replay_timestamp() was NULL
     thresholdSec:   LAG_THRESHOLD_S,
     stickyWindowMs: STICKY_MS,
   };
