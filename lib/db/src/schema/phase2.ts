@@ -1,4 +1,4 @@
-import { pgTable, text, jsonb, timestamp, smallint } from "drizzle-orm/pg-core";
+import { pgTable, text, jsonb, timestamp, smallint, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -33,6 +33,7 @@ export const outboxEventsTable = pgTable("outbox_events", {
   payload:   jsonb("payload").notNull(),
   status:    text("status").notNull().default("pending"),
   attempts:  smallint("attempts").notNull().default(0),
+  retries:   integer("retries").notNull().default(0),
   priority:  smallint("priority").notNull().default(5),
   lastError: text("last_error"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

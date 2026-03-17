@@ -301,10 +301,11 @@ async function processBatch(): Promise<void> {
         } else {
           const delayMs   = computeDelayMs(policy, attempts);
           const processAt = new Date(Date.now() + delayMs);
+          const retries   = (row.retries ?? 0) + 1;   // attempts = total tries; retries = reschedule count
           await db.update(outboxEventsTable)
-            .set({ status: "pending", attempts, lastError: errMsg, processAt })
+            .set({ status: "pending", attempts, retries, lastError: errMsg, processAt })
             .where(eq(outboxEventsTable.id, row.id));
-          console.warn(`[OutboxWorker] retry: topic=${row.topic} id=${row.id} class=${errorClass} attempt=${attempts}/${policy.maxAttempts} delay=${Math.round(delayMs/1000)}s`);
+          console.warn(`[OutboxWorker] retry: topic=${row.topic} id=${row.id} class=${errorClass} attempt=${attempts}/${policy.maxAttempts} retries=${retries} delay=${Math.round(delayMs/1000)}s`);
         }
       }
     }),
