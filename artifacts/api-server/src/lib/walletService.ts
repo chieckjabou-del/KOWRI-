@@ -8,6 +8,7 @@ import { eventBus } from "./eventBus";
 import { recordMetric } from "./metrics";
 import { checkRateLimit, RateLimitExceededError } from "./rateLimiter";
 import { runFraudCheck } from "./fraudEngine";
+import { guard } from "./killSwitch";
 
 export async function getWalletBalance(walletId: string): Promise<number> {
   const [result] = await db
@@ -173,6 +174,8 @@ export async function processTransfer(params: {
 }): Promise<typeof transactionsTable.$inferSelect> {
   const { fromWalletId, toWalletId, amount, currency, description, reference, idempotencyKey, skipRateLimitCheck, skipFraudCheck } = params;
   const start = Date.now();
+
+  guard("outbound_transfers");   // throws KillSwitchError if switch is TRIGGERED or FORCED_OFF
 
   if (!skipRateLimitCheck) {
     await checkRateLimit(fromWalletId, amount);

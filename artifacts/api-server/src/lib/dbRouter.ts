@@ -71,6 +71,20 @@ if (REPLICA_ENABLED) {
   pollReplicaLag();
 }
 
+// ── Kill-switch override ──────────────────────────────────────────────────────
+// null  = clear override; let lag-polling decide
+// false = force-unhealthy; all reads route to primary
+let replicaHealthyOverride: boolean | null = null;
+
+export function overrideReplicaHealthy(value: boolean | null): void {
+  replicaHealthyOverride = value;
+  if (value === null) {
+    console.info("[DbRouter] replica health override cleared — lag-polling resumes");
+  } else {
+    console.warn(`[DbRouter] replica health override set to ${value}`);
+  }
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 export { db, dbRead };
 
@@ -83,9 +97,10 @@ export { db, dbRead };
  *   4. Otherwise          → replica
  */
 export function getReadDb(opts?: { forcePrimary?: boolean }): typeof db {
-  if (!REPLICA_ENABLED)    return db;
-  if (opts?.forcePrimary)  return db;
-  if (!replicaHealthy)     return db;
+  if (!REPLICA_ENABLED)                        return db;
+  if (opts?.forcePrimary)                      return db;
+  if (replicaHealthyOverride === false)        return db;   // kill-switch override
+  if (!replicaHealthy)                         return db;
   return dbRead as typeof db;
 }
 
