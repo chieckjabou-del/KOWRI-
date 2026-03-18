@@ -107,6 +107,20 @@ router.get("/incidents", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── /warroom/live ─────────────────────────────────────────────────────────────
+// Minimal in-memory-only snapshot: batchSize, mode, confidenceMap.
+// Zero DB queries — purpose-built for tight polling intervals or external tools
+// that only need current decision state without full engine telemetry.
+router.get("/live", (_req, res) => {
+  const { confidenceMap } = getLearningEngineState();
+  res.json({
+    batchSize:     getBatchSize(),
+    mode:          getStrategyMode(),
+    confidenceMap,
+    updatedAt:     new Date().toISOString(),
+  });
+});
+
 // ── /warroom/snapshot ─────────────────────────────────────────────────────────
 // Batches all three endpoints into one round-trip for the dashboard poll.
 router.get("/snapshot", async (req, res, next) => {
