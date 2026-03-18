@@ -41,6 +41,8 @@ export interface StrategyDecision {
   raw_desired_mode:   StrategyMode;
   /** One-sentence plain-language explanation for operators. */
   narrative:          string;
+  /** Operator-facing action status. */
+  impact:             "No action required" | "Adjusting system performance";
   /** Human-readable explanation of why this mode was chosen. */
   reason:             string;
   /** Constraints that were evaluated when making this decision. */
@@ -187,6 +189,13 @@ function buildNarrative(decision: RawDecision, constraints: string[]): string {
   return "System stable — maintaining balanced performance.";
 }
 
+function buildImpact(decision: RawDecision, constraints: string[]): StrategyDecision["impact"] {
+  const isActing =
+    decision.finalMode !== "BALANCED" ||
+    constraints.some(c => c.startsWith("suppressed:") || c.startsWith("cooldown_active"));
+  return isActing ? "Adjusting system performance" : "No action required";
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function getStrategyMode(): StrategyMode {
@@ -223,6 +232,7 @@ export async function strategyEngine(metrics: CollectedMetrics): Promise<void> {
     current_mode:       decision.finalMode,
     raw_desired_mode:   decision.rawMode,
     narrative:          buildNarrative(decision, constraints),
+    impact:             buildImpact(decision, constraints),
     reason:             decision.reason,
     active_constraints: constraints,
     decision_context: {

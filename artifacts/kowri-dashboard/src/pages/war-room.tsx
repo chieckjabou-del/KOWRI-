@@ -344,6 +344,22 @@ function IncidentRow({ type, action, result, createdAt }: {
   );
 }
 
+// ── Impact badge ─────────────────────────────────────────────────────────────
+function ImpactBadge({ impact }: { impact: string | null | undefined }) {
+  if (!impact) return null;
+  const active = impact === "Adjusting system performance";
+  return (
+    <span className={cn(
+      "flex-shrink-0 px-2.5 py-1 rounded-full text-xs font-semibold border",
+      active
+        ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+        : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+    )}>
+      {impact}
+    </span>
+  );
+}
+
 // ── Suppression chip ──────────────────────────────────────────────────────────
 function SuppressionList({ suppressions }: { suppressions: Record<string, { expiresAtCycle: number; remainingCycles: number }> }) {
   const entries = Object.entries(suppressions ?? {});
@@ -530,11 +546,14 @@ export default function WarRoom() {
             </span>
           </div>
 
-          {/* Narrative — plain-language summary */}
+          {/* Narrative + impact — plain-language summary */}
           {lastDecision?.narrative && (
-            <p className="text-sm text-foreground/90 font-medium leading-snug">
-              {lastDecision.narrative}
-            </p>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-foreground/90 font-medium leading-snug">
+                {lastDecision.narrative}
+              </p>
+              <ImpactBadge impact={lastDecision.impact} />
+            </div>
           )}
 
           {/* Reason — technical detail */}
