@@ -57,17 +57,21 @@ export function writeAutopilotState(): void {
 
 export async function rehydrateAutopilotState(): Promise<void> {
   try {
-    const result = await db.execute<{ value: Record<string, unknown> }>(sql`
-      SELECT value FROM system_state WHERE key = ${STATE_KEY} LIMIT 1
+    const result = await db.execute<{ value: Record<string, unknown>; updated_at: string }>(sql`
+      SELECT value, updated_at FROM system_state WHERE key = ${STATE_KEY} LIMIT 1
     `);
 
-    const rows = (result as unknown as { rows: { value: Record<string, unknown> }[] }).rows;
+    const rows = (result as unknown as { rows: { value: Record<string, unknown>; updated_at: string }[] }).rows;
     if (!rows || rows.length === 0) {
       console.info("[StateStore] no persisted state — starting with defaults");
       return;
     }
 
-    const state = rows[0].value;
+    const row   = rows[0];
+    const state = row.value;
+
+    const MAX_STATE_AGE_MS = 10 * 60 * 1000; // 10 minutes
+    const stale = Date.now() - new Date(row.updated_at).getTime() > MAX_STATE_AGE_MS;
 
     if (typeof state["batchSize"] === "number") {
       setBatchSize(state["batchSize"]);
@@ -96,9 +100,12 @@ export async function rehydrateAutopilotState(): Promise<void> {
     if (state["modeHistory"] || state["failureCount"] || state["blockedUntil"]) {
       rehydrateGlobalState({
         modeHistory:  (state["modeHistory"]  as string[] | undefined)  ?? [],
-        failureCount: (state["failureCount"] as Record<string, number> | undefined) ?? {},
-        blockedUntil: (state["blockedUntil"] as Record<string, number> | undefined) ?? {},
+        failureCount: stale ? {} : ((state["failureCount"] as Record<string, number> | undefined) ?? {}),
+        blockedUntil: stale ? {} : ((state["blockedUntil"] as Record<string, number> | undefined) ?? {}),
       });
+      if (stale) {
+        console.info("[StateStore] stale state row (>10 min) — blockedUntil/failureCount discarded");
+      }
     }
 
     console.info("[StateStore] autopilot state rehydrated from DB");
