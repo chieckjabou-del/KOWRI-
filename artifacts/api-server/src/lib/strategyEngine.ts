@@ -28,12 +28,12 @@
 
 import { CollectedMetrics }  from "./metricsCollector";
 import { logIncident }       from "./incidentStore";
-import { isModeSuppressed }  from "./globalEvaluator";
+import { isModeSuppressed, type StrategyMode } from "./suppressionRegistry";
 import { getCooldownState }  from "./healingEngine";   // safe: healingEngine never imports strategyEngine
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type StrategyMode = "LATENCY_FIRST" | "THROUGHPUT_FIRST" | "BALANCED";
+export type { StrategyMode };  // re-export so existing consumers need no import change
 
 export interface StrategyDecision {
   current_mode:       StrategyMode;

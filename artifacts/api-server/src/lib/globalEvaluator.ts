@@ -15,20 +15,15 @@
 //   Any success              → reset failure counter to 0
 //
 // Integration contract
-//   • isModeSuppressed(mode) is exported for strategyEngine.ts (synchronous, no await)
+//   • isModeSuppressed(mode) lives in suppressionRegistry.ts — no import cycle
 //   • autoHeal is NEVER aware of evaluator state — kill switches untouched
-//
-// Circular import note
-//   This file imports getStrategyMode() from strategyEngine.ts, and
-//   strategyEngine.ts imports isModeSuppressed() from this file.
-//   Both are used only inside function bodies (lazy), so Node.js resolves
-//   the cycle correctly without undefined-at-init errors.
 //
 // ROLLBACK: remove step-6 block from autopilot.ts; delete this file.
 //           Remove isModeSuppressed import from strategyEngine.ts.
 
 import { CollectedMetrics } from "./metricsCollector";
-import { getStrategyMode, StrategyMode } from "./strategyEngine";
+import { getStrategyMode }                                                                 from "./strategyEngine";
+import { type StrategyMode, incrementCycle, getCycleCount, suppressMode, clearSuppressions, getBlockedUntil } from "./suppressionRegistry";
 import { logIncident }      from "./incidentStore";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -41,9 +36,8 @@ const FAILURE_THRESHOLD = 2;  // consecutive failures before long suppression
 const BALANCED_NOISE  = 0.10; // 10% worsening tolerance for BALANCED success check
 
 // ── State ─────────────────────────────────────────────────────────────────────
-
-/** Global monotonic cycle counter.  Incremented at the top of each invocation. */
-let cycleCount = 0;
+// cycleCount and blockedUntil live in suppressionRegistry (breaks the former
+// globalEvaluator ↔ strategyEngine circular import).
 
 const latencyWindow: number[]      = [];
 const pendingWindow: number[]      = [];
@@ -52,16 +46,8 @@ const modeHistory:   StrategyMode[] = [];
 /** Consecutive failure count per mode.  Reset to 0 on any success. */
 const failureCount = new Map<StrategyMode, number>();
 
-/** Cycle count at which suppression expires (exclusive: suppressed while cycleCount < value). */
-const blockedUntil = new Map<StrategyMode, number>();
+// ── Global state rehydration ──────────────────────────────────────────────────
 
-// ── Public API for strategyEngine ─────────────────────────────────────────────
-
-/**
- * Returns true when globalEvaluator has suppressed `mode` because it was
- * judged ineffective.  Called synchronously by strategyEngine.ts before mode
- * selection.  No import cycle issue — used only inside a function body.
- */
 export function rehydrateGlobalState(state: {
   modeHistory:  StrategyMode[];
   failureCount: Record<string, number>;
@@ -75,18 +61,13 @@ export function rehydrateGlobalState(state: {
     failureCount.set(mode as StrategyMode, count);
   }
 
-  blockedUntil.clear();
+  clearSuppressions();
   for (const [mode, remaining] of Object.entries(state.blockedUntil)) {
     if (remaining > 0) {
-      // cycleCount is 0 at startup; absolute expiry = cycleCount + remaining = remaining
-      blockedUntil.set(mode as StrategyMode, cycleCount + remaining);
+      // getCycleCount() is 0 at startup; absolute expiry = 0 + remaining = remaining
+      suppressMode(mode as StrategyMode, getCycleCount() + remaining);
     }
   }
-}
-
-export function isModeSuppressed(mode: StrategyMode): boolean {
-  const expiry = blockedUntil.get(mode);
-  return expiry !== undefined && cycleCount < expiry;
 }
 
 // ── Rolling window helpers ─────────────────────────────────────────────────────
@@ -163,8 +144,9 @@ function evaluateSuccess(
 // ── Observability ─────────────────────────────────────────────────────────────
 
 export function getGlobalEvaluatorState() {
+  const curCycle = getCycleCount();
   return {
-    cycleCount,
+    cycleCount: curCycle,
     windowsFilled: {
       latency: latencyWindow.length,
       pending: pendingWindow.length,
@@ -173,9 +155,9 @@ export function getGlobalEvaluatorState() {
     modeHistory:   modeHistory.slice(),
     failureCount:  Object.fromEntries(failureCount),
     suppressions: Object.fromEntries(
-      Array.from(blockedUntil.entries())
-        .filter(([, exp]) => cycleCount < exp)
-        .map(([mode, exp]) => [mode, { expiresAtCycle: exp, remainingCycles: exp - cycleCount }]),
+      Array.from(getBlockedUntil().entries())
+        .filter(([, exp]) => curCycle < exp)
+        .map(([mode, exp]) => [mode, { expiresAtCycle: exp, remainingCycles: exp - curCycle }]),
     ),
   };
 }
@@ -183,8 +165,8 @@ export function getGlobalEvaluatorState() {
 // ── Main function ─────────────────────────────────────────────────────────────
 
 export async function globalEvaluator(metrics: CollectedMetrics): Promise<void> {
-  // Step 1 — advance cycle counter (used by isModeSuppressed comparisons).
-  cycleCount++;
+  // Step 1 — advance cycle counter (used by suppressionRegistry.isModeSuppressed comparisons).
+  const cycleCount = incrementCycle();
 
   // Step 2 — record the current mode BEFORE strategyEngine runs for this cycle.
   //          This captures the mode that was in effect when metrics were collected.
@@ -220,7 +202,7 @@ export async function globalEvaluator(metrics: CollectedMetrics): Promise<void> 
     if (newCount >= FAILURE_THRESHOLD) {
       // Repeated failure — long suppression.  Reset counter so the next block
       // starts fresh after the suppression expires.
-      blockedUntil.set(mode, cycleCount + BLOCK_LONG);
+      suppressMode(mode, cycleCount + BLOCK_LONG);
       failureCount.set(mode, 0);
       suppressionApplied = `block_long_${BLOCK_LONG}_cycles`;
       console.warn(
@@ -229,7 +211,7 @@ export async function globalEvaluator(metrics: CollectedMetrics): Promise<void> 
       );
     } else {
       // First failure — short suppression (single-cycle downgrade to BALANCED).
-      blockedUntil.set(mode, cycleCount + BLOCK_SHORT);
+      suppressMode(mode, cycleCount + BLOCK_SHORT);
       suppressionApplied = `block_short_${BLOCK_SHORT}_cycle`;
       console.warn(
         `[GlobalEvaluator] mode=${mode} downgraded to BALANCED for ${BLOCK_SHORT} cycle ` +
