@@ -23,7 +23,7 @@
 import { CollectedMetrics }                               from "./metricsCollector";
 import { getBatchSize, DEFAULT_BATCH_SIZE }               from "./outboxWorker";
 import { requestBatchChange }                             from "./batchController";
-import { insertIncident }                                  from "./incidentStore";
+import { logIncident }                                     from "./incidentStore";
 import { getStrategyMode }                                 from "./strategyEngine";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -294,7 +294,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
           `ineffective=${isIneffective("reduce_batch_opt")}`;
 
         console.info(`[SelfOptimize] ${result}`);
-        await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+        logIncident({ type: "self_optimize", action: "self_optimize", result });
       }
     }
     return;   // max 1 decision per cycle
@@ -329,7 +329,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
         `a1_eval baseline=${a1State.baselineLatency}ms current=${metrics.db_latency}ms ` +
         `improved=${improved}`;
       console.info(`[SelfOptimize] ${evalResult}`);
-      await insertIncident({ type: "self_optimize", action: "a1_evaluation", result: evalResult });
+      logIncident({ type: "self_optimize", action: "a1_evaluation", result: evalResult });
       // Fall through — if still elevated A1 will fire again on the next matching cycle.
     }
     // Do NOT consume the 1-decision slot — B and C may still act this cycle.
@@ -359,7 +359,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
           `mode=${getStrategyMode()} step=5pct eval_in=${A1_EVAL_CYCLES}_cycles`;
 
         console.info(`[SelfOptimize] ${result}`);
-        await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+        logIncident({ type: "self_optimize", action: "self_optimize", result });
       }
     }
     return;   // max 1 decision per cycle
@@ -388,7 +388,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
           `mode=${getStrategyMode()} adaptive=${t.hasAdaptive}`;
 
         console.info(`[SelfOptimize] ${result}`);
-        await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+        logIncident({ type: "self_optimize", action: "self_optimize", result });
       }
     }
     return;   // max 1 decision per cycle
@@ -427,7 +427,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
           `mode=${mode} pendFraction=${pendFraction} adaptive=${t.hasAdaptive}`;
 
         console.info(`[SelfOptimize] ${result}`);
-        await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+        logIncident({ type: "self_optimize", action: "self_optimize", result });
       }
     }
     return;   // max 1 decision per cycle

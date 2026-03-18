@@ -24,7 +24,7 @@
 import { CollectedMetrics }                               from "./metricsCollector";
 import { getBatchSize, DEFAULT_BATCH_SIZE }               from "./outboxWorker";
 import { requestBatchChange }                             from "./batchController";
-import { insertIncident }                                  from "./incidentStore";
+import { logIncident }                                     from "./incidentStore";
 import { getStrategyMode }                                 from "./strategyEngine";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -266,5 +266,5 @@ export async function learningEngine(metrics: CollectedMetrics): Promise<void> {
     `mode=${getStrategyMode()} step=${effectiveStep}`;
 
   console.info(`[LearningEngine] predictive_adjustment: ${result}`);
-  await insertIncident({ type: "learning_engine", action: "predictive_adjustment", result });
+  logIncident({ type: "learning_engine", action: "predictive_adjustment", result });
 }

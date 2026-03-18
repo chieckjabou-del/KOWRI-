@@ -16,7 +16,7 @@
 // ROLLBACK: remove `await autoHeal(metrics)` from autopilot.ts; delete this file.
 
 import { CollectedMetrics }                    from "./metricsCollector";
-import { insertIncident }                       from "./incidentStore";
+import { logIncident }                          from "./incidentStore";
 import { getSwitch }                            from "./killSwitch";
 import { forcePrimaryReads, pauseOutboxWorker } from "./actionExecutor";
 import {
@@ -107,7 +107,7 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
 
     const result = `batchSize=${before}→${after} db_latency=${metrics.db_latency}ms`;
     console.warn(`[HealingEngine] reduce_batch: ${result}`);
-    await insertIncident({ type: "auto_heal", action: "reduce_batch", result });
+    logIncident({ type: "auto_heal", action: "reduce_batch", result });
   }
 
   // ── Case A recovery: DB_LATENCY_OK — restore batch size gradually ─────────
@@ -127,7 +127,7 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
 
         const result = `batchSize=${before}→${after} db_latency=${metrics.db_latency}ms consecutiveOk=${BATCH_RECOVER_CYCLES}`;
         console.info(`[HealingEngine] increase_batch: ${result}`);
-        await insertIncident({ type: "auto_heal", action: "increase_batch", result });
+        logIncident({ type: "auto_heal", action: "increase_batch", result });
       }
     }
   } else {
@@ -151,7 +151,7 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
 
     const result = `pending=${metrics.outbox_pending} prev2=${prev2} — safe_restart_worker`;
     console.warn(`[HealingEngine] safe_restart_worker: ${result}`);
-    await insertIncident({ type: "auto_heal", action: "safe_restart_worker", result });
+    logIncident({ type: "auto_heal", action: "safe_restart_worker", result });
   }
 
   // Advance the 2-cycle history AFTER the stuck check so the check uses the
@@ -173,7 +173,7 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
 
       const result = `replica_lag=${metrics.replica_lag.toFixed(1)}s threshold=${LAG_THRESHOLD_S}s`;
       console.warn(`[HealingEngine] force_primary: ${result}`);
-      await insertIncident({ type: "auto_heal", action: "force_primary", result });
+      logIncident({ type: "auto_heal", action: "force_primary", result });
     }
     // If sw.state !== "ENABLED": already paused by autopilot or operator — do nothing.
   }
@@ -193,7 +193,7 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
 
       const result = `dlq_rate=${metrics.dlq_rate} threshold=${DLQ_THRESHOLD}`;
       console.warn(`[HealingEngine] pause_outbox: ${result}`);
-      await insertIncident({ type: "auto_heal", action: "pause_outbox", result });
+      logIncident({ type: "auto_heal", action: "pause_outbox", result });
     }
     // sw.state !== "ENABLED": already paused — do nothing, no incident logged.
   }

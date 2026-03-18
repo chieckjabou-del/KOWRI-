@@ -29,7 +29,7 @@
 
 import { CollectedMetrics } from "./metricsCollector";
 import { getStrategyMode, StrategyMode } from "./strategyEngine";
-import { insertIncident }   from "./incidentStore";
+import { logIncident }      from "./incidentStore";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -229,5 +229,5 @@ export async function globalEvaluator(metrics: CollectedMetrics): Promise<void> 
     `consecutiveCycles=${consecutive} failureCount=${currentFailures}`;
 
   console.info(`[GlobalEvaluator] strategy_validation: ${result}`);
-  await insertIncident({ type: "global_evaluator", action: "strategy_validation", result });
+  logIncident({ type: "global_evaluator", action: "strategy_validation", result });
 }
