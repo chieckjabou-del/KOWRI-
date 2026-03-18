@@ -129,7 +129,7 @@ function adjustConfidence(hourOfDay: number, delta: number): void {
 
 // ── Accumulator flush ─────────────────────────────────────────────────────────
 
-function flushAccumulator(currentLatency: number): void {
+function flushAccumulator(): void {
   if (!accumulator || accumulator.count === 0) return;
 
   const { hourOfDay, dateStr, sumLat, sumPend, sumDlq, count } = accumulator;
@@ -265,7 +265,7 @@ export async function learningEngine(metrics: CollectedMetrics): Promise<void> {
   // the hour boundary, using data that reflects the full predicted hour rather
   // than the next cycle's 5-second snapshot.
   if (accumulator && (accumulator.hourOfDay !== hourOfDay || accumulator.dateStr !== dateStr)) {
-    flushAccumulator(metrics.db_latency);
+    flushAccumulator();
   }
 
   // Step 2 — ensure accumulator exists for the current hour.
