@@ -99,12 +99,12 @@ export async function rehydrateAutopilotState(): Promise<void> {
 
     if (state["modeHistory"] || state["failureCount"] || state["blockedUntil"]) {
       rehydrateGlobalState({
-        modeHistory:  (state["modeHistory"]  as string[] | undefined)  ?? [],
+        modeHistory:  stale ? [] : ((state["modeHistory"]  as string[] | undefined) ?? []),
         failureCount: stale ? {} : ((state["failureCount"] as Record<string, number> | undefined) ?? {}),
         blockedUntil: stale ? {} : ((state["blockedUntil"] as Record<string, number> | undefined) ?? {}),
       });
       if (stale) {
-        console.info("[StateStore] stale state row (>10 min) — blockedUntil/failureCount discarded");
+        console.info("[StateStore] stale state row (>10 min) — modeHistory/blockedUntil/failureCount discarded");
       }
     }
 
