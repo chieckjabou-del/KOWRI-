@@ -13,6 +13,14 @@ export interface IncidentEntry {
   result: string;   // outcome,            e.g. "recovered" | "escalated" | "failed"
 }
 
+// Unix ms of the most recent successfully written incident.
+// Read by /live to compute cyclesSinceLastIncident without a DB query.
+let _lastIncidentAt = 0;
+
+export function getLastIncidentTime(): number {
+  return _lastIncidentAt;
+}
+
 /**
  * Log a single incident.  Returns the generated id on success, null on failure.
  */
@@ -20,6 +28,7 @@ export async function insertIncident(entry: IncidentEntry): Promise<string | nul
   const id = generateId();
   try {
     await db.insert(incidentsTable).values({ id, ...entry, createdAt: new Date() });
+    _lastIncidentAt = Date.now();
     return id;
   } catch (err) {
     console.error("[IncidentStore] insert failed:", err);

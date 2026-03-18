@@ -52,6 +52,12 @@ let _sentinelPrev:     { db_latency: number; outbox_pending: number; dlq_rate: n
 let _sentinelRepeated: number = 0;
 const SENTINEL_MAX_REPEATED = 3;
 
+// ── Cycle health signals — exposed by getAutopilotHealth() for /live ──────────
+// Updated each cycle so the War Room can compute trust score without DB queries.
+let _metricsHealthy:   boolean = true;
+let _dbWriteable:      boolean = true;
+let _lastCycleEndTime: number  = 0;
+
 // ── Action dispatch table ─────────────────────────────────────────────────────
 // Maps each AutopilotAction to the existing executor functions + the switch
 // name that guards it.  Keeps the cycle loop free of if/else chains.
@@ -174,6 +180,7 @@ export async function runAutopilotCycle(): Promise<void> {
         `db_latency=${metrics.db_latency} outbox_pending=${metrics.outbox_pending} dlq_rate=${metrics.dlq_rate}`;
       console.error("[Autopilot] sentinel: non-finite/zero metrics — skipping cycle:", result);
       logIncident({ type: "metrics_collector", action: "sentinel_rejected", result });
+      _metricsHealthy   = false;
       _sentinelPrev     = null;
       _sentinelRepeated = 0;
       return;
@@ -198,12 +205,17 @@ export async function runAutopilotCycle(): Promise<void> {
           `db_latency=${metrics.db_latency} repeated=${_sentinelRepeated}_consecutive_cycles`;
         console.error("[Autopilot] sentinel: metrics frozen —", result, "— skipping cycle");
         logIncident({ type: "metrics_collector", action: "sentinel_repeated", result });
+        _metricsHealthy   = false;
         _sentinelRepeated = 0;
         return;
       }
     } else {
       _sentinelRepeated = 0;
     }
+
+    // Sentinel checks passed — metrics are valid for this cycle.
+    _metricsHealthy = true;
+    _dbWriteable    = true; // reset; catch below sets it false if persist fails
 
     // Step 2 — persist metrics snapshot (fire-and-forget; never blocks the cycle).
     insertMetrics([
@@ -216,6 +228,7 @@ export async function runAutopilotCycle(): Promise<void> {
       const errMsg = String((err as any)?.message ?? err);
       console.error("[Autopilot] metric persist failed:", err);
       logIncident({ type: "metrics_store", action: "write_failed", result: errMsg });
+      _dbWriteable = false;
     });
 
     // Step 3 — evaluate all rules against the snapshot.
@@ -273,7 +286,8 @@ export async function runAutopilotCycle(): Promise<void> {
     // Persist state snapshot (fire-and-forget — never blocks the cycle).
     writeAutopilotState();
   } finally {
-    cycleRunning = false;
+    cycleRunning      = false;
+    _lastCycleEndTime = Date.now();
   }
 }
 
@@ -314,5 +328,17 @@ export function getAutopilotState() {
       metric: r.metric,
       action: r.action,
     })),
+  };
+}
+
+export function getAutopilotHealth(): {
+  metricsHealthy:   boolean;
+  dbWriteable:      boolean;
+  lastCycleEndTime: number;
+} {
+  return {
+    metricsHealthy:   _metricsHealthy,
+    dbWriteable:      _dbWriteable,
+    lastCycleEndTime: _lastCycleEndTime,
   };
 }

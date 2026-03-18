@@ -8,8 +8,9 @@ import { getStrategyMode, getStrategyState }   from "../lib/strategyEngine";
 import { getGlobalEvaluatorState }  from "../lib/globalEvaluator";
 import { getSelfOptimizeState }     from "../lib/selfOptimizer";
 import { getLearningEngineState }   from "../lib/learningEngine";
-import { getAutopilotState }        from "../lib/autopilot";
-import { getCooldownState, getHealingImpact } from "../lib/healingEngine";
+import { getAutopilotState, getAutopilotHealth } from "../lib/autopilot";
+import { getCooldownState, getHealingImpact }    from "../lib/healingEngine";
+import { getLastIncidentTime }                   from "../lib/incidentStore";
 import { getBatchControllerState }  from "../lib/batchController";
 
 const router = Router();
@@ -122,39 +123,121 @@ router.get("/incidents", async (req, res, next) => {
 });
 
 // ── /warroom/live ─────────────────────────────────────────────────────────────
-// Fast decision-state snapshot plus business impact summary.
-// One DB query (incidents auto-resolved count); all other fields are in-memory.
+// Five-section decision snapshot: trust score, heartbeat, AI panel,
+// money mode, and impact counters.  One DB query; all other fields in-memory.
 router.get("/live", async (_req, res, next) => {
   try {
+    // ── Gather in-memory state up front (zero DB calls) ───────────────────
+    const health      = getAutopilotHealth();
+    const allSwitches = getAllSwitches();
+    const batchCtrl   = getBatchControllerState();
+    const stratState  = getStrategyState();
+    const evalState   = getGlobalEvaluatorState();
     const { confidenceMap, predictedHoursCount, hourlyPredictions } = getLearningEngineState();
+    const { transactionsProtected } = getHealingImpact();
+    const now = Date.now();
 
-    // Single DB query: count auto-resolved incidents (recover:* actions that succeeded).
+    // ── One DB query: total auto-resolved incidents ────────────────────────
     const incidentsAutoResolved = await db
       .select({ count: sql<number>`COUNT(*)::int` })
       .from(incidentsTable)
       .where(sql`action LIKE 'recover:%' AND result = 'recovered'`)
       .then(rows => Number(rows[0]?.count ?? 0));
 
-    // FORCED_OFF switches represent currently active manual interventions.
-    const switches     = getAllSwitches();
-    const forcedOff    = switches.filter(s => s.state === "FORCED_OFF");
-    const manualInterventionsRequired = forcedOff.length;
+    // ── 1. TRUST SCORE ─────────────────────────────────────────────────────
+    // 4 boolean signals → composite percentage → RELIABLE / DEGRADED / BLIND.
+    // stateConsistent proxies the system_state row age via the cycle timestamp
+    // (writeAutopilotState fires at the end of every cycle).
+    const signals = {
+      metricsHealthy:  health.metricsHealthy,
+      dbWriteable:     health.dbWriteable,
+      cycleRunning:    health.lastCycleEndTime > 0 && (now - health.lastCycleEndTime) < 10_000,
+      stateConsistent: health.lastCycleEndTime > 0 && (now - health.lastCycleEndTime) < 15_000,
+    };
+    const signalCount = Object.values(signals).filter(Boolean).length;
+    const trustScore  = {
+      value:   Math.round((signalCount / 4) * 100),
+      status:  signalCount === 4 ? "RELIABLE" : signalCount >= 2 ? "DEGRADED" : "BLIND",
+      signals,
+    };
 
-    // Running accumulator maintained by healingEngine: sum of batch sizes shed
-    // via emergency reduce_batch instead of firing STOP_TRANSFERS.
-    const { transactionsProtected: estimatedTransactionsProtected } = getHealingImpact();
+    // ── 2. HEARTBEAT ───────────────────────────────────────────────────────
+    const cycleAgeMs  = health.lastCycleEndTime > 0 ? now - health.lastCycleEndTime : null;
+    const lastIncMs   = getLastIncidentTime();
+    const hasSuppression = Object.keys(evalState.suppressions).length > 0;
+    const heartbeat = {
+      lastCycleAt:            health.lastCycleEndTime > 0
+                                ? new Date(health.lastCycleEndTime).toISOString()
+                                : null,
+      cycleAgeMs,
+      status:                 signals.cycleRunning ? "active" : "stale",
+      currentMode:            getStrategyMode(),
+      modeValidatedBy:        hasSuppression
+                                ? "global_evaluator (suppression active)"
+                                : "global_evaluator",
+      cyclesSinceLastIncident: lastIncMs > 0
+                                ? Math.floor((now - lastIncMs) / 5_000)
+                                : null,
+    };
 
-    // Human-readable time since the most recent manual intervention was set.
-    // "never required" when all switches are currently ENABLED or TRIGGERED (auto-managed).
-    let uptimeSinceLastManualIntervention: string;
-    if (forcedOff.length === 0) {
-      uptimeSinceLastManualIntervention = "never required";
-    } else {
-      const mostRecentFiredAt = Math.max(...forcedOff.map(s => s.firedAt));
-      uptimeSinceLastManualIntervention =
-        `${humanDuration(Date.now() - mostRecentFiredAt)} ago` +
-        ` (${forcedOff.map(s => s.name).join(", ")} still active)`;
-    }
+    // ── 3. AI DECISION PANEL ───────────────────────────────────────────────
+    const anyNonEnabled = allSwitches.some(s => s.state !== "ENABLED");
+    const lastDec       = stratState.lastDecision;
+    const latTrend      = lastDec?.decision_context.latency_trend  ?? "stable";
+    const pendTrend     = lastDec?.decision_context.pending_trend  ?? "stable";
+    const confidenceLevel: "HIGH" | "MEDIUM" | "LOW" =
+      !anyNonEnabled && latTrend === "stable" && pendTrend === "stable" ? "HIGH" :
+      anyNonEnabled  || (latTrend === "rising" && pendTrend === "rising") ? "LOW" :
+      "MEDIUM";
+    const expectedImpactMap: Record<string, string> = {
+      LATENCY_FIRST:    "Batch size being reduced to lower DB write pressure — throughput temporarily constrained",
+      THROUGHPUT_FIRST: "Batch throughput increasing to clear outbox queue — monitor DB latency closely",
+      BALANCED:         "Steady-state operation — no active throughput or latency adjustment",
+    };
+    const aiDecisionPanel = {
+      confidenceLevel,
+      expectedImpact:      expectedImpactMap[stratState.currentMode] ?? "Unknown mode",
+      humanReviewRequired: anyNonEnabled,
+      currentMode:         stratState.currentMode,
+      narrative:           lastDec?.narrative ?? null,
+      reason:              lastDec?.reason    ?? null,
+    };
+
+    // ── 4. MONEY MODE ──────────────────────────────────────────────────────
+    const activeKillSwitches = allSwitches
+      .filter(s => s.state !== "ENABLED")
+      .map(s => ({ name: s.name, state: s.state, reason: s.reason }));
+    const forcedOffActive = activeKillSwitches.filter(k => k.state === "FORCED_OFF");
+    const triggeredActive = activeKillSwitches.filter(k => k.state === "TRIGGERED");
+    const outboundEnabled = allSwitches.find(s => s.name === "outbound_transfers")?.state === "ENABLED";
+    const revenueRiskLevel: "NONE" | "LOW" | "MEDIUM" | "HIGH" =
+      !outboundEnabled || batchCtrl.batchPressure < 40 ? "HIGH"   :
+      activeKillSwitches.length > 0 || batchCtrl.batchPressure < 70 ? "MEDIUM" :
+      batchCtrl.batchPressure < 90  ? "LOW"    :
+      "NONE";
+    const moneyMode = {
+      throughputPressure: batchCtrl.batchPressure,
+      revenueRiskLevel,
+      causeLayer:         batchCtrl.lockedBy ?? "none",
+      activeKillSwitches,
+      recoveryEta:        forcedOffActive.length > 0 ? "manual required"    :
+                          triggeredActive.length > 0 ? "auto in ~3 cycles"  :
+                          "no intervention needed",
+    };
+
+    // ── 5. IMPACT COUNTERS ─────────────────────────────────────────────────
+    const forcedOffForImpact = allSwitches.filter(s => s.state === "FORCED_OFF");
+    const uptimeSinceLastManualIntervention =
+      forcedOffForImpact.length === 0
+        ? "never required"
+        : `${humanDuration(now - Math.max(...forcedOffForImpact.map(s => s.firedAt)))} ago` +
+          ` (${forcedOffForImpact.map(s => s.name).join(", ")} still active)`;
+    const impact = {
+      incidentsAutoResolved,
+      manualInterventionsRequired:    forcedOffForImpact.length,
+      estimatedTransactionsProtected: transactionsProtected,
+      uptimeSinceLastManualIntervention,
+    };
 
     res.json({
       batchSize:       getBatchSize(),
@@ -162,13 +245,12 @@ router.get("/live", async (_req, res, next) => {
       confidenceMap,
       predictedHoursCount,
       hourlyPredictions,
-      batchController: getBatchControllerState(),
-      impact: {
-        incidentsAutoResolved,
-        manualInterventionsRequired,
-        estimatedTransactionsProtected,
-        uptimeSinceLastManualIntervention,
-      },
+      batchController: batchCtrl,
+      trustScore,
+      heartbeat,
+      aiDecisionPanel,
+      moneyMode,
+      impact,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) { next(err); }
