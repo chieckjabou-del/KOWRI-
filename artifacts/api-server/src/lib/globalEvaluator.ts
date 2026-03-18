@@ -123,7 +123,8 @@ function trendLabel(values: number[]): string {
   if (values.length < 2) return "unknown";
   const delta = values[values.length - 1] - values[0];
   if (delta < 0) return "falling";
-  if (delta > values[0] * BALANCED_NOISE) return "rising";
+  if (Math.abs(delta) >= MIN_ABS_DELTA_MS
+      && delta > values[0] * BALANCED_NOISE) return "rising";
   return "stable";
 }
 
