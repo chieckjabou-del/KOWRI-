@@ -333,17 +333,18 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
 
     // Expiry cycle — evaluate whether the previous intervention helped.
     if (a1State.cooldownCycles === 0) {
-      if (!t.hasAdaptive) {
-        logIncident({ type: "a1_eval", improved: "window_not_ready" });
-        return;
+      if (t.hasAdaptive) {
+        const improved = metrics.db_latency <= t.avgLatency * 1.3;  // trigger condition now false
+        const evalResult =
+          `a1_eval baseline=${a1State.baselineLatency}ms current=${metrics.db_latency}ms ` +
+          `improved=${improved}`;
+        console.info(`[SelfOptimize] ${evalResult}`);
+        logIncident({ type: "self_optimize", action: "a1_evaluation", result: evalResult });
+        // Fall through — if still elevated A1 will fire again on the next matching cycle.
+      } else {
+        console.info("[SelfOptimize] A1 expiry skipped — adaptive window not ready");
+        logIncident({ type: "self_optimize", action: "a1_evaluation", result: "window_not_ready" });
       }
-      const improved = metrics.db_latency <= t.avgLatency * 1.3;  // trigger condition now false
-      const evalResult =
-        `a1_eval baseline=${a1State.baselineLatency}ms current=${metrics.db_latency}ms ` +
-        `improved=${improved}`;
-      console.info(`[SelfOptimize] ${evalResult}`);
-      logIncident({ type: "self_optimize", action: "a1_evaluation", result: evalResult });
-      // Fall through — if still elevated A1 will fire again on the next matching cycle.
     }
     // Do NOT consume the 1-decision slot — B and C may still act this cycle.
   } else if (
