@@ -530,7 +530,14 @@ export default function WarRoom() {
             </span>
           </div>
 
-          {/* Reason */}
+          {/* Narrative — plain-language summary */}
+          {lastDecision?.narrative && (
+            <p className="text-sm text-foreground/90 font-medium leading-snug">
+              {lastDecision.narrative}
+            </p>
+          )}
+
+          {/* Reason — technical detail */}
           {lastDecision?.reason && (
             <div className="bg-white/3 rounded-xl px-3 py-2 border border-border/20">
               <span className="text-xs text-muted-foreground font-semibold uppercase tracking-widest">Reason  </span>

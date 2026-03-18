@@ -39,6 +39,8 @@ export interface StrategyDecision {
   current_mode:       StrategyMode;
   /** Mode computed from raw metric thresholds, before suppression fallback. */
   raw_desired_mode:   StrategyMode;
+  /** One-sentence plain-language explanation for operators. */
+  narrative:          string;
   /** Human-readable explanation of why this mode was chosen. */
   reason:             string;
   /** Constraints that were evaluated when making this decision. */
@@ -167,6 +169,24 @@ function buildConstraints(
   return constraints;
 }
 
+// ── Narrative builder ─────────────────────────────────────────────────────────
+
+function buildNarrative(decision: RawDecision, constraints: string[]): string {
+  if (constraints.some(c => c.startsWith("suppressed:"))) {
+    return "Strategy constrained — fallback to safe mode.";
+  }
+  if (constraints.some(c => c.startsWith("cooldown_active"))) {
+    return "Recent action in effect — waiting before next adjustment.";
+  }
+  if (decision.finalMode === "LATENCY_FIRST") {
+    return "Latency rising — prioritizing response time over throughput.";
+  }
+  if (decision.finalMode === "THROUGHPUT_FIRST") {
+    return "Backlog increasing — prioritizing processing volume.";
+  }
+  return "System stable — maintaining balanced performance.";
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function getStrategyMode(): StrategyMode {
@@ -200,9 +220,10 @@ export async function strategyEngine(metrics: CollectedMetrics): Promise<void> {
 
   // Step 3 — persist the full decision context every cycle (not just on switch).
   lastDecision = {
-    current_mode:     decision.finalMode,
-    raw_desired_mode: decision.rawMode,
-    reason:           decision.reason,
+    current_mode:       decision.finalMode,
+    raw_desired_mode:   decision.rawMode,
+    narrative:          buildNarrative(decision, constraints),
+    reason:             decision.reason,
     active_constraints: constraints,
     decision_context: {
       latency_ms:     metrics.db_latency,
