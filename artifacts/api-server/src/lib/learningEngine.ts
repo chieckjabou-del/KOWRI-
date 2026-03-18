@@ -42,6 +42,14 @@ const MIN_BATCH_SIZE        = 5;     // mirror of outboxWorker constant
  *  Intentionally below autoHeal territory (800 ms) so learning acts first.  */
 const HIGH_LATENCY_MS = Number(process.env.LEARN_HIGH_LATENCY_MS ?? 200);
 
+// ── Startup validation ────────────────────────────────────────────────────────
+
+console.assert(
+  CONFIDENCE_INIT < CONFIDENCE_THRESHOLD,
+  `[learningEngine] CONFIDENCE_INIT (${CONFIDENCE_INIT}) must be < CONFIDENCE_THRESHOLD (${CONFIDENCE_THRESHOLD}) — predictions fire from cycle 1 on every hour with no historical evidence`,
+);
+console.log(`[learningEngine] init=${CONFIDENCE_INIT} threshold=${CONFIDENCE_THRESHOLD}`);
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface HourlySnapshot {
