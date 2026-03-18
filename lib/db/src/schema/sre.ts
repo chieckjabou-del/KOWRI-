@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, numeric, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, timestamp, numeric, integer, jsonb } from "drizzle-orm/pg-core";
 
 // ── Kill Switches ─────────────────────────────────────────────────────────────
 // Persistent source of truth for all operational kill switches.
@@ -49,7 +49,17 @@ export const ledgerBalanceSummaryTable = pgTable("ledger_balance_summary", {
   updatedAt:   timestamp("updated_at").notNull().defaultNow(),
 });
 
+// ── System State ──────────────────────────────────────────────────────────────
+// Single-row key-value store for persisting autopilot in-memory state across
+// restarts. One row per named component (key = 'autopilot').
+export const systemStateTable = pgTable("system_state", {
+  key:       text("key").primaryKey(),
+  value:     jsonb("value").notNull(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type KillSwitchRow           = typeof killSwitchesTable.$inferSelect;
 export type MetricRow               = typeof metricsTable.$inferSelect;
 export type IncidentRow             = typeof incidentsTable.$inferSelect;
 export type LedgerBalanceSummaryRow = typeof ledgerBalanceSummaryTable.$inferSelect;
+export type SystemStateRow          = typeof systemStateTable.$inferSelect;

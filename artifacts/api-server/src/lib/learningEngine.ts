@@ -96,6 +96,13 @@ function nowParts(): { hourOfDay: number; dateStr: string; hourKey: string } {
   return { hourOfDay, dateStr, hourKey };
 }
 
+export function rehydrateConfidenceMap(map: Record<string, number>): void {
+  confidenceMap.clear();
+  for (const [hour, conf] of Object.entries(map)) {
+    confidenceMap.set(Number(hour), conf);
+  }
+}
+
 function getConfidence(hourOfDay: number): number {
   return confidenceMap.get(hourOfDay) ?? CONFIDENCE_INIT;
 }

@@ -35,6 +35,7 @@ import { strategyEngine }                                        from "./strateg
 import { learningEngine }                                        from "./learningEngine";
 import { selfOptimize }                                          from "./selfOptimizer";
 import { resetBatchLock }                                        from "./batchController";
+import { writeAutopilotState }                                   from "./autopilotStateStore";
 
 const POLL_MS = 5_000;
 
@@ -204,6 +205,9 @@ export async function runAutopilotCycle(): Promise<void> {
   } catch (err) {
     console.error("[Autopilot] selfOptimizer error:", err);
   }
+
+  // Persist state snapshot (fire-and-forget — never blocks the cycle).
+  writeAutopilotState();
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────

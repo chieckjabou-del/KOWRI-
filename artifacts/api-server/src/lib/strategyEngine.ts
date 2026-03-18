@@ -202,6 +202,11 @@ export function getStrategyMode(): StrategyMode {
   return currentMode;
 }
 
+export function rehydrateStrategyMode(mode: StrategyMode): void {
+  currentMode  = mode;
+  cyclesInMode = 0;
+}
+
 export function getStrategyState() {
   return {
     currentMode,

@@ -3,6 +3,7 @@ import { startOutboxWorker }                             from "./lib/outboxWorke
 import { initKillSwitches }                              from "./lib/killSwitch";
 import { startAutopilot }                                from "./lib/autopilot";
 import { seedLedgerBalanceSummary, installLedgerTrigger } from "./lib/ledgerBalanceSeeder";
+import { rehydrateAutopilotState }                        from "./lib/autopilotStateStore";
 
 const rawPort = process.env["PORT"];
 
@@ -26,6 +27,7 @@ app.listen(port, () => {
   initKillSwitches()
     .then(() => installLedgerTrigger())
     .then(() => seedLedgerBalanceSummary())
+    .then(() => rehydrateAutopilotState())
     .then(() => startAutopilot())
     .catch((err) => {
       console.error("[Startup] init failed:", err);

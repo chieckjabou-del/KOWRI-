@@ -62,6 +62,28 @@ const blockedUntil = new Map<StrategyMode, number>();
  * judged ineffective.  Called synchronously by strategyEngine.ts before mode
  * selection.  No import cycle issue — used only inside a function body.
  */
+export function rehydrateGlobalState(state: {
+  modeHistory:  StrategyMode[];
+  failureCount: Record<string, number>;
+  blockedUntil: Record<string, number>;   // remaining cycles (relative to cycle 0)
+}): void {
+  modeHistory.length = 0;
+  modeHistory.push(...state.modeHistory.slice(-WINDOW_SIZE));
+
+  failureCount.clear();
+  for (const [mode, count] of Object.entries(state.failureCount)) {
+    failureCount.set(mode as StrategyMode, count);
+  }
+
+  blockedUntil.clear();
+  for (const [mode, remaining] of Object.entries(state.blockedUntil)) {
+    if (remaining > 0) {
+      // cycleCount is 0 at startup; absolute expiry = cycleCount + remaining = remaining
+      blockedUntil.set(mode as StrategyMode, cycleCount + remaining);
+    }
+  }
+}
+
 export function isModeSuppressed(mode: StrategyMode): boolean {
   const expiry = blockedUntil.get(mode);
   return expiry !== undefined && cycleCount < expiry;
