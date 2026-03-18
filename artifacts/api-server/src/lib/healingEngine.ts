@@ -121,9 +121,11 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
       const before = getBatchSize();
       if (before < DEFAULT_BATCH_SIZE) {
         const after = Math.min(DEFAULT_BATCH_SIZE, before + BATCH_RECOVER_STEP);
-        requestBatchChange("healingEngine:increase_batch", after);
-        arm("increase_batch");
-        consecutiveOkCycles = 0;   // reset so next recovery waits another 3 cycles
+        const acquired = requestBatchChange("healingEngine:increase_batch", after);
+        if (acquired) {
+          arm("increase_batch");
+          consecutiveOkCycles = 0;   // reset so next recovery waits another 3 cycles
+        }
 
         const result = `batchSize=${before}→${after} db_latency=${metrics.db_latency}ms consecutiveOk=${BATCH_RECOVER_CYCLES}`;
         console.info(`[HealingEngine] increase_batch: ${result}`);
