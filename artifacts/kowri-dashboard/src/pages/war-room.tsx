@@ -410,13 +410,14 @@ export default function WarRoom() {
   const drift        = ledger?.drift ?? null;
 
   // ── Autopilot derived state ────────────────────────────────────────────────
-  const ks         = (status?.killSwitches ?? []) as any[];
-  const triggered  = ks.filter((k: any) => k.state !== "ENABLED");
-  const switches   = ks;
-  const evalState  = status?.globalEvaluator;
-  const stratState = status?.strategy;
-  const soState    = status?.selfOptimize;
-  const leState    = status?.learningEngine;
+  const ks           = (status?.killSwitches ?? []) as any[];
+  const triggered    = ks.filter((k: any) => k.state !== "ENABLED");
+  const switches     = ks;
+  const evalState    = status?.globalEvaluator;
+  const stratState   = status?.strategy;
+  const lastDecision = stratState?.lastDecision as any | null;
+  const soState      = status?.selfOptimize;
+  const leState      = status?.learningEngine;
   const incidents_ = (incidents?.incidents ?? []) as any[];
   const byType     = (incidents?.byType ?? {}) as Record<string, number>;
   const series     = (metrics?.series ?? {}) as Record<string, { value: number; timestamp: string }[]>;
@@ -509,17 +510,83 @@ export default function WarRoom() {
       </div>
 
       {/* ── Command Status row ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
 
-        {/* Mode */}
-        <div className="rounded-2xl border border-border/30 bg-card/60 backdrop-blur-xl p-4 flex flex-col gap-2 shadow-xl shadow-black/10">
-          <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Strategy Mode</span>
-          <div className="flex items-center gap-2 mt-1">
-            <ModeBadge mode={status?.strategyMode} />
+        {/* Mode + full decision context — spans 2 cols on lg */}
+        <div className="lg:col-span-2 rounded-2xl border border-border/30 bg-card/60 backdrop-blur-xl p-4 flex flex-col gap-3 shadow-xl shadow-black/10">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <span className="text-xs font-semibold uppercase tracking-widest text-muted-foreground">Strategy Mode</span>
+              <div className="flex items-center gap-2 mt-2">
+                <ModeBadge mode={status?.strategyMode} />
+                {lastDecision?.raw_desired_mode && lastDecision.raw_desired_mode !== status?.strategyMode && (
+                  <span className="text-xs font-mono text-muted-foreground">(wanted {lastDecision.raw_desired_mode.replace("_FIRST","").toLowerCase()} → suppressed)</span>
+                )}
+              </div>
+            </div>
+            <span className="text-xs text-muted-foreground font-mono text-right flex-shrink-0">
+              dwell {stratState?.cyclesInMode ?? "—"} / {stratState?.dwellRequired ?? "—"}<br/>
+              switch in {stratState?.canSwitchIn ?? "—"} cycle{stratState?.canSwitchIn !== 1 ? "s" : ""}
+            </span>
           </div>
-          <span className="text-xs text-muted-foreground font-mono">
-            dwell {stratState?.cyclesInMode ?? "—"} / {stratState?.dwellRequired ?? "—"} cycles
-          </span>
+
+          {/* Reason */}
+          {lastDecision?.reason && (
+            <div className="bg-white/3 rounded-xl px-3 py-2 border border-border/20">
+              <span className="text-xs text-muted-foreground font-semibold uppercase tracking-widest">Reason  </span>
+              <span className="text-xs font-mono text-foreground/80">{lastDecision.reason}</span>
+            </div>
+          )}
+
+          {/* Constraints */}
+          {lastDecision?.active_constraints?.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {(lastDecision.active_constraints as string[]).map((c: string) => {
+                const isWarn = c.startsWith("dwell_locked") || c.startsWith("cooldown_active");
+                const isCrit = c.startsWith("suppressed:");
+                return (
+                  <span key={c} className={cn(
+                    "px-2 py-0.5 rounded-md text-xs font-mono font-semibold border",
+                    isCrit ? "bg-red-500/15 text-red-300 border-red-500/20"
+                    : isWarn ? "bg-amber-500/15 text-amber-300 border-amber-500/20"
+                    : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+                  )}>
+                    {c}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Metric trends */}
+          {lastDecision?.decision_context && (
+            <div className="flex items-center gap-4 pt-1 border-t border-border/20">
+              {(["latency", "pending"] as const).map(key => {
+                const isLatency = key === "latency";
+                const val   = isLatency ? lastDecision.decision_context.latency_ms    : lastDecision.decision_context.pending;
+                const avg   = isLatency ? lastDecision.decision_context.latency_avg_ms : lastDecision.decision_context.pending_avg;
+                const trend = isLatency ? lastDecision.decision_context.latency_trend  : lastDecision.decision_context.pending_trend;
+                const unit  = isLatency ? "ms" : "";
+                const TrendIcon = trend === "rising" ? TrendingUp : trend === "falling" ? TrendingDown : Minus;
+                const trendColor = trend === "rising" ? "text-red-400" : trend === "falling" ? "text-emerald-400" : "text-muted-foreground";
+                return (
+                  <div key={key} className="flex items-center gap-1.5">
+                    <TrendIcon className={cn("w-3.5 h-3.5 flex-shrink-0", trendColor)} />
+                    <div>
+                      <span className="text-xs font-mono text-foreground/80 tabular-nums">{val}{unit}</span>
+                      <span className="text-xs text-muted-foreground font-mono"> (avg {avg}{unit})</span>
+                    </div>
+                    <span className="text-xs text-muted-foreground">{isLatency ? "latency" : "pending"}</span>
+                  </div>
+                );
+              })}
+              {lastDecision.decision_context.dlq_rate > 0 && (
+                <div className="flex items-center gap-1">
+                  <span className="text-xs font-mono text-amber-400">{lastDecision.decision_context.dlq_rate} dlq</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Batch size */}
