@@ -131,6 +131,15 @@ const a1State = {
   baselineLatency: 0,
 };
 
+export function getA1State() {
+  return { cooldownCycles: a1State.cooldownCycles, baselineLatency: a1State.baselineLatency };
+}
+
+export function rehydrateA1State(s: { cooldownCycles: number; baselineLatency: number }): void {
+  a1State.cooldownCycles  = s.cooldownCycles;
+  a1State.baselineLatency = s.baselineLatency;
+}
+
 function recordAction(action: string, metricBefore: number): void {
   if (memory.length >= MEM_SIZE) memory.shift();
   memory.push({ action, metricBefore, metricAfter: null });
