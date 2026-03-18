@@ -31,7 +31,7 @@ import { getStrategyMode }                                 from "./strategyEngin
 
 const BUFFER_SIZE          = 48;     // hourly slots retained (= 48 h)
 const MIN_OCCURRENCES      = 2;      // minimum past high-latency hits to flag recurring_pattern
-const CONFIDENCE_INIT      = 0.5;    // starting confidence for a newly seen hour pattern
+const CONFIDENCE_INIT      = 0.2;    // starting confidence for a newly seen hour pattern
 const CONFIDENCE_THRESHOLD = 0.3;    // below this → predictions for that hour are disabled
 const CONFIDENCE_REWARD    = 0.1;    // added when prediction was correct
 const CONFIDENCE_PENALTY   = 0.1;    // subtracted when prediction was wrong
