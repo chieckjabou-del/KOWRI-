@@ -1,7 +1,8 @@
 import app from "./app";
-import { startOutboxWorker } from "./lib/outboxWorker";
-import { initKillSwitches }  from "./lib/killSwitch";
-import { startAutopilot }    from "./lib/autopilot";
+import { startOutboxWorker }                             from "./lib/outboxWorker";
+import { initKillSwitches }                              from "./lib/killSwitch";
+import { startAutopilot }                                from "./lib/autopilot";
+import { seedLedgerBalanceSummary, installLedgerTrigger } from "./lib/ledgerBalanceSeeder";
 
 const rawPort = process.env["PORT"];
 
@@ -23,10 +24,12 @@ app.listen(port, () => {
   // Hydrate kill switch cache from DB before starting autopilot so the first
   // cycle sees operator-set state rather than the in-memory defaults.
   initKillSwitches()
+    .then(() => installLedgerTrigger())
+    .then(() => seedLedgerBalanceSummary())
     .then(() => startAutopilot())
     .catch((err) => {
-      console.error("[KillSwitch] init failed:", err);
-      // Start autopilot anyway — it reads safe in-memory defaults.
+      console.error("[Startup] init failed:", err);
+      // Start autopilot anyway — metricsCollector falls back to 0 for balance_drift.
       startAutopilot();
     });
 });

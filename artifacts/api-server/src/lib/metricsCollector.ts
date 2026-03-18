@@ -5,8 +5,9 @@
 // complete in < 1 s under normal conditions.
 //
 // Metric definitions:
-//   balance_drift   abs(SUM(credit_amount) - SUM(debit_amount)) from ledger_entries
-//                   Any non-zero value means the ledger is imbalanced.
+//   balance_drift   abs(total_credit - total_debit) from ledger_balance_summary
+//                   Single-row O(1) read; maintained by trigger on ledger_entries.
+//                   Fallback: 0 (assume balanced) when the summary row is absent.
 //   replica_lag     Seconds behind primary; 0 when no replica is configured.
 //   db_latency      Round-trip time for a SELECT 1 probe (ms).
 //   outbox_pending  Events in "pending" state waiting to be dispatched.
@@ -32,21 +33,21 @@ export async function collectMetrics(): Promise<CollectedMetrics> {
   await db.execute(sql`SELECT 1`);
   const db_latency = Date.now() - t0;
 
-  // Ledger balance + outbox stats run in parallel.
-  const [ledgerResult, outboxStats] = await Promise.all([
-    db.execute<{ credits: string; debits: string }>(sql`
-      SELECT
-        COALESCE(SUM(CAST(credit_amount  AS NUMERIC)), 0) AS credits,
-        COALESCE(SUM(CAST(debit_amount   AS NUMERIC)), 0) AS debits
-      FROM ledger_entries
+  // O(1) summary read + outbox stats run in parallel.
+  const [summaryResult, outboxStats] = await Promise.all([
+    db.execute<{ total_credit: string; total_debit: string }>(sql`
+      SELECT total_credit, total_debit
+      FROM   ledger_balance_summary
+      WHERE  id = 1
+      LIMIT  1
     `),
     getOutboxStats(),
   ]);
 
-  const row    = (ledgerResult as any).rows?.[0];
-  const credits = Number(row?.credits ?? 0);
-  const debits  = Number(row?.debits  ?? 0);
-  const balance_drift = Math.abs(credits - debits);
+  const row           = (summaryResult as any).rows?.[0];
+  const totalCredit   = Number(row?.total_credit ?? 0);
+  const totalDebit    = Number(row?.total_debit  ?? 0);
+  const balance_drift = Math.abs(totalCredit - totalDebit);
 
   // Replica lag is maintained by dbRouter's background poller — no extra query.
   const lagState    = getReplicaLagState();

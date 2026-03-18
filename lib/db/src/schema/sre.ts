@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, numeric } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, timestamp, numeric, integer } from "drizzle-orm/pg-core";
 
 // ── Kill Switches ─────────────────────────────────────────────────────────────
 // Persistent source of truth for all operational kill switches.
@@ -35,6 +35,21 @@ export const incidentsTable = pgTable("incidents", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
-export type KillSwitchRow = typeof killSwitchesTable.$inferSelect;
-export type MetricRow     = typeof metricsTable.$inferSelect;
-export type IncidentRow   = typeof incidentsTable.$inferSelect;
+// ── Ledger Balance Summary ────────────────────────────────────────────────────
+// Singleton row (id = 1) maintained by a PostgreSQL trigger on ledger_entries.
+// Replaces the O(N) SUM(credit_amount)/SUM(debit_amount) scan in metricsCollector
+// with an O(1) single-row read every autopilot cycle.
+//
+// Seeded on API server startup via lib/ledgerBalanceSeeder.ts.
+// Trigger: maintain_ledger_balance_summary() on INSERT/UPDATE/DELETE of ledger_entries.
+export const ledgerBalanceSummaryTable = pgTable("ledger_balance_summary", {
+  id:          integer("id").primaryKey(),
+  totalCredit: numeric("total_credit", { precision: 20, scale: 4 }).notNull().default("0"),
+  totalDebit:  numeric("total_debit",  { precision: 20, scale: 4 }).notNull().default("0"),
+  updatedAt:   timestamp("updated_at").notNull().defaultNow(),
+});
+
+export type KillSwitchRow           = typeof killSwitchesTable.$inferSelect;
+export type MetricRow               = typeof metricsTable.$inferSelect;
+export type IncidentRow             = typeof incidentsTable.$inferSelect;
+export type LedgerBalanceSummaryRow = typeof ledgerBalanceSummaryTable.$inferSelect;
