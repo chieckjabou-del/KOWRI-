@@ -250,6 +250,22 @@ export function rehydratePendingPrediction(p: PendingPrediction): void {
   pendingPrediction = p;
 }
 
+export function getPredictedHoursSet(): string[] {
+  return Array.from(predictedHoursSet);
+}
+
+export function rehydratePredictedHoursSet(hours: string[]): void {
+  hours.forEach((h) => predictedHoursSet.add(h));
+}
+
+export function getLastFlushedHour(): number {
+  return lastFlushedHour;
+}
+
+export function rehydrateLastFlushedHour(h: number): void {
+  lastFlushedHour = h;
+}
+
 export function rehydrateSnapshotBuffer(data: HourlySnapshot[]): void {
   snapshotBuffer.length = 0;
   snapshotBuffer.push(...data.slice(-BUFFER_SIZE));

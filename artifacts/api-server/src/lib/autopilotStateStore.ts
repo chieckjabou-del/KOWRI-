@@ -14,7 +14,7 @@ import { db }                                     from "@workspace/db";
 import { sql }                                    from "drizzle-orm";
 import { getBatchSize, setBatchSize }             from "./outboxWorker";
 import { getStrategyMode, rehydrateStrategyMode } from "./strategyEngine";
-import { getLearningEngineState, rehydrateConfidenceMap, rehydrateSnapshotBuffer, getPendingPrediction, rehydratePendingPrediction } from "./learningEngine";
+import { getLearningEngineState, rehydrateConfidenceMap, rehydrateSnapshotBuffer, getPendingPrediction, rehydratePendingPrediction, getPredictedHoursSet, rehydratePredictedHoursSet, getLastFlushedHour, rehydrateLastFlushedHour } from "./learningEngine";
 import { getA1State, rehydrateA1State }                                             from "./selfOptimizer";
 import { getGlobalEvaluatorState, rehydrateGlobalState }  from "./globalEvaluator";
 
@@ -32,7 +32,9 @@ export function writeAutopilotState(): void {
     confidenceMap:  learnState.confidenceMap,
     snapshotBuffer: learnState.snapshotBuffer,
     a1:                getA1State(),
-    pendingPrediction: getPendingPrediction(),
+    pendingPrediction:  getPendingPrediction(),
+    predictedHoursSet:  getPredictedHoursSet(),
+    lastFlushedHour:    getLastFlushedHour(),
     modeHistory:    evalState.modeHistory,
     failureCount: evalState.failureCount,
     // Store remaining cycles (relative) so the value is correct after restart
@@ -95,6 +97,14 @@ export async function rehydrateAutopilotState(): Promise<void> {
 
     if (state["pendingPrediction"] && typeof state["pendingPrediction"] === "object") {
       rehydratePendingPrediction(state["pendingPrediction"] as Parameters<typeof rehydratePendingPrediction>[0]);
+    }
+
+    if (Array.isArray(state["predictedHoursSet"])) {
+      rehydratePredictedHoursSet(state["predictedHoursSet"] as string[]);
+    }
+
+    if (typeof state["lastFlushedHour"] === "number") {
+      rehydrateLastFlushedHour(state["lastFlushedHour"] as number);
     }
 
     if (state["modeHistory"] || state["failureCount"] || state["blockedUntil"]) {
