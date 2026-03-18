@@ -251,5 +251,6 @@ export async function globalEvaluator(metrics: CollectedMetrics): Promise<void> 
     `consecutiveCycles=${consecutive} failureCount=${currentFailures}`;
 
   console.info(`[GlobalEvaluator] strategy_validation: ${result}`);
+  if (suppressionApplied === "none" && success === true) return;
   logIncident({ type: "global_evaluator", action: "strategy_validation", result });
 }
