@@ -46,6 +46,9 @@ const modeHistory:   StrategyMode[] = [];
 /** Consecutive failure count per mode.  Reset to 0 on any success. */
 const failureCount = new Map<StrategyMode, number>();
 
+/** Last result string emitted to console.  Guards against flooding identical lines. */
+let lastLoggedResult: string | null = null;
+
 // ── Global state rehydration ──────────────────────────────────────────────────
 
 export function rehydrateGlobalState(state: {
@@ -232,7 +235,10 @@ export async function globalEvaluator(metrics: CollectedMetrics): Promise<void> 
     `latencyTrend=${latTrend} pendingTrend=${pendTrend} ` +
     `consecutiveCycles=${consecutive} failureCount=${currentFailures}`;
 
-  console.info(`[GlobalEvaluator] strategy_validation: ${result}`);
+  if (result !== lastLoggedResult) {
+    console.info(`[GlobalEvaluator] strategy_validation: ${result}`);
+    lastLoggedResult = result;
+  }
   if (success === true) return; // invariant: suppressionApplied is always !== "none" when success === false
   logIncident({ type: "global_evaluator", action: "strategy_validation", result });
 }
