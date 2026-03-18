@@ -38,6 +38,9 @@ const REDUCE_FACTOR   = 0.10;       // 10% of current batch size per reduce nudg
 const REDUCE_STEP_MIN = 1;          // minimum nudge when action is ineffective
 const INCREASE_STEP   = 1;          // single-unit increase per recovery nudge
 
+// Decision A1 — evaluate-after-N-cycles window
+const A1_EVAL_CYCLES  = 3;          // cycles to wait before re-evaluating A1 effectiveness
+
 // Static threshold fallbacks (loaded from env; mirror autoHeal / rulesEngine)
 const STATIC = {
   DB_LATENCY_HIGH: Number(process.env.HEAL_DB_LATENCY_MS        ?? 800),
@@ -114,6 +117,19 @@ interface EffectivenessRecord {
 }
 
 const memory: EffectivenessRecord[] = [];
+
+// ── Decision A1 state ─────────────────────────────────────────────────────────
+// Tracks the 3-cycle evaluation window after each A1 intervention.
+//   cooldownCycles  > 0  → A1 is waiting; decremented each cycle; falls through
+//                            so Decisions B / C can still act this cycle
+//   cooldownCycles === 0 → A1 may fire (or evaluate if it just expired)
+//   baselineLatency      → latency recorded at the moment A1 last fired;
+//                            used to judge whether the reduction helped
+
+const a1State = {
+  cooldownCycles:  0,
+  baselineLatency: 0,
+};
 
 function recordAction(action: string, metricBefore: number): void {
   if (memory.length >= MEM_SIZE) memory.shift();
@@ -224,6 +240,11 @@ export function getSelfOptimizeState() {
     },
     thresholds:        computeThresholds(),
     effectivenessLog:  memory.slice(),
+    a1: {
+      cooldownCycles:  a1State.cooldownCycles,
+      baselineLatency: a1State.baselineLatency,
+      evalIn:          a1State.cooldownCycles > 0 ? `${a1State.cooldownCycles} cycles` : "ready",
+    },
   };
 }
 
@@ -284,16 +305,37 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
   // current reading is already ≥130% of the recent rolling average.  Catches
   // plateau elevations and oscillating latency that a 3-point monotone check misses.
   //
-  // Step: 5% of current batch (half of Decision A's 10%) — deliberately conservative
-  // because we are reacting to a level, not a confirmed trend.
+  // Evaluate-after-3-cycles contract:
+  //   • On fire: arm a1State cooldown (A1_EVAL_CYCLES cycles) and record baseline.
+  //   • While cooling: decrement counter each cycle; fall through to B/C (slot free).
+  //   • On expiry: evaluate — log whether latency improved; if still elevated, fire again.
+  //
+  // Step: 5% — half of Decision A.  Conservative because we react to a level,
+  //             not a confirmed trend.
   //
   // Guards:
   //   • t.hasAdaptive — avgLatency is only reliable once the 12-cycle window is full.
   //   • latency < db_latency_high — autoHeal owns everything above this.
   //   • THROUGHPUT_FIRST — same exclusion as Decision A.
-  if (
-    t.hasAdaptive                                        &&
-    metrics.db_latency > t.avgLatency * 1.3              &&
+
+  // While cooldown is active: tick down and fall through to B / C.
+  if (a1State.cooldownCycles > 0) {
+    a1State.cooldownCycles--;
+
+    // Expiry cycle — evaluate whether the previous intervention helped.
+    if (a1State.cooldownCycles === 0) {
+      const improved = metrics.db_latency <= a1State.baselineLatency * 0.9;  // ≥10% drop
+      const evalResult =
+        `a1_eval baseline=${a1State.baselineLatency}ms current=${metrics.db_latency}ms ` +
+        `improved=${improved}`;
+      console.info(`[SelfOptimize] ${evalResult}`);
+      await insertIncident({ type: "self_optimize", action: "a1_evaluation", result: evalResult });
+      // Fall through — if still elevated A1 will fire again on the next matching cycle.
+    }
+    // Do NOT consume the 1-decision slot — B and C may still act this cycle.
+  } else if (
+    t.hasAdaptive                           &&
+    metrics.db_latency > t.avgLatency * 1.3 &&
     metrics.db_latency < t.db_latency_high
   ) {
     if (getStrategyMode() === "THROUGHPUT_FIRST") return;
@@ -306,11 +348,15 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
         if (!requestBatchChange("selfOptimize:reduce_latency_avg", after)) return;
         recordAction("reduce_batch_opt", metrics.db_latency);
 
+        // Arm the evaluate window.
+        a1State.cooldownCycles  = A1_EVAL_CYCLES;
+        a1State.baselineLatency = metrics.db_latency;
+
         const result =
           `reason=latency_above_avg latency=${metrics.db_latency}ms ` +
           `avg=${t.avgLatency.toFixed(1)}ms ratio=${(metrics.db_latency / t.avgLatency).toFixed(2)}x ` +
           `decision=reduce_batch batchSize=${currentBatch}→${after} ` +
-          `mode=${getStrategyMode()} step=5pct`;
+          `mode=${getStrategyMode()} step=5pct eval_in=${A1_EVAL_CYCLES}_cycles`;
 
         console.info(`[SelfOptimize] ${result}`);
         await insertIncident({ type: "self_optimize", action: "self_optimize", result });
