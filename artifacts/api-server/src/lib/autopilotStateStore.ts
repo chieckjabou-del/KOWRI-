@@ -1,6 +1,6 @@
 // ── Autopilot State Store ──────────────────────────────────────────────────────
 //
-// Persists the 9 in-memory autopilot fields to a single `system_state` DB row
+// Persists the 11 in-memory autopilot fields to a single `system_state` DB row
 // so a restart rehydrates the learned state rather than starting blind.
 //
 // Write contract: fire-and-forget after each cycle (no await, no blocking).
