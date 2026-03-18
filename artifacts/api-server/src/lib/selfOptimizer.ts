@@ -21,7 +21,8 @@
 // ROLLBACK: remove `await selfOptimize(metrics)` from autopilot.ts; delete this file.
 
 import { CollectedMetrics }                               from "./metricsCollector";
-import { getBatchSize, setBatchSize, DEFAULT_BATCH_SIZE } from "./outboxWorker";
+import { getBatchSize, DEFAULT_BATCH_SIZE }               from "./outboxWorker";
+import { requestBatchChange }                             from "./batchController";
 import { insertIncident }                                  from "./incidentStore";
 import { getStrategyMode }                                 from "./strategyEngine";
 
@@ -262,7 +263,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
       const after = Math.max(MIN_BATCH_SIZE, currentBatch - step);
 
       if (after < currentBatch) {
-        setBatchSize(after);
+        if (!requestBatchChange("selfOptimize:reduce_latency", after)) return;
         recordAction("reduce_batch_opt", metrics.db_latency);
 
         const result =
@@ -292,7 +293,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
       const after = Math.min(DEFAULT_BATCH_SIZE, currentBatch + step);
 
       if (after > currentBatch) {
-        setBatchSize(after);
+        if (!requestBatchChange("selfOptimize:increase_latency", after)) return;
         recordAction("increase_batch_opt", metrics.db_latency);
 
         const result =
@@ -330,7 +331,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
       const after = Math.max(MIN_BATCH_SIZE, currentBatch - step);
 
       if (after < currentBatch) {
-        setBatchSize(after);
+        if (!requestBatchChange("selfOptimize:reduce_pending", after)) return;
         recordAction("reduce_batch_opt", metrics.outbox_pending);
 
         const result =

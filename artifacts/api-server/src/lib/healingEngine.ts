@@ -21,12 +21,12 @@ import { getSwitch }                            from "./killSwitch";
 import { forcePrimaryReads, pauseOutboxWorker } from "./actionExecutor";
 import {
   getBatchSize,
-  setBatchSize,
   stopOutboxWorker,
   startOutboxWorker,
   isWorkerRunning,
   DEFAULT_BATCH_SIZE,
 }                                               from "./outboxWorker";
+import { requestBatchChange }                   from "./batchController";
 
 // ── Thresholds (env-overridable) ──────────────────────────────────────────────
 
@@ -101,7 +101,7 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
   if (metrics.db_latency > DB_LATENCY_HIGH_MS && !isCooling("reduce_batch")) {
     const before = getBatchSize();
     const after  = Math.max(5, Math.floor(before * 0.5));
-    setBatchSize(after);
+    requestBatchChange("healingEngine:reduce_batch", after);
     arm("reduce_batch");
     consecutiveOkCycles = 0;   // reset recovery counter on any high-latency cycle
 
@@ -121,7 +121,7 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
       const before = getBatchSize();
       if (before < DEFAULT_BATCH_SIZE) {
         const after = Math.min(DEFAULT_BATCH_SIZE, before + BATCH_RECOVER_STEP);
-        setBatchSize(after);
+        requestBatchChange("healingEngine:increase_batch", after);
         arm("increase_batch");
         consecutiveOkCycles = 0;   // reset so next recovery waits another 3 cycles
 

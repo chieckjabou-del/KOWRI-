@@ -34,6 +34,7 @@ import { globalEvaluator }                                       from "./globalE
 import { strategyEngine }                                        from "./strategyEngine";
 import { learningEngine }                                        from "./learningEngine";
 import { selfOptimize }                                          from "./selfOptimizer";
+import { resetBatchLock }                                        from "./batchController";
 
 const POLL_MS = 5_000;
 
@@ -130,6 +131,10 @@ function applyEvaluation(ev: RuleEvaluation): void {
 // ── Main cycle ────────────────────────────────────────────────────────────────
 
 export async function runAutopilotCycle(): Promise<void> {
+  // Reset the per-cycle batch-change lock so all layers start with a clean slate.
+  // Must be the first operation — before any layer that could call requestBatchChange.
+  resetBatchLock();
+
   // Step 1 — collect metrics.  On failure, log and abort this cycle.
   let metrics;
   try {

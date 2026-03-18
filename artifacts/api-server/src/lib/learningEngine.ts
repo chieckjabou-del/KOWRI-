@@ -22,7 +22,8 @@
 // ROLLBACK: remove `await learningEngine(metrics)` from autopilot.ts; delete this file.
 
 import { CollectedMetrics }                               from "./metricsCollector";
-import { getBatchSize, setBatchSize, DEFAULT_BATCH_SIZE } from "./outboxWorker";
+import { getBatchSize, DEFAULT_BATCH_SIZE }               from "./outboxWorker";
+import { requestBatchChange }                             from "./batchController";
 import { insertIncident }                                  from "./incidentStore";
 import { getStrategyMode }                                 from "./strategyEngine";
 
@@ -254,7 +255,7 @@ export async function learningEngine(metrics: CollectedMetrics): Promise<void> {
   const after = Math.max(MIN_BATCH_SIZE, currentBatch - effectiveStep);
   if (after >= currentBatch) return;             // no room (shouldn't happen given guard above)
 
-  setBatchSize(after);
+  if (!requestBatchChange("learningEngine:predictive", after)) return;
   predictedHoursSet.add(hourKey);
   pendingPrediction = { hourOfDay, threshold: HIGH_LATENCY_MS, firedAt: Date.now() };
 
