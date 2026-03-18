@@ -279,6 +279,46 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
     return;   // max 1 decision per cycle
   }
 
+  // ── Decision A1: latency elevated above rolling average → small preemptive nudge ──
+  // Fires when Decision A did NOT fire (trend is not strictly rising) but the
+  // current reading is already ≥130% of the recent rolling average.  Catches
+  // plateau elevations and oscillating latency that a 3-point monotone check misses.
+  //
+  // Step: 5% of current batch (half of Decision A's 10%) — deliberately conservative
+  // because we are reacting to a level, not a confirmed trend.
+  //
+  // Guards:
+  //   • t.hasAdaptive — avgLatency is only reliable once the 12-cycle window is full.
+  //   • latency < db_latency_high — autoHeal owns everything above this.
+  //   • THROUGHPUT_FIRST — same exclusion as Decision A.
+  if (
+    t.hasAdaptive                                        &&
+    metrics.db_latency > t.avgLatency * 1.3              &&
+    metrics.db_latency < t.db_latency_high
+  ) {
+    if (getStrategyMode() === "THROUGHPUT_FIRST") return;
+
+    if (currentBatch > MIN_BATCH_SIZE) {
+      const step  = Math.max(REDUCE_STEP_MIN, Math.floor(currentBatch * 0.05));
+      const after = Math.max(MIN_BATCH_SIZE, currentBatch - step);
+
+      if (after < currentBatch) {
+        if (!requestBatchChange("selfOptimize:reduce_latency_avg", after)) return;
+        recordAction("reduce_batch_opt", metrics.db_latency);
+
+        const result =
+          `reason=latency_above_avg latency=${metrics.db_latency}ms ` +
+          `avg=${t.avgLatency.toFixed(1)}ms ratio=${(metrics.db_latency / t.avgLatency).toFixed(2)}x ` +
+          `decision=reduce_batch batchSize=${currentBatch}→${after} ` +
+          `mode=${getStrategyMode()} step=5pct`;
+
+        console.info(`[SelfOptimize] ${result}`);
+        await insertIncident({ type: "self_optimize", action: "self_optimize", result });
+      }
+    }
+    return;   // max 1 decision per cycle
+  }
+
   // ── Decision B: latency strictly falling AND comfortably below low threshold
   //               → gradual increase ─────────────────────────────────────────
   // Guard: batch size must have room to grow.
