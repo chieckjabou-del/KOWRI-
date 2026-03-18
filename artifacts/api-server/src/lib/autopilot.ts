@@ -39,6 +39,12 @@ import { writeAutopilotState }                                   from "./autopil
 
 const POLL_MS = 5_000;
 
+// Guards against concurrent cycle execution when a cycle outlasts the poll interval.
+// setInterval fires N+1 regardless of whether N has returned.  Under DB stress a
+// single collectMetrics call can block far longer than POLL_MS, so without this flag
+// two cycles would interleave at every await boundary on shared module-level state.
+let cycleRunning = false;
+
 // ── Action dispatch table ─────────────────────────────────────────────────────
 // Maps each AutopilotAction to the existing executor functions + the switch
 // name that guards it.  Keeps the cycle loop free of if/else chains.
@@ -132,82 +138,88 @@ function applyEvaluation(ev: RuleEvaluation): void {
 // ── Main cycle ────────────────────────────────────────────────────────────────
 
 export async function runAutopilotCycle(): Promise<void> {
-  // Reset the per-cycle batch-change lock so all layers start with a clean slate.
-  // Must be the first operation — before any layer that could call requestBatchChange.
-  resetBatchLock();
-
-  // Step 1 — collect metrics.  On failure, log and abort this cycle.
-  let metrics;
+  if (cycleRunning) return;
+  cycleRunning = true;
   try {
-    metrics = await collectMetrics();
-  } catch (err) {
-    console.error("[Autopilot] metrics collection failed — skipping cycle:", err);
-    return;
-  }
+    // Reset the per-cycle batch-change lock so all layers start with a clean slate.
+    // Must be the first operation — before any layer that could call requestBatchChange.
+    resetBatchLock();
 
-  // Step 2 — persist metrics snapshot (fire-and-forget; never blocks the cycle).
-  insertMetrics([
-    { key: "balance_drift",  value: metrics.balance_drift  },
-    { key: "replica_lag",    value: metrics.replica_lag    },
-    { key: "db_latency",     value: metrics.db_latency     },
-    { key: "outbox_pending", value: metrics.outbox_pending },
-    { key: "dlq_rate",       value: metrics.dlq_rate       },
-  ]).catch((err) => console.error("[Autopilot] metric persist failed:", err));
-
-  // Step 3 — evaluate all rules against the snapshot.
-  const evaluations = evaluateRules(metrics);
-
-  // Step 4 — apply autopilot rules.  Each rule is isolated; one failure doesn't stop others.
-  for (const ev of evaluations) {
+    // Step 1 — collect metrics.  On failure, log and abort this cycle.
+    let metrics;
     try {
-      applyEvaluation(ev);
+      metrics = await collectMetrics();
     } catch (err) {
-      console.error(`[Autopilot] unexpected error processing rule=${ev.ruleId}:`, err);
+      console.error("[Autopilot] metrics collection failed — skipping cycle:", err);
+      return;
     }
-  }
 
-  // Step 5 — run healing engine AFTER rules so protective switches are already
-  // in place before healing actions are evaluated.  Any error is isolated —
-  // it must never propagate to the caller.
-  try {
-    await autoHeal(metrics);
-  } catch (err) {
-    console.error("[Autopilot] healingEngine error:", err);
-  }
+    // Step 2 — persist metrics snapshot (fire-and-forget; never blocks the cycle).
+    insertMetrics([
+      { key: "balance_drift",  value: metrics.balance_drift  },
+      { key: "replica_lag",    value: metrics.replica_lag    },
+      { key: "db_latency",     value: metrics.db_latency     },
+      { key: "outbox_pending", value: metrics.outbox_pending },
+      { key: "dlq_rate",       value: metrics.dlq_rate       },
+    ]).catch((err) => console.error("[Autopilot] metric persist failed:", err));
 
-  // Step 6 — audit whether the active strategy mode is producing improvement.
-  // Runs BEFORE strategyEngine so that any suppression flags are visible when
-  // the mode is computed for this cycle.  Isolated — errors must never abort.
-  try {
-    await globalEvaluator(metrics);
-  } catch (err) {
-    console.error("[Autopilot] globalEvaluator error:", err);
-  }
+    // Step 3 — evaluate all rules against the snapshot.
+    const evaluations = evaluateRules(metrics);
 
-  // Step 7 — determine strategic mode (LATENCY_FIRST / THROUGHPUT_FIRST / BALANCED).
-  // Respects any suppressions set by globalEvaluator this cycle.
-  try {
-    await strategyEngine(metrics);
-  } catch (err) {
-    console.error("[Autopilot] strategyEngine error:", err);
-  }
+    // Step 4 — apply autopilot rules.  Each rule is isolated; one failure doesn't stop others.
+    for (const ev of evaluations) {
+      try {
+        applyEvaluation(ev);
+      } catch (err) {
+        console.error(`[Autopilot] unexpected error processing rule=${ev.ruleId}:`, err);
+      }
+    }
 
-  // Step 8 — run learning engine; uses current strategy mode to scale pre-adjustments.
-  try {
-    await learningEngine(metrics);
-  } catch (err) {
-    console.error("[Autopilot] learningEngine error:", err);
-  }
+    // Step 5 — run healing engine AFTER rules so protective switches are already
+    // in place before healing actions are evaluated.  Any error is isolated —
+    // it must never propagate to the caller.
+    try {
+      await autoHeal(metrics);
+    } catch (err) {
+      console.error("[Autopilot] healingEngine error:", err);
+    }
 
-  // Step 9 — run self-optimizer last; uses current strategy mode for step sizing.
-  try {
-    await selfOptimize(metrics);
-  } catch (err) {
-    console.error("[Autopilot] selfOptimizer error:", err);
-  }
+    // Step 6 — audit whether the active strategy mode is producing improvement.
+    // Runs BEFORE strategyEngine so that any suppression flags are visible when
+    // the mode is computed for this cycle.  Isolated — errors must never abort.
+    try {
+      await globalEvaluator(metrics);
+    } catch (err) {
+      console.error("[Autopilot] globalEvaluator error:", err);
+    }
 
-  // Persist state snapshot (fire-and-forget — never blocks the cycle).
-  writeAutopilotState();
+    // Step 7 — determine strategic mode (LATENCY_FIRST / THROUGHPUT_FIRST / BALANCED).
+    // Respects any suppressions set by globalEvaluator this cycle.
+    try {
+      await strategyEngine(metrics);
+    } catch (err) {
+      console.error("[Autopilot] strategyEngine error:", err);
+    }
+
+    // Step 8 — run learning engine; uses current strategy mode to scale pre-adjustments.
+    try {
+      await learningEngine(metrics);
+    } catch (err) {
+      console.error("[Autopilot] learningEngine error:", err);
+    }
+
+    // Step 9 — run self-optimizer last; uses current strategy mode for step sizing.
+    try {
+      await selfOptimize(metrics);
+    } catch (err) {
+      console.error("[Autopilot] selfOptimizer error:", err);
+    }
+
+    // Persist state snapshot (fire-and-forget — never blocks the cycle).
+    writeAutopilotState();
+  } finally {
+    cycleRunning = false;
+  }
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
