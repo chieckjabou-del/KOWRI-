@@ -98,7 +98,7 @@ function trendWindow(buf: number[]): "rising" | "falling" | "stable" {
   if (buf.length < 2) return "stable";
   const first = buf[0];
   const last  = buf[buf.length - 1];
-  const denom = Math.max(first, 0.001);
+  const denom = Math.max(first, 1);
   const delta = (last - first) / denom;
   if (delta >  TREND_THRESHOLD) return "rising";
   if (delta < -TREND_THRESHOLD) return "falling";
