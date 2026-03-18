@@ -38,6 +38,7 @@ import insurancePoolsRouter   from "./insurancePools";
 import savingsRouter          from "./savings";
 import diasporaRouter         from "./diaspora";
 import creatorEconomyRouter   from "./creatorEconomy";
+import warroomRouter           from "./warroom";
 
 const router: IRouter = Router();
 
@@ -80,5 +81,6 @@ router.use("/pools/insurance",     insurancePoolsRouter);
 router.use("/savings",             savingsRouter);
 router.use("/diaspora",            diasporaRouter);
 router.use("/creator",             creatorEconomyRouter);
+router.use("/warroom",             warroomRouter);
 
 export default router;
