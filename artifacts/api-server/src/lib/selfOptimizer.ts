@@ -410,7 +410,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
     if (
       metrics.outbox_pending > t.pending_high * pendFraction &&
       metrics.dlq_rate       > t.dlq_spike    * 0.5         &&
-      metrics.db_latency     < t.db_latency_low             &&
+      metrics.db_latency     < t.db_latency_high             &&
       currentBatch           > MIN_BATCH_SIZE
     ) {
       const step  = reduceStep();
