@@ -150,7 +150,7 @@ function flushAccumulator(currentLatency: number): void {
   // per clock-hour change, even if flushAccumulator is somehow called twice.
   const currentHour = new Date().getHours();
   if (currentHour !== lastFlushedHour) {
-    evaluatePendingPrediction(currentLatency);
+    evaluatePendingPrediction(avgLatency);
     lastFlushedHour = currentHour;
   }
 
