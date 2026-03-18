@@ -86,6 +86,9 @@ let pendingPrediction: PendingPrediction | null = null;
 /** Set of "YYYY-MM-DDTHH" strings; prevents double-firing within the same clock hour. */
 const predictedHoursSet = new Set<string>();
 
+/** Last wall-clock hour at which a pending prediction was evaluated. */
+let lastFlushedHour = new Date().getHours();
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function nowParts(): { hourOfDay: number; dateStr: string; hourKey: string } {
@@ -114,7 +117,7 @@ function adjustConfidence(hourOfDay: number, delta: number): void {
 
 // ── Accumulator flush ─────────────────────────────────────────────────────────
 
-function flushAccumulator(): void {
+function flushAccumulator(currentLatency: number): void {
   if (!accumulator || accumulator.count === 0) return;
 
   const { hourOfDay, dateStr, sumLat, sumPend, sumDlq, count } = accumulator;
@@ -141,6 +144,15 @@ function flushAccumulator(): void {
   }
 
   accumulator = null;
+
+  // Evaluate any pending prediction at the hour boundary, where the full hour
+  // of data is available.  Gated on lastFlushedHour so it fires at most once
+  // per clock-hour change, even if flushAccumulator is somehow called twice.
+  const currentHour = new Date().getHours();
+  if (currentHour !== lastFlushedHour) {
+    evaluatePendingPrediction(currentLatency);
+    lastFlushedHour = currentHour;
+  }
 
   // Clean predictedHoursSet: remove keys older than 48 h.
   const cutoff = Date.now() - 48 * 60 * 60 * 1000;
@@ -232,26 +244,26 @@ export function rehydrateSnapshotBuffer(data: HourlySnapshot[]): void {
 export async function learningEngine(metrics: CollectedMetrics): Promise<void> {
   const { hourOfDay, dateStr, hourKey } = nowParts();
 
-  // Step 1 — evaluate any prediction we made last cycle BEFORE processing new data.
-  evaluatePendingPrediction(metrics.db_latency);
-
-  // Step 2 — if accumulator is for a different hour, flush it first.
+  // Step 1 — if accumulator is for a different hour, flush it first.
+  // Prediction evaluation (if one is pending) fires inside flushAccumulator at
+  // the hour boundary, using data that reflects the full predicted hour rather
+  // than the next cycle's 5-second snapshot.
   if (accumulator && (accumulator.hourOfDay !== hourOfDay || accumulator.dateStr !== dateStr)) {
-    flushAccumulator();
+    flushAccumulator(metrics.db_latency);
   }
 
-  // Step 3 — ensure accumulator exists for the current hour.
+  // Step 2 — ensure accumulator exists for the current hour.
   if (!accumulator) {
     accumulator = { hourOfDay, dateStr, sumLat: 0, sumPend: 0, sumDlq: 0, count: 0 };
   }
 
-  // Step 4 — accumulate this cycle's metrics.
+  // Step 3 — accumulate this cycle's metrics.
   accumulator.sumLat  += metrics.db_latency;
   accumulator.sumPend += metrics.outbox_pending;
   accumulator.sumDlq  += metrics.dlq_rate;
   accumulator.count   += 1;
 
-  // Step 5 — check whether the current hour has a recurring pattern.
+  // Step 4 — check whether the current hour has a recurring pattern.
   //          Need at least one completed hour in the buffer before predicting.
   if (snapshotBuffer.length === 0) return;
 
@@ -262,7 +274,7 @@ export async function learningEngine(metrics: CollectedMetrics): Promise<void> {
   if (confidence < CONFIDENCE_THRESHOLD) return;  // confidence too low — predictions disabled
   if (predictedHoursSet.has(hourKey)) return;   // already adjusted this hour
 
-  // Step 6 — make the predictive pre-adjustment.
+  // Step 5 — make the predictive pre-adjustment.
   const currentBatch = getBatchSize();
   if (currentBatch <= MIN_BATCH_SIZE) return;   // already at floor — nothing to reduce
 
