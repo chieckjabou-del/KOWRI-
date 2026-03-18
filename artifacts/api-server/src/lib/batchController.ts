@@ -19,7 +19,8 @@
 
 import { setBatchSize } from "./outboxWorker";
 
-let batchLocked = false;
+let lockedBy:  string | null = null;
+let skipCount: number        = 0;
 
 /**
  * Attempt to change the batch size this cycle.
@@ -30,12 +31,14 @@ let batchLocked = false;
  *          adjusted batch size this cycle.
  */
 export function requestBatchChange(source: string, newSize: number): boolean {
-  if (batchLocked) {
+  if (lockedBy !== null) {
+    skipCount++;
     console.info(`[BatchController] ${source} skipped — batch already adjusted this cycle`);
     return false;
   }
 
-  batchLocked = true;
+  lockedBy  = source;
+  skipCount = 0;
   setBatchSize(newSize);
   return true;
 }
@@ -44,5 +47,13 @@ export function requestBatchChange(source: string, newSize: number): boolean {
  * Reset the per-cycle lock.  Called once at the top of each autopilot cycle.
  */
 export function resetBatchLock(): void {
-  batchLocked = false;
+  lockedBy  = null;
+  skipCount = 0;
+}
+
+/**
+ * Read-only snapshot for observability — zero lock-state changes.
+ */
+export function getBatchControllerState(): { lockedBy: string | null; skipsThisCycle: number } {
+  return { lockedBy, skipsThisCycle: skipCount };
 }

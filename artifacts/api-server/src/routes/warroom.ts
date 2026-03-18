@@ -10,6 +10,7 @@ import { getSelfOptimizeState }     from "../lib/selfOptimizer";
 import { getLearningEngineState }   from "../lib/learningEngine";
 import { getAutopilotState }        from "../lib/autopilot";
 import { getCooldownState }         from "../lib/healingEngine";
+import { getBatchControllerState }  from "../lib/batchController";
 
 const router = Router();
 
@@ -114,10 +115,11 @@ router.get("/incidents", async (req, res, next) => {
 router.get("/live", (_req, res) => {
   const { confidenceMap } = getLearningEngineState();
   res.json({
-    batchSize:     getBatchSize(),
-    mode:          getStrategyMode(),
+    batchSize:      getBatchSize(),
+    mode:           getStrategyMode(),
     confidenceMap,
-    updatedAt:     new Date().toISOString(),
+    batchController: getBatchControllerState(),
+    updatedAt:      new Date().toISOString(),
   });
 });
 
