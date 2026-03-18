@@ -69,6 +69,8 @@ const PENDING_HIGH    = Number(process.env.STRATEGY_PENDING_HIGH     ?? 300);
 
 /** Minimum relative change (+/-) to be called a trend (5 %). */
 const TREND_THRESHOLD = 0.05;
+/** Minimum absolute change (ms) before a rising trend is reported — mirrors globalEvaluator. */
+const MIN_ABS_DELTA_TREND_MS = 2;
 /** Rolling window size for local trend / avg computation. */
 const TREND_WINDOW = 3;
 
@@ -100,7 +102,8 @@ function trendWindow(buf: number[]): "rising" | "falling" | "stable" {
   const last  = buf[buf.length - 1];
   const denom = Math.max(first, 1);
   const delta = (last - first) / denom;
-  if (delta >  TREND_THRESHOLD) return "rising";
+  if (Math.abs(last - first) >= MIN_ABS_DELTA_TREND_MS
+      && delta >  TREND_THRESHOLD) return "rising";
   if (delta < -TREND_THRESHOLD) return "falling";
   return "stable";
 }
