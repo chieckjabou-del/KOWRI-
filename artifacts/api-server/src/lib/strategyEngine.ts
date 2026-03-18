@@ -27,7 +27,7 @@
 // ROLLBACK: remove the step-7 block from autopilot.ts; delete this file.
 
 import { CollectedMetrics }  from "./metricsCollector";
-import { insertIncident }    from "./incidentStore";
+import { logIncident }       from "./incidentStore";
 import { isModeSuppressed }  from "./globalEvaluator";
 import { getCooldownState }  from "./healingEngine";   // safe: healingEngine never imports strategyEngine
 
@@ -266,7 +266,7 @@ export async function strategyEngine(metrics: CollectedMetrics): Promise<void> {
       `constraints=[${constraints.join(",")}]`;
 
     console.info(`[StrategyEngine] mode_switch: ${result}`);
-    await insertIncident({ type: "strategy_engine", action: "mode_switch", result });
+    logIncident({ type: "strategy_engine", action: "mode_switch", result });
   }
 
   // Always increment regardless of whether a switch happened.
