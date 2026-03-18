@@ -237,8 +237,8 @@ export function getLearningEngineState() {
   // are included (hours the engine has never seen are omitted).
   const hourlyPredictions: Record<number, { active: boolean; confidence: number }> = {};
   for (let h = 0; h < 24; h++) {
-    const conf = getConfidence(h);
-    if (conf > 0) {
+    if (confidenceMap.has(h)) {
+      const conf = confidenceMap.get(h)!;
       hourlyPredictions[h] = { active: conf >= CONFIDENCE_THRESHOLD, confidence: conf };
     }
   }

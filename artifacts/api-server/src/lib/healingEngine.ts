@@ -67,7 +67,8 @@ export function getCooldownState(): Record<string, { coolsDownAt: number; remain
 // Resets to 0 on any high-latency cycle so recovery only happens after a
 // sustained healthy window — not after a single lucky probe.
 
-let consecutiveOkCycles = 0;
+let consecutiveOkCycles    = 0;
+let transactionsProtected  = 0;
 
 // ── Stuck-pending detector (2-cycle window) ───────────────────────────────────
 // pendingHistory holds the pending counts from [cycle-2, cycle-1].
@@ -103,7 +104,8 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
     const after  = Math.max(5, Math.floor(before * 0.5));
     requestBatchChange("healingEngine:reduce_batch", after);
     arm("reduce_batch");
-    consecutiveOkCycles = 0;   // reset recovery counter on any high-latency cycle
+    consecutiveOkCycles    = 0;   // reset recovery counter on any high-latency cycle
+    transactionsProtected += before; // batch size that was active when pressure was shed
 
     const result = `batchSize=${before}→${after} db_latency=${metrics.db_latency}ms`;
     console.warn(`[HealingEngine] reduce_batch: ${result}`);
@@ -199,4 +201,10 @@ export async function autoHeal(metrics: CollectedMetrics): Promise<void> {
     }
     // sw.state !== "ENABLED": already paused — do nothing, no incident logged.
   }
+}
+
+// ── Observability ─────────────────────────────────────────────────────────────
+
+export function getHealingImpact(): { transactionsProtected: number } {
+  return { transactionsProtected };
 }

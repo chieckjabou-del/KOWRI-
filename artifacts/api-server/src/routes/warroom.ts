@@ -9,10 +9,23 @@ import { getGlobalEvaluatorState }  from "../lib/globalEvaluator";
 import { getSelfOptimizeState }     from "../lib/selfOptimizer";
 import { getLearningEngineState }   from "../lib/learningEngine";
 import { getAutopilotState }        from "../lib/autopilot";
-import { getCooldownState }         from "../lib/healingEngine";
+import { getCooldownState, getHealingImpact } from "../lib/healingEngine";
 import { getBatchControllerState }  from "../lib/batchController";
 
 const router = Router();
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function humanDuration(ms: number): string {
+  const s = Math.floor(ms / 1_000);
+  if (s < 60)    return `${s} second${s === 1 ? "" : "s"}`;
+  const m = Math.floor(s / 60);
+  if (m < 60)    return `${m} minute${m === 1 ? "" : "s"}`;
+  const h = Math.floor(m / 60);
+  if (h < 24)    return `${h} hour${h === 1 ? "" : "s"}`;
+  const d = Math.floor(h / 24);
+  return `${d} day${d === 1 ? "" : "s"}`;
+}
 
 // ── /warroom/status ───────────────────────────────────────────────────────────
 // Returns all live in-memory engine state plus last incident and stability flag.
@@ -109,18 +122,56 @@ router.get("/incidents", async (req, res, next) => {
 });
 
 // ── /warroom/live ─────────────────────────────────────────────────────────────
-// Minimal in-memory-only snapshot: batchSize, mode, confidenceMap.
-// Zero DB queries — purpose-built for tight polling intervals or external tools
-// that only need current decision state without full engine telemetry.
-router.get("/live", (_req, res) => {
-  const { confidenceMap } = getLearningEngineState();
-  res.json({
-    batchSize:      getBatchSize(),
-    mode:           getStrategyMode(),
-    confidenceMap,
-    batchController: getBatchControllerState(),
-    updatedAt:      new Date().toISOString(),
-  });
+// Fast decision-state snapshot plus business impact summary.
+// One DB query (incidents auto-resolved count); all other fields are in-memory.
+router.get("/live", async (_req, res, next) => {
+  try {
+    const { confidenceMap, predictedHoursCount, hourlyPredictions } = getLearningEngineState();
+
+    // Single DB query: count auto-resolved incidents (recover:* actions that succeeded).
+    const incidentsAutoResolved = await db
+      .select({ count: sql<number>`COUNT(*)::int` })
+      .from(incidentsTable)
+      .where(sql`action LIKE 'recover:%' AND result = 'recovered'`)
+      .then(rows => Number(rows[0]?.count ?? 0));
+
+    // FORCED_OFF switches represent currently active manual interventions.
+    const switches     = getAllSwitches();
+    const forcedOff    = switches.filter(s => s.state === "FORCED_OFF");
+    const manualInterventionsRequired = forcedOff.length;
+
+    // Running accumulator maintained by healingEngine: sum of batch sizes shed
+    // via emergency reduce_batch instead of firing STOP_TRANSFERS.
+    const { transactionsProtected: estimatedTransactionsProtected } = getHealingImpact();
+
+    // Human-readable time since the most recent manual intervention was set.
+    // "never required" when all switches are currently ENABLED or TRIGGERED (auto-managed).
+    let uptimeSinceLastManualIntervention: string;
+    if (forcedOff.length === 0) {
+      uptimeSinceLastManualIntervention = "never required";
+    } else {
+      const mostRecentFiredAt = Math.max(...forcedOff.map(s => s.firedAt));
+      uptimeSinceLastManualIntervention =
+        `${humanDuration(Date.now() - mostRecentFiredAt)} ago` +
+        ` (${forcedOff.map(s => s.name).join(", ")} still active)`;
+    }
+
+    res.json({
+      batchSize:       getBatchSize(),
+      mode:            getStrategyMode(),
+      confidenceMap,
+      predictedHoursCount,
+      hourlyPredictions,
+      batchController: getBatchControllerState(),
+      impact: {
+        incidentsAutoResolved,
+        manualInterventionsRequired,
+        estimatedTransactionsProtected,
+        uptimeSinceLastManualIntervention,
+      },
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (err) { next(err); }
 });
 
 // ── /warroom/snapshot ─────────────────────────────────────────────────────────
