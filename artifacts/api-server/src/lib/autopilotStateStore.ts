@@ -104,7 +104,7 @@ export async function rehydrateAutopilotState(): Promise<void> {
         blockedUntil: stale ? {} : ((state["blockedUntil"] as Record<string, number> | undefined) ?? {}),
       });
       if (stale) {
-        console.info("[StateStore] stale state row (>10 min) — modeHistory/blockedUntil/failureCount discarded");
+        console.info("[StateStore] stale state row (>10 min) — modeHistory/blockedUntil/failureCount/a1State discarded");
       }
     }
 
