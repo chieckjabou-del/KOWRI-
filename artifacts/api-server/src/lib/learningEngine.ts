@@ -102,7 +102,11 @@ let lastFlushedHour = new Date().getHours();
 function nowParts(): { hourOfDay: number; dateStr: string; hourKey: string } {
   const now        = new Date();
   const hourOfDay  = now.getHours();
-  const dateStr    = now.toISOString().slice(0, 10);          // "YYYY-MM-DD"
+  const dateStr    = [                                         // "YYYY-MM-DD" local
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
   const hourKey    = `${dateStr}T${String(hourOfDay).padStart(2, "0")}`;
   return { hourOfDay, dateStr, hourKey };
 }
