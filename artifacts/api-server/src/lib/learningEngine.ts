@@ -210,7 +210,13 @@ export function getLearningEngineState() {
     pendingPrediction,
     patterns,
     confidenceMap:     Object.fromEntries(confidenceMap),
+    snapshotBuffer:    snapshotBuffer.slice(),
   };
+}
+
+export function rehydrateSnapshotBuffer(data: HourlySnapshot[]): void {
+  snapshotBuffer.length = 0;
+  snapshotBuffer.push(...data.slice(-BUFFER_SIZE));
 }
 
 // ── Main function ─────────────────────────────────────────────────────────────

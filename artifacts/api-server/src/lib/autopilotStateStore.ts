@@ -14,7 +14,7 @@ import { db }                                     from "@workspace/db";
 import { sql }                                    from "drizzle-orm";
 import { getBatchSize, setBatchSize }             from "./outboxWorker";
 import { getStrategyMode, rehydrateStrategyMode } from "./strategyEngine";
-import { getLearningEngineState, rehydrateConfidenceMap } from "./learningEngine";
+import { getLearningEngineState, rehydrateConfidenceMap, rehydrateSnapshotBuffer } from "./learningEngine";
 import { getGlobalEvaluatorState, rehydrateGlobalState }  from "./globalEvaluator";
 
 const STATE_KEY = "autopilot";
@@ -28,8 +28,9 @@ export function writeAutopilotState(): void {
   const value = {
     batchSize:    getBatchSize(),
     mode:         getStrategyMode(),
-    confidenceMap: learnState.confidenceMap,
-    modeHistory:  evalState.modeHistory,
+    confidenceMap:  learnState.confidenceMap,
+    snapshotBuffer: learnState.snapshotBuffer,
+    modeHistory:    evalState.modeHistory,
     failureCount: evalState.failureCount,
     // Store remaining cycles (relative) so the value is correct after restart
     // regardless of how many cycles have elapsed in the previous run.
@@ -75,6 +76,10 @@ export async function rehydrateAutopilotState(): Promise<void> {
 
     if (state["confidenceMap"] && typeof state["confidenceMap"] === "object") {
       rehydrateConfidenceMap(state["confidenceMap"] as Record<string, number>);
+    }
+
+    if (Array.isArray(state["snapshotBuffer"]) && state["snapshotBuffer"].length) {
+      rehydrateSnapshotBuffer(state["snapshotBuffer"] as Parameters<typeof rehydrateSnapshotBuffer>[0]);
     }
 
     if (state["modeHistory"] || state["failureCount"] || state["blockedUntil"]) {
