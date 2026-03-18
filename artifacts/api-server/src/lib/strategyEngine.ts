@@ -255,6 +255,17 @@ export async function strategyEngine(metrics: CollectedMetrics): Promise<void> {
     decided_at: new Date().toISOString(),
   };
 
+  // Step 3b — log suppression to incidents table so post-mortem queries are
+  // complete without cross-referencing the War Room snapshot.
+  if (decision.suppressed) {
+    const attemptedMode = decision.rawMode;
+    logIncident({
+      type:   "strategy_engine",
+      action: "mode_suppressed",
+      result: `${attemptedMode} → BALANCED`,
+    });
+  }
+
   // Step 4 — switch mode if the dwell requirement is met.
   if (decision.finalMode !== currentMode && cyclesInMode >= MIN_MODE_DWELL) {
     const previous = currentMode;
