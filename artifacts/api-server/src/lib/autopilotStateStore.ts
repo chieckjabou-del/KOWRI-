@@ -89,7 +89,7 @@ export async function rehydrateAutopilotState(): Promise<void> {
       rehydrateSnapshotBuffer(state["snapshotBuffer"] as Parameters<typeof rehydrateSnapshotBuffer>[0]);
     }
 
-    if (state["a1"] && typeof state["a1"] === "object") {
+    if (!stale && state["a1"] && typeof state["a1"] === "object") {
       rehydrateA1State(state["a1"] as Parameters<typeof rehydrateA1State>[0]);
     }
 
