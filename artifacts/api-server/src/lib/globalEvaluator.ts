@@ -33,7 +33,8 @@ const MIN_EVAL_CYCLES = 3;    // mode must be active this many cycles before eva
 const BLOCK_SHORT     = 1;    // cycles to suppress on 1st failure
 const BLOCK_LONG      = 5;    // cycles to suppress on 2nd (repeated) failure
 const FAILURE_THRESHOLD = 2;  // consecutive failures before long suppression
-const BALANCED_NOISE  = 0.10; // 10% worsening tolerance for BALANCED success check
+const BALANCED_NOISE    = 0.10; // 10% worsening tolerance for BALANCED success check
+const MIN_ABS_DELTA_MS  = 2;   // minimum absolute change (ms) before worsening is counted
 
 // ── State ─────────────────────────────────────────────────────────────────────
 // cycleCount and blockedUntil live in suppressionRegistry (breaks the former
@@ -110,7 +111,11 @@ function netImproved(values: number[]): boolean {
 /** Net worsening: last value > first value by more than BALANCED_NOISE fraction. */
 function netWorsened(values: number[]): boolean {
   if (values.length < 2) return false;
-  return values[values.length - 1] > values[0] * (1 + BALANCED_NOISE);
+  const last = values.length - 1;
+  return (
+    Math.abs(values[last] - values[0]) >= MIN_ABS_DELTA_MS &&
+    values[last] > values[0] * (1 + BALANCED_NOISE)
+  );
 }
 
 /** Human-readable trend label used in incident result strings. */
