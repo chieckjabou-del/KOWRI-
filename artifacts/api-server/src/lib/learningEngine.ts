@@ -31,7 +31,7 @@ import { getStrategyMode }                                 from "./strategyEngin
 
 const BUFFER_SIZE          = 48;     // hourly slots retained (= 48 h)
 const MIN_OCCURRENCES      = 2;      // minimum past high-latency hits to flag recurring_pattern
-const CONFIDENCE_INIT      = 0.2;    // starting confidence for a newly seen hour pattern
+const CONFIDENCE_INIT      = 0.35;   // starting confidence for a newly seen hour pattern
 const CONFIDENCE_THRESHOLD = 0.3;    // below this → predictions for that hour are disabled
 const CONFIDENCE_REWARD    = 0.1;    // added when prediction was correct
 const CONFIDENCE_PENALTY   = 0.1;    // subtracted when prediction was wrong
@@ -45,8 +45,8 @@ const HIGH_LATENCY_MS = Number(process.env.LEARN_HIGH_LATENCY_MS ?? 200);
 // ── Startup validation ────────────────────────────────────────────────────────
 
 console.assert(
-  CONFIDENCE_INIT < CONFIDENCE_THRESHOLD,
-  `[learningEngine] CONFIDENCE_INIT (${CONFIDENCE_INIT}) must be < CONFIDENCE_THRESHOLD (${CONFIDENCE_THRESHOLD}) — predictions fire from cycle 1 on every hour with no historical evidence`,
+  CONFIDENCE_INIT > CONFIDENCE_THRESHOLD,
+  `[learningEngine] CONFIDENCE_INIT (${CONFIDENCE_INIT}) must be > CONFIDENCE_THRESHOLD (${CONFIDENCE_THRESHOLD}) — bootstrap deadlock: predictions never fire so confidence never rises`,
 );
 console.log(`[learningEngine] init=${CONFIDENCE_INIT} threshold=${CONFIDENCE_THRESHOLD}`);
 
