@@ -166,7 +166,7 @@ function flushAccumulator(currentLatency: number): void {
   const cutoff = Date.now() - 48 * 60 * 60 * 1000;
   for (const key of predictedHoursSet) {
     // Key format: "YYYY-MM-DDTHH"
-    const ts = new Date(`${key.slice(0, 10)}T${key.slice(11, 13)}:00:00Z`).getTime();
+    const ts = new Date(`${key.slice(0, 10)}T${key.slice(11, 13)}:00:00`).getTime();
     if (ts < cutoff) predictedHoursSet.delete(key);
   }
 }
