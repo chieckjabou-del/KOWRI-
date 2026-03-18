@@ -14,7 +14,7 @@ import { db }                                     from "@workspace/db";
 import { sql }                                    from "drizzle-orm";
 import { getBatchSize, setBatchSize }             from "./outboxWorker";
 import { getStrategyMode, rehydrateStrategyMode } from "./strategyEngine";
-import { getLearningEngineState, rehydrateConfidenceMap, rehydrateSnapshotBuffer } from "./learningEngine";
+import { getLearningEngineState, rehydrateConfidenceMap, rehydrateSnapshotBuffer, getPendingPrediction, rehydratePendingPrediction } from "./learningEngine";
 import { getA1State, rehydrateA1State }                                             from "./selfOptimizer";
 import { getGlobalEvaluatorState, rehydrateGlobalState }  from "./globalEvaluator";
 
@@ -31,7 +31,8 @@ export function writeAutopilotState(): void {
     mode:         getStrategyMode(),
     confidenceMap:  learnState.confidenceMap,
     snapshotBuffer: learnState.snapshotBuffer,
-    a1:             getA1State(),
+    a1:                getA1State(),
+    pendingPrediction: getPendingPrediction(),
     modeHistory:    evalState.modeHistory,
     failureCount: evalState.failureCount,
     // Store remaining cycles (relative) so the value is correct after restart
@@ -86,6 +87,10 @@ export async function rehydrateAutopilotState(): Promise<void> {
 
     if (state["a1"] && typeof state["a1"] === "object") {
       rehydrateA1State(state["a1"] as Parameters<typeof rehydrateA1State>[0]);
+    }
+
+    if (state["pendingPrediction"] && typeof state["pendingPrediction"] === "object") {
+      rehydratePendingPrediction(state["pendingPrediction"] as Parameters<typeof rehydratePendingPrediction>[0]);
     }
 
     if (state["modeHistory"] || state["failureCount"] || state["blockedUntil"]) {

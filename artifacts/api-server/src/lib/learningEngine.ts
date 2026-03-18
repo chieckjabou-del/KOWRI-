@@ -214,6 +214,14 @@ export function getLearningEngineState() {
   };
 }
 
+export function getPendingPrediction(): PendingPrediction | null {
+  return pendingPrediction ?? null;
+}
+
+export function rehydratePendingPrediction(p: PendingPrediction): void {
+  pendingPrediction = p;
+}
+
 export function rehydrateSnapshotBuffer(data: HourlySnapshot[]): void {
   snapshotBuffer.length = 0;
   snapshotBuffer.push(...data.slice(-BUFFER_SIZE));
