@@ -324,7 +324,7 @@ export async function selfOptimize(metrics: CollectedMetrics): Promise<void> {
 
     // Expiry cycle — evaluate whether the previous intervention helped.
     if (a1State.cooldownCycles === 0) {
-      const improved = metrics.db_latency <= a1State.baselineLatency * 0.9;  // ≥10% drop
+      const improved = metrics.db_latency <= t.avgLatency * 1.3;  // trigger condition now false
       const evalResult =
         `a1_eval baseline=${a1State.baselineLatency}ms current=${metrics.db_latency}ms ` +
         `improved=${improved}`;
