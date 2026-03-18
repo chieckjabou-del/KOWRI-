@@ -17,10 +17,12 @@
 // ROLLBACK: remove resetBatchLock() from autopilot.ts; revert each layer to
 //           call setBatchSize() directly; delete this file.
 
-import { setBatchSize } from "./outboxWorker";
+import { getBatchSize, setBatchSize } from "./outboxWorker";
 
-let lockedBy:  string | null = null;
-let skipCount: number        = 0;
+let lockedBy:    string | null = null;
+let skipCount:   number        = 0;
+let batchBefore: number | null = null;
+let batchAfter:  number | null = null;
 
 /**
  * Attempt to change the batch size this cycle.
@@ -37,8 +39,10 @@ export function requestBatchChange(source: string, newSize: number): boolean {
     return false;
   }
 
-  lockedBy  = source;
-  skipCount = 0;
+  batchBefore = getBatchSize();
+  batchAfter  = newSize;
+  lockedBy    = source;
+  skipCount   = 0;
   setBatchSize(newSize);
   return true;
 }
@@ -47,13 +51,20 @@ export function requestBatchChange(source: string, newSize: number): boolean {
  * Reset the per-cycle lock.  Called once at the top of each autopilot cycle.
  */
 export function resetBatchLock(): void {
-  lockedBy  = null;
-  skipCount = 0;
+  lockedBy    = null;
+  skipCount   = 0;
+  batchBefore = null;
+  batchAfter  = null;
 }
 
 /**
  * Read-only snapshot for observability — zero lock-state changes.
  */
-export function getBatchControllerState(): { lockedBy: string | null; skipsThisCycle: number } {
-  return { lockedBy, skipsThisCycle: skipCount };
+export function getBatchControllerState(): {
+  lockedBy:      string | null;
+  skipsThisCycle: number;
+  batchBefore:   number | null;
+  batchAfter:    number | null;
+} {
+  return { lockedBy, skipsThisCycle: skipCount, batchBefore, batchAfter };
 }
