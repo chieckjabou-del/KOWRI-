@@ -231,14 +231,28 @@ export function getLearningEngineState() {
       patterns[h] = { ...p, confidence: getConfidence(h) };
     }
   }
+
+  // Explicit per-hour active/disabled map — readable by a non-technical operator
+  // without knowing CONFIDENCE_THRESHOLD.  Only hours with any confidence score
+  // are included (hours the engine has never seen are omitted).
+  const hourlyPredictions: Record<number, { active: boolean; confidence: number }> = {};
+  for (let h = 0; h < 24; h++) {
+    const conf = getConfidence(h);
+    if (conf > 0) {
+      hourlyPredictions[h] = { active: conf >= CONFIDENCE_THRESHOLD, confidence: conf };
+    }
+  }
+
   return {
-    snapshotsStored:   snapshotBuffer.length,
-    bufferCapacity:    BUFFER_SIZE,
-    accumulatorActive: accumulator !== null,
+    snapshotsStored:     snapshotBuffer.length,
+    bufferCapacity:      BUFFER_SIZE,
+    accumulatorActive:   accumulator !== null,
     pendingPrediction,
     patterns,
-    confidenceMap:     Object.fromEntries(confidenceMap),
-    snapshotBuffer:    snapshotBuffer.slice(),
+    confidenceMap:       Object.fromEntries(confidenceMap),
+    snapshotBuffer:      snapshotBuffer.slice(),
+    predictedHoursCount: predictedHoursSet.size,
+    hourlyPredictions,
   };
 }
 

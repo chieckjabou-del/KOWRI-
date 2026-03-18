@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { incidentsTable, metricsTable } from "@workspace/db";
 import { desc, sql } from "drizzle-orm";
 import { getAllSwitches }           from "../lib/killSwitch";
-import { getBatchSize }             from "../lib/outboxWorker";
+import { getBatchSize, DEFAULT_BATCH_SIZE } from "../lib/outboxWorker";
 import { getStrategyMode, getStrategyState }   from "../lib/strategyEngine";
 import { getGlobalEvaluatorState }  from "../lib/globalEvaluator";
 import { getSelfOptimizeState }     from "../lib/selfOptimizer";
@@ -196,6 +196,49 @@ router.get("/snapshot", async (req, res, next) => {
       metrics:   metricsData,
       incidents: incidentData,
       fetchedAt: new Date().toISOString(),
+    });
+  } catch (err) { next(err); }
+});
+
+// ── /warroom/impact ───────────────────────────────────────────────────────────
+// Business impact summary for non-technical operators.
+// Answers: how many times did the autopilot self-correct, and what is the cost
+// of any remaining manual interventions?
+router.get("/impact", async (_req, res, next) => {
+  try {
+    const [autoResolved, totalFired] = await Promise.all([
+      db.select({ count: sql<number>`COUNT(*)::int` })
+        .from(incidentsTable)
+        .where(sql`action LIKE 'recover:%' AND result = 'recovered'`)
+        .then(rows => Number(rows[0]?.count ?? 0)),
+      db.select({ count: sql<number>`COUNT(*)::int` })
+        .from(incidentsTable)
+        .where(sql`result = 'fired'`)
+        .then(rows => Number(rows[0]?.count ?? 0)),
+    ]);
+
+    const switches = getAllSwitches() as Record<string, { state: string; updatedAt?: string }>;
+    const forcedOff = Object.entries(switches)
+      .filter(([, s]) => s.state === "FORCED_OFF")
+      .map(([name]) => name);
+
+    // Rough lower-bound: each auto-recovery prevented at least one full batch
+    // worth of transactions from being blocked for the recovery window.
+    const estimatedTransactionsProtected = autoResolved * DEFAULT_BATCH_SIZE;
+
+    const uptimeSinceLastManualIntervention =
+      forcedOff.length === 0
+        ? "No manual interventions active — all switches are operator-clear"
+        : `${forcedOff.length} switch(es) currently FORCED_OFF (manual lift required): ${forcedOff.join(", ")}`;
+
+    res.json({
+      incidentsAutoResolved:              autoResolved,
+      manualInterventionsRequired:        forcedOff.length,
+      forcedOffSwitches:                  forcedOff,
+      estimatedTransactionsProtected,
+      uptimeSinceLastManualIntervention,
+      totalKillSwitchFireEvents:          totalFired,
+      fetchedAt:                          new Date().toISOString(),
     });
   } catch (err) { next(err); }
 });

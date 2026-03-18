@@ -45,6 +45,13 @@ const POLL_MS = 5_000;
 // two cycles would interleave at every await boundary on shared module-level state.
 let cycleRunning = false;
 
+// ── Sentinel state ────────────────────────────────────────────────────────────
+// Tracks the previous cycle's readings so frozen/zero values are caught before
+// they silently corrupt all 9 downstream layers.
+let _sentinelPrev:     { db_latency: number; outbox_pending: number; dlq_rate: number } | null = null;
+let _sentinelRepeated: number = 0;
+const SENTINEL_MAX_REPEATED = 3;
+
 // ── Action dispatch table ─────────────────────────────────────────────────────
 // Maps each AutopilotAction to the existing executor functions + the switch
 // name that guards it.  Keeps the cycle loop free of if/else chains.
@@ -154,6 +161,50 @@ export async function runAutopilotCycle(): Promise<void> {
       return;
     }
 
+    // Step 1b — sentinel: reject metrics that are non-finite, have zero db_latency,
+    // or are identical to the previous cycle for SENTINEL_MAX_REPEATED consecutive
+    // cycles (indicates a frozen/cached query result).
+    const isNonFinite =
+      !isFinite(metrics.db_latency)     ||
+      !isFinite(metrics.outbox_pending) ||
+      !isFinite(metrics.dlq_rate);
+
+    if (isNonFinite || metrics.db_latency === 0) {
+      const result =
+        `db_latency=${metrics.db_latency} outbox_pending=${metrics.outbox_pending} dlq_rate=${metrics.dlq_rate}`;
+      console.error("[Autopilot] sentinel: non-finite/zero metrics — skipping cycle:", result);
+      logIncident({ type: "metrics_collector", action: "sentinel_rejected", result });
+      _sentinelPrev     = null;
+      _sentinelRepeated = 0;
+      return;
+    }
+
+    const isRepeated =
+      _sentinelPrev !== null &&
+      metrics.db_latency     === _sentinelPrev.db_latency &&
+      metrics.outbox_pending === _sentinelPrev.outbox_pending &&
+      metrics.dlq_rate       === _sentinelPrev.dlq_rate;
+
+    _sentinelPrev = {
+      db_latency:     metrics.db_latency,
+      outbox_pending: metrics.outbox_pending,
+      dlq_rate:       metrics.dlq_rate,
+    };
+
+    if (isRepeated) {
+      _sentinelRepeated++;
+      if (_sentinelRepeated >= SENTINEL_MAX_REPEATED) {
+        const result =
+          `db_latency=${metrics.db_latency} repeated=${_sentinelRepeated}_consecutive_cycles`;
+        console.error("[Autopilot] sentinel: metrics frozen —", result, "— skipping cycle");
+        logIncident({ type: "metrics_collector", action: "sentinel_repeated", result });
+        _sentinelRepeated = 0;
+        return;
+      }
+    } else {
+      _sentinelRepeated = 0;
+    }
+
     // Step 2 — persist metrics snapshot (fire-and-forget; never blocks the cycle).
     insertMetrics([
       { key: "balance_drift",  value: metrics.balance_drift  },
@@ -161,7 +212,11 @@ export async function runAutopilotCycle(): Promise<void> {
       { key: "db_latency",     value: metrics.db_latency     },
       { key: "outbox_pending", value: metrics.outbox_pending },
       { key: "dlq_rate",       value: metrics.dlq_rate       },
-    ]).catch((err) => console.error("[Autopilot] metric persist failed:", err));
+    ]).catch((err) => {
+      const errMsg = String((err as any)?.message ?? err);
+      console.error("[Autopilot] metric persist failed:", err);
+      logIncident({ type: "metrics_store", action: "write_failed", result: errMsg });
+    });
 
     // Step 3 — evaluate all rules against the snapshot.
     const evaluations = evaluateRules(metrics);

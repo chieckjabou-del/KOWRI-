@@ -17,7 +17,7 @@
 // ROLLBACK: remove resetBatchLock() from autopilot.ts; revert each layer to
 //           call setBatchSize() directly; delete this file.
 
-import { getBatchSize, setBatchSize } from "./outboxWorker";
+import { getBatchSize, setBatchSize, DEFAULT_BATCH_SIZE } from "./outboxWorker";
 
 let lockedBy:    string | null = null;
 let skipCount:   number        = 0;
@@ -61,10 +61,17 @@ export function resetBatchLock(): void {
  * Read-only snapshot for observability — zero lock-state changes.
  */
 export function getBatchControllerState(): {
-  lockedBy:      string | null;
+  lockedBy:       string | null;
   skipsThisCycle: number;
-  batchBefore:   number | null;
-  batchAfter:    number | null;
+  batchBefore:    number | null;
+  batchAfter:     number | null;
+  batchPressure:  number;
 } {
-  return { lockedBy, skipsThisCycle: skipCount, batchBefore, batchAfter };
+  return {
+    lockedBy,
+    skipsThisCycle: skipCount,
+    batchBefore,
+    batchAfter,
+    batchPressure: Math.round((getBatchSize() / DEFAULT_BATCH_SIZE) * 100),
+  };
 }

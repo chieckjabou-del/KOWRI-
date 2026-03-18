@@ -177,6 +177,16 @@ export async function globalEvaluator(metrics: CollectedMetrics): Promise<void> 
   // Step 1 — advance cycle counter (used by suppressionRegistry.isModeSuppressed comparisons).
   const cycleCount = incrementCycle();
 
+  // Heartbeat: one incident every 60 cycles (~5 minutes at 5 s/cycle) confirms the
+  // evaluator is alive and its current verdict without flooding the incidents table.
+  if (cycleCount % 60 === 0) {
+    logIncident({
+      type:   "global_evaluator",
+      action: "heartbeat",
+      result: `cycle=${cycleCount} mode=${getStrategyMode()}`,
+    });
+  }
+
   // Step 2 — record the current mode BEFORE strategyEngine runs for this cycle.
   //          This captures the mode that was in effect when metrics were collected.
   const mode = getStrategyMode();

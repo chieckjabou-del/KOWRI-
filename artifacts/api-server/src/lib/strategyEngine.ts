@@ -76,9 +76,10 @@ const TREND_WINDOW = 3;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-let currentMode:  StrategyMode = "BALANCED";
-let cyclesInMode: number       = 0;
-let lastDecision: StrategyDecision | null = null;
+let currentMode:       StrategyMode = "BALANCED";
+let cyclesInMode:      number       = 0;
+let lastDecision:      StrategyDecision | null = null;
+let lastSuppressedMode: StrategyMode | null    = null;
 
 // Local 3-point rolling windows — avoids importing selfOptimizer (circular risk).
 const latencyBuf: number[] = [];
@@ -255,15 +256,23 @@ export async function strategyEngine(metrics: CollectedMetrics): Promise<void> {
     decided_at: new Date().toISOString(),
   };
 
-  // Step 3b — log suppression to incidents table so post-mortem queries are
-  // complete without cross-referencing the War Room snapshot.
-  if (decision.suppressed) {
-    const attemptedMode = decision.rawMode;
+  // Step 3b — log suppression entry/exit to incidents table (deduplicated).
+  // Fires once when a mode enters suppression and once when it is lifted —
+  // never on every cycle of an ongoing suppression.
+  if (decision.suppressed && decision.rawMode !== lastSuppressedMode) {
     logIncident({
       type:   "strategy_engine",
       action: "mode_suppressed",
-      result: `${attemptedMode} → BALANCED`,
+      result: `${decision.rawMode} → BALANCED`,
     });
+    lastSuppressedMode = decision.rawMode;
+  } else if (!decision.suppressed && lastSuppressedMode !== null) {
+    logIncident({
+      type:   "strategy_engine",
+      action: "suppression_lifted",
+      result: `${lastSuppressedMode} restored`,
+    });
+    lastSuppressedMode = null;
   }
 
   // Step 4 — switch mode if the dwell requirement is met.

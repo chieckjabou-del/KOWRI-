@@ -118,9 +118,11 @@ export async function rehydrateAutopilotState(): Promise<void> {
       console.info("[StateStore] stale state row (>10 min) — modeHistory/blockedUntil/failureCount/a1State discarded");
     }
 
+    const rehydratedHourCount = getPredictedHoursSet().length;
     console.info(
       "[StateStore] rehydrated fields: batchSize, mode, confidenceMap, " +
-      "snapshotBuffer, a1, pendingPrediction, predictedHoursSet, " +
+      "snapshotBuffer, a1, pendingPrediction, " +
+      `predictedHoursSet(${rehydratedHourCount}), ` +
       "lastFlushedHour, modeHistory, failureCount, blockedUntil"
     );
   } catch (err) {
