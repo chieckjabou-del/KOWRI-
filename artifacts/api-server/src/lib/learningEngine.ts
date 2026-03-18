@@ -184,6 +184,10 @@ function detectPattern(hourOfDay: number): PatternResult {
 
 function evaluatePendingPrediction(currentLatency: number): void {
   if (!pendingPrediction) return;
+  if (Date.now() - pendingPrediction.firedAt > 2 * 3600_000) {
+    pendingPrediction = null;
+    return;
+  }
 
   const { hourOfDay, threshold } = pendingPrediction;
   const correct = currentLatency < threshold;
