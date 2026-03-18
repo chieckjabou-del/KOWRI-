@@ -22,7 +22,7 @@
 // ROLLBACK: remove `await learningEngine(metrics)` from autopilot.ts; delete this file.
 
 import { CollectedMetrics }                               from "./metricsCollector";
-import { getBatchSize, DEFAULT_BATCH_SIZE }               from "./outboxWorker";
+import { getBatchSize }                                   from "./outboxWorker";
 import { requestBatchChange }                             from "./batchController";
 import { logIncident }                                     from "./incidentStore";
 import { getStrategyMode }                                 from "./strategyEngine";
