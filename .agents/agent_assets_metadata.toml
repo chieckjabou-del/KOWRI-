@@ -12,3 +12,9 @@ id = "BsDSwC9bFQb4TTKbjr9t9"
 uri = "file://kowri_platform_audit.md"
 type = "text"
 title = "KOWRI V5.0 — Platform Audit Report (Markdown)"
+
+[[outputs]]
+id = "zi-g5taMxtAfzTPR98msG"
+uri = "file://.local/exports/KOWRI_V5_AUDIT_TECHNIQUE.md"
+type = "text"
+title = "KOWRI V5.0 — Audit Technique Complet"
