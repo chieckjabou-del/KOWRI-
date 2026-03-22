@@ -19,6 +19,9 @@ router.get("/overview", async (req, res) => {
       [{ activeTontines }],
       [{ activeLoans }],
       [{ activeMerchants }],
+      [{ curUsers, prevUsers }],
+      [{ curTx, prevTx }],
+      [{ curVol, prevVol }],
     ] = await Promise.all([
       db.select({ totalUsers: count() }).from(usersTable),
       db.select({ activeWallets: count() }).from(walletsTable).where(eq(walletsTable.status, "active")),
@@ -29,9 +32,29 @@ router.get("/overview", async (req, res) => {
       db.select({ activeTontines: count() }).from(tontinesTable).where(eq(tontinesTable.status, "active")),
       db.select({ activeLoans: count() }).from(loansTable).where(sql`${loansTable.status} IN ('approved', 'disbursed')`),
       db.select({ activeMerchants: count() }).from(merchantsTable).where(eq(merchantsTable.status, "active")),
+      // Users growth: last 30 days vs prior 30 days
+      db.select({
+        curUsers:  sql<number>`COUNT(*) FILTER (WHERE ${usersTable.createdAt} >= NOW() - INTERVAL '30 days')`,
+        prevUsers: sql<number>`COUNT(*) FILTER (WHERE ${usersTable.createdAt} >= NOW() - INTERVAL '60 days' AND ${usersTable.createdAt} < NOW() - INTERVAL '30 days')`,
+      }).from(usersTable),
+      // Transactions count growth
+      db.select({
+        curTx:  sql<number>`COUNT(*) FILTER (WHERE ${transactionsTable.createdAt} >= NOW() - INTERVAL '30 days')`,
+        prevTx: sql<number>`COUNT(*) FILTER (WHERE ${transactionsTable.createdAt} >= NOW() - INTERVAL '60 days' AND ${transactionsTable.createdAt} < NOW() - INTERVAL '30 days')`,
+      }).from(transactionsTable),
+      // Volume growth: completed transactions only
+      db.select({
+        curVol:  sql<number>`COALESCE(SUM(CAST(${transactionsTable.amount} AS NUMERIC)) FILTER (WHERE ${transactionsTable.createdAt} >= NOW() - INTERVAL '30 days' AND ${transactionsTable.status} = 'completed'), 0)`,
+        prevVol: sql<number>`COALESCE(SUM(CAST(${transactionsTable.amount} AS NUMERIC)) FILTER (WHERE ${transactionsTable.createdAt} >= NOW() - INTERVAL '60 days' AND ${transactionsTable.createdAt} < NOW() - INTERVAL '30 days' AND ${transactionsTable.status} = 'completed'), 0)`,
+      }).from(transactionsTable),
     ]);
 
     const platformRevenue = Number(totalVolume) * 0.015;
+
+    function computeGrowth(current: number, previous: number): number | null {
+      if (previous === 0) return null;
+      return Math.round(((current - previous) / previous) * 1000) / 10;
+    }
 
     res.json({
       totalUsers: Number(totalUsers),
@@ -44,9 +67,9 @@ router.get("/overview", async (req, res) => {
       platformRevenue,
       currency: "XOF",
       growthRates: {
-        users: 12.4,
-        transactions: 23.7,
-        volume: 31.2,
+        users:        computeGrowth(Number(curUsers),  Number(prevUsers)),
+        transactions: computeGrowth(Number(curTx),     Number(prevTx)),
+        volume:       computeGrowth(Number(curVol),    Number(prevVol)),
       },
     });
   } catch (err) {
