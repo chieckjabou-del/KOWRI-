@@ -28,7 +28,7 @@ export async function seedDatabase() {
     status: (i < 15 ? "active" : i < 18 ? "suspended" : "pending_kyc") as "active" | "suspended" | "pending_kyc",
     kycLevel: i < 10 ? 2 : i < 15 ? 1 : 0,
     country: countries[i % countries.length],
-    pinHash: "hashed_pin_placeholder",
+    pinHash: "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",
     creditScore: i < 15 ? 300 + (i * 35) : null,
     createdAt: new Date(now.getTime() - (20 - i) * 7 * 24 * 60 * 60 * 1000),
     updatedAt: new Date(),

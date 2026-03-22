@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/app/"
+title = "KOWRI – Application Mobile"
+version = "1.0.0"
+id = "artifacts/kowri-app"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/app/" ]
+localPort = 21855
+
+[services.development]
+run = "pnpm --filter @workspace/kowri-app run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/kowri-app", "run", "build" ]
+publicDir = "artifacts/kowri-app/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21855"
+BASE_PATH = "/app/"
