@@ -8,8 +8,18 @@ import { processDeposit, processTransfer } from "../lib/walletService";
 import { validatePagination, validateQueryParams, VALID_CURRENCIES } from "../middleware/validate";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { audit } from "../lib/auditLogger";
+import { requireAuth } from "../lib/productAuth";
 
 const router = Router();
+
+router.use(async (req, res, next) => {
+  const auth = await requireAuth(req.headers.authorization);
+  if (!auth) {
+    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
+    return;
+  }
+  next();
+});
 
 router.get(
   "/",

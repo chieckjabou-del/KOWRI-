@@ -3,8 +3,18 @@ import { db } from "@workspace/db";
 import { merchantsTable, walletsTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
 import { generateId, generateApiKey } from "../lib/id";
+import { requireAuth } from "../lib/productAuth";
 
 const router = Router();
+
+router.use(async (req, res, next) => {
+  const auth = await requireAuth(req.headers.authorization);
+  if (!auth) {
+    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
+    return;
+  }
+  next();
+});
 
 router.get("/", async (req, res) => {
   try {

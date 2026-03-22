@@ -3,8 +3,18 @@ import { db } from "@workspace/db";
 import { transactionsTable, ledgerEntriesTable } from "@workspace/db";
 import { eq, sql, count, and } from "drizzle-orm";
 import { validateQueryParams, VALID_TX_STATUSES } from "../middleware/validate";
+import { requireAuth } from "../lib/productAuth";
 
 const router = Router();
+
+router.use(async (req, res, next) => {
+  const auth = await requireAuth(req.headers.authorization);
+  if (!auth) {
+    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
+    return;
+  }
+  next();
+});
 
 router.get("/", validateQueryParams({ status: VALID_TX_STATUSES }), async (req, res, next) => {
   try {

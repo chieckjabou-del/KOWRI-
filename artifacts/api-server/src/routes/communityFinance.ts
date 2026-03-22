@@ -12,8 +12,18 @@ import {
   listPositionForSale, buyTontinePosition, computeNextDate, createSchedulerJob,
 } from "../lib/tontineScheduler";
 import { computeReputationScore, getReputationScore } from "../lib/reputationEngine";
+import { requireAuth } from "../lib/productAuth";
 
 const router = Router();
+
+router.use(async (req, res, next) => {
+  const auth = await requireAuth(req.headers.authorization);
+  if (!auth) {
+    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
+    return;
+  }
+  next();
+});
 
 router.post("/tontines/:tontineId/activate", async (req, res, next) => {
   try {

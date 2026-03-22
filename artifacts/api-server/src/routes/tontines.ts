@@ -3,8 +3,18 @@ import { db } from "@workspace/db";
 import { tontinesTable, tontineMembersTable, usersTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
 import { generateId } from "../lib/id";
+import { requireAuth } from "../lib/productAuth";
 
 const router = Router();
+
+router.use(async (req, res, next) => {
+  const auth = await requireAuth(req.headers.authorization);
+  if (!auth) {
+    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
+    return;
+  }
+  next();
+});
 
 const VALID_TONTINE_STATUSES = new Set(["pending", "active", "completed", "cancelled"]);
 

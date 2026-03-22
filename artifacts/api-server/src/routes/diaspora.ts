@@ -9,8 +9,18 @@ import {
   sendRemittance, createRecurringTransfer, runDueRecurringTransfers,
   seedCorridors,
 } from "../lib/diasporaService";
+import { requireAuth } from "../lib/productAuth";
 
 const router = Router();
+
+router.use(async (req, res, next) => {
+  const auth = await requireAuth(req.headers.authorization);
+  if (!auth) {
+    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
+    return;
+  }
+  next();
+});
 
 router.get("/corridors", async (req, res, next) => {
   try {
