@@ -1,4 +1,5 @@
 import { Bell } from "lucide-react";
+import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 
 interface TopBarProps {
@@ -38,12 +39,14 @@ export function TopBar({ title, showBack, onBack }: TopBarProps) {
           <Bell size={20} className="text-gray-600" />
         </button>
         {user && (
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold"
-            style={{ background: "#1A6B32" }}
-          >
-            {user.firstName[0]}{user.lastName[0]}
-          </div>
+          <Link href="/profile">
+            <div
+              className="w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-bold cursor-pointer"
+              style={{ background: "#1A6B32" }}
+            >
+              {user.firstName[0]}{user.lastName[0]}
+            </div>
+          </Link>
         )}
       </div>
     </header>

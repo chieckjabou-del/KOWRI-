@@ -1,11 +1,12 @@
 import { Link, useLocation } from "wouter";
-import { Home, Users, Send, User } from "lucide-react";
+import { Home, Users, Send, TrendingUp, PiggyBank } from "lucide-react";
 
 const tabs = [
-  { href: "/dashboard",  label: "Accueil",  Icon: Home  },
-  { href: "/tontines",   label: "Tontines", Icon: Users },
-  { href: "/send",       label: "Envoyer",  Icon: Send  },
-  { href: "/profile",    label: "Profil",   Icon: User  },
+  { href: "/dashboard", label: "Accueil",  Icon: Home       },
+  { href: "/tontines",  label: "Tontines", Icon: Users      },
+  { href: "/send",      label: "Envoyer",  Icon: Send       },
+  { href: "/credit",    label: "Crédit",   Icon: TrendingUp },
+  { href: "/savings",   label: "Épargne",  Icon: PiggyBank  },
 ];
 
 export function BottomNav() {
@@ -22,11 +23,11 @@ export function BottomNav() {
           return (
             <Link key={href} href={href}>
               <button
-                className="flex flex-col items-center gap-1 py-3 px-4 min-h-[56px] min-w-[64px] transition-colors"
+                className="flex flex-col items-center gap-0.5 py-3 px-2 min-h-[56px] min-w-[56px] transition-colors"
                 style={{ color: active ? "#1A6B32" : "#9CA3AF" }}
               >
-                <Icon size={22} strokeWidth={active ? 2.5 : 1.8} />
-                <span className="text-[10px] font-medium">{label}</span>
+                <Icon size={20} strokeWidth={active ? 2.5 : 1.8} />
+                <span className="text-[9px] font-medium">{label}</span>
               </button>
             </Link>
           );

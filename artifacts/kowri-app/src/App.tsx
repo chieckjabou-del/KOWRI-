@@ -9,6 +9,8 @@ import Tontines from "@/pages/Tontines";
 import TontineDetail from "@/pages/TontineDetail";
 import Send from "@/pages/Send";
 import Profile from "@/pages/Profile";
+import Credit from "@/pages/Credit";
+import Savings from "@/pages/Savings";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient({
@@ -46,6 +48,12 @@ function AppRouter() {
       </Route>
       <Route path="/profile">
         {() => <ProtectedRoute component={Profile} />}
+      </Route>
+      <Route path="/credit">
+        {() => <ProtectedRoute component={Credit} />}
+      </Route>
+      <Route path="/savings">
+        {() => <ProtectedRoute component={Savings} />}
       </Route>
       <Route path="/">
         {() => isAuthenticated ? <Redirect to="/dashboard" /> : <Redirect to="/login" />}
