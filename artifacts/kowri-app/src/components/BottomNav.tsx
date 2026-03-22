@@ -1,12 +1,12 @@
 import { Link, useLocation } from "wouter";
-import { Home, Users, Send, TrendingUp, PiggyBank } from "lucide-react";
+import { Home, Users, TrendingUp, PiggyBank, Globe } from "lucide-react";
 
 const tabs = [
   { href: "/dashboard", label: "Accueil",  Icon: Home       },
   { href: "/tontines",  label: "Tontines", Icon: Users      },
-  { href: "/send",      label: "Envoyer",  Icon: Send       },
   { href: "/credit",    label: "Crédit",   Icon: TrendingUp },
   { href: "/savings",   label: "Épargne",  Icon: PiggyBank  },
+  { href: "/diaspora",  label: "Diaspora", Icon: Globe      },
 ];
 
 export function BottomNav() {
@@ -19,7 +19,7 @@ export function BottomNav() {
     >
       <div className="flex items-center justify-around">
         {tabs.map(({ href, label, Icon }) => {
-          const active = location.startsWith(href);
+          const active = location === href || (href !== "/dashboard" && location.startsWith(href));
           return (
             <Link key={href} href={href}>
               <button

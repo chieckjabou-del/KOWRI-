@@ -11,6 +11,8 @@ import Send from "@/pages/Send";
 import Profile from "@/pages/Profile";
 import Credit from "@/pages/Credit";
 import Savings from "@/pages/Savings";
+import Diaspora from "@/pages/Diaspora";
+import Merchant from "@/pages/Merchant";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient({
@@ -54,6 +56,12 @@ function AppRouter() {
       </Route>
       <Route path="/savings">
         {() => <ProtectedRoute component={Savings} />}
+      </Route>
+      <Route path="/diaspora">
+        {() => <ProtectedRoute component={Diaspora} />}
+      </Route>
+      <Route path="/merchant">
+        {() => <ProtectedRoute component={Merchant} />}
       </Route>
       <Route path="/">
         {() => isAuthenticated ? <Redirect to="/dashboard" /> : <Redirect to="/login" />}
