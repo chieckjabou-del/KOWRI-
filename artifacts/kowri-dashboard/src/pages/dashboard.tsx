@@ -1,7 +1,7 @@
 import { useGetAnalyticsOverview, useGetTransactionAnalytics } from "@workspace/api-client-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { formatCurrency, formatNumber } from "@/lib/format";
-import { Users, Wallet, ArrowLeftRight, TrendingUp, AlertCircle, Store } from "lucide-react";
+import { Users, Wallet, ArrowLeftRight, TrendingUp, AlertCircle, Store, Landmark } from "lucide-react";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid, BarChart, Bar } from "recharts";
 import { Button } from "@/components/ui/button";
 

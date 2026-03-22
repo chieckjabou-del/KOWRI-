@@ -136,32 +136,8 @@ function PlanCard({
             />
           </div>
 
-          {/* Mature button */}
-          {isMatured && isActive && !showBreakWarn && (
-            <button
-              onClick={() => breakMut.mutate(false)}
-              disabled={breakMut.isPending}
-              className="w-full py-3 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
-              style={{ background: "#2563EB", minHeight: 44 }}
-            >
-              {breakMut.isPending && <Loader2 size={14} className="animate-spin" />}
-              Débloquer maintenant
-            </button>
-          )}
-
-          {/* Early break button */}
-          {!isMatured && isActive && !showBreakWarn && (
-            <button
-              onClick={() => setShowBreakWarn(true)}
-              className="w-full py-3 rounded-xl font-semibold text-sm border border-red-200 flex items-center justify-center gap-2"
-              style={{ color: "#DC2626", minHeight: 44 }}
-            >
-              Rupture anticipée
-            </button>
-          )}
-
-          {/* Break warning */}
-          {showBreakWarn && (
+          {/* Action buttons — single ternary to keep DOM structure stable */}
+          {showBreakWarn ? (
             <div className="rounded-xl border border-red-100 overflow-hidden" style={{ background: "#FEF2F2" }}>
               <div className="p-3 flex gap-2">
                 <AlertTriangle size={16} style={{ color: "#DC2626" }} className="flex-shrink-0 mt-0.5" />
@@ -188,7 +164,25 @@ function PlanCard({
                 </button>
               </div>
             </div>
-          )}
+          ) : isMatured && isActive ? (
+            <button
+              onClick={() => breakMut.mutate(false)}
+              disabled={breakMut.isPending}
+              className="w-full py-3 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+              style={{ background: "#2563EB", minHeight: 44 }}
+            >
+              {breakMut.isPending && <Loader2 size={14} className="animate-spin" />}
+              Débloquer maintenant
+            </button>
+          ) : !isMatured && isActive ? (
+            <button
+              onClick={() => setShowBreakWarn(true)}
+              className="w-full py-3 rounded-xl font-semibold text-sm border border-red-200 flex items-center justify-center gap-2"
+              style={{ color: "#DC2626", minHeight: 44 }}
+            >
+              Rupture anticipée
+            </button>
+          ) : null}
         </div>
       )}
     </div>
