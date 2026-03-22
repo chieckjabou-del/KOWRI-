@@ -9,6 +9,7 @@ import {
   createInsurancePool, joinInsurancePool, fileClaim, adjudicateClaim,
 } from "../lib/communityFinance";
 import { requireAuth } from "../lib/productAuth";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
 const router = Router();
 
@@ -101,17 +102,16 @@ router.get("/:poolId", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post("/:poolId/join", async (req, res, next) => {
+router.post("/:poolId/join", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { userId, walletId } = req.body;
     if (!userId || !walletId) {
       return res.status(400).json({ error: true, message: "userId and walletId required" });
     }
     const policy = await joinInsurancePool(req.params.poolId, userId, walletId);
-    res.status(201).json({
-      ...policy,
-      totalPremiumPaid: Number(policy.totalPremiumPaid),
-    });
+    const body = { ...policy, totalPremiumPaid: Number(policy.totalPremiumPaid) };
+    await req.saveIdempotentResponse?.(body);
+    res.status(201).json(body);
   } catch (err: any) {
     res.status(400).json({ error: true, message: err.message });
   }
@@ -165,14 +165,16 @@ router.get("/:poolId/claims", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.patch("/claims/:claimId/adjudicate", async (req, res, next) => {
+router.patch("/claims/:claimId/adjudicate", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { adjudicatorId, approved, payoutAmount, rejectionReason } = req.body;
     if (!adjudicatorId || approved === undefined) {
       return res.status(400).json({ error: true, message: "adjudicatorId and approved required" });
     }
     await adjudicateClaim(req.params.claimId, adjudicatorId, Boolean(approved), payoutAmount, rejectionReason);
-    res.json({ success: true, approved: Boolean(approved) });
+    const body = { success: true, approved: Boolean(approved) };
+    await req.saveIdempotentResponse?.(body);
+    res.json(body);
   } catch (err: any) {
     res.status(400).json({ error: true, message: err.message });
   }

@@ -9,6 +9,7 @@ import { processDeposit, processTransfer } from "../lib/walletService";
 import { eventBus } from "../lib/eventBus";
 import { computeCreditScoreFromActivity } from "../lib/reputationEngine";
 import { requireAuth } from "../lib/productAuth";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
 const router = Router();
 
@@ -299,7 +300,7 @@ router.get("/loans/:loanId/repayments", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post("/loans/:loanId/repay", async (req, res, next) => {
+router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { walletId, amount, userId } = req.body;
     if (!walletId || !amount || !userId) {
@@ -354,7 +355,7 @@ router.post("/loans/:loanId/repay", async (req, res, next) => {
       loanId: loan.id, userId, amount: Number(amount), newRepaid, isFullyRepaid,
     });
 
-    res.status(201).json({
+    const body = {
       repaymentId,
       loanId:       loan.id,
       amount:       Number(amount),
@@ -362,7 +363,9 @@ router.post("/loans/:loanId/repay", async (req, res, next) => {
       remaining:    Math.max(0, Number(loan.amount) - newRepaid),
       isFullyRepaid,
       message:      isFullyRepaid ? "Loan fully repaid!" : "Repayment recorded",
-    });
+    };
+    await req.saveIdempotentResponse?.(body);
+    res.status(201).json(body);
   } catch (err: any) {
     res.status(400).json({ error: true, message: err.message });
   }

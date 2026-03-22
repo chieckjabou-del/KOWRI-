@@ -13,6 +13,7 @@ import {
 } from "../lib/tontineScheduler";
 import { computeReputationScore, getReputationScore } from "../lib/reputationEngine";
 import { requireAuth } from "../lib/productAuth";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
 const router = Router();
 
@@ -98,21 +99,25 @@ router.post("/tontines/:tontineId/members", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post("/tontines/:tontineId/collect", async (req, res, next) => {
+router.post("/tontines/:tontineId/collect", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { tontineId } = req.params;
     const result = await runContributionCycle(tontineId);
-    res.json({ success: true, ...result });
+    const body = { success: true, ...result };
+    await req.saveIdempotentResponse?.(body);
+    res.json(body);
   } catch (err: any) {
     res.status(400).json({ error: true, message: err.message });
   }
 });
 
-router.post("/tontines/:tontineId/payout", async (req, res, next) => {
+router.post("/tontines/:tontineId/payout", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { tontineId } = req.params;
     const result = await runPayoutCycle(tontineId);
-    res.json({ success: true, ...result });
+    const body = { success: true, ...result };
+    await req.saveIdempotentResponse?.(body);
+    res.json(body);
   } catch (err: any) {
     res.status(400).json({ error: true, message: err.message });
   }

@@ -8,6 +8,7 @@ import {
   getSavingsPlansByUser, getRateForUser,
 } from "../lib/savingsEngine";
 import { requireAuth } from "../lib/productAuth";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
 const router = Router();
 
@@ -47,7 +48,7 @@ router.get("/plans", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post("/plans", async (req, res, next) => {
+router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { userId, walletId, name, amount, currency = "XOF", termDays, earlyBreakPenalty } = req.body;
     if (!userId || !walletId || !name || !amount || !termDays) {
@@ -69,7 +70,7 @@ router.post("/plans", async (req, res, next) => {
       earlyBreakPenalty: earlyBreakPenalty ? Number(earlyBreakPenalty) : undefined,
     });
 
-    res.status(201).json({
+    const body = {
       ...plan,
       lockedAmount:      Number(plan.lockedAmount),
       interestRate:      Number(plan.interestRate),
@@ -77,7 +78,9 @@ router.post("/plans", async (req, res, next) => {
       earlyBreakPenalty: Number(plan.earlyBreakPenalty),
       isMatured:         false,
       daysRemaining:     Number(termDays),
-    });
+    };
+    await req.saveIdempotentResponse?.(body);
+    res.status(201).json(body);
   } catch (err: any) {
     res.status(400).json({ error: true, message: err.message });
   }
