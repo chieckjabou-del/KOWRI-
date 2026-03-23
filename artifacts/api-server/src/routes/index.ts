@@ -40,6 +40,7 @@ import diasporaRouter         from "./diaspora";
 import creatorEconomyRouter   from "./creatorEconomy";
 import warroomRouter           from "./warroom";
 import notificationsRouter     from "./notifications";
+import agentsRouter            from "./agents";
 
 const router: IRouter = Router();
 
@@ -84,5 +85,6 @@ router.use("/diaspora",            diasporaRouter);
 router.use("/creator",             creatorEconomyRouter);
 router.use("/warroom",             warroomRouter);
 router.use("/notifications",       notificationsRouter);
+router.use("/agents",              agentsRouter);
 
 export default router;

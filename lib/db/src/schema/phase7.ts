@@ -414,3 +414,103 @@ export const schedulerJobsTable = pgTable("scheduler_jobs", {
   index("sched_status_idx").on(t.status),
   index("sched_scheduledat_idx").on(t.scheduledAt),
 ]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent Liquidity System
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const agentTypeEnum    = pgEnum("agent_type",       ["AGENT", "SUPER_AGENT", "MASTER"]);
+export const agentStatusEnum  = pgEnum("agent_status",     ["ACTIVE", "SUSPENDED", "BLOCKED"]);
+export const liquidityTypeEnum   = pgEnum("liquidity_type",   ["CASH", "FLOAT", "REBALANCE"]);
+export const liquidityStatusEnum = pgEnum("liquidity_status", ["PENDING", "COMPLETED", "FAILED"]);
+export const alertTypeEnum    = pgEnum("alert_type",       ["LOW_CASH", "LOW_FLOAT", "ZONE_TENSION", "SURPLUS"]);
+export const alertLevelEnum   = pgEnum("alert_level",      ["WARNING", "CRITICAL"]);
+
+export const agentsTable = pgTable("agents", {
+  id:             text("id").primaryKey(),
+  userId:         text("user_id"),
+  name:           text("name").notNull(),
+  type:           agentTypeEnum("type").notNull(),
+  phone:          text("phone").notNull(),
+  zone:           text("zone").notNull(),
+  status:         agentStatusEnum("status").default("ACTIVE"),
+  parentAgentId:  text("parent_agent_id"),
+  monthlyVolume:  numeric("monthly_volume", { precision: 20, scale: 4 }).default("0"),
+  commissionTier: integer("commission_tier").default(1),
+  createdAt:      timestamp("created_at").defaultNow(),
+}, (t) => [
+  index("agent_user_idx").on(t.userId),
+  index("agent_zone_idx").on(t.zone),
+  index("agent_status_idx").on(t.status),
+  index("agent_type_idx").on(t.type),
+]);
+
+export const agentWalletsTable = pgTable("agent_wallets", {
+  id:                 text("id").primaryKey(),
+  agentId:            text("agent_id").notNull(),
+  walletId:           text("wallet_id").notNull(),
+  cashBalance:        numeric("cash_balance",         { precision: 20, scale: 4 }).default("0"),
+  floatBalance:       numeric("float_balance",        { precision: 20, scale: 4 }).default("0"),
+  minCashThreshold:   numeric("min_cash_threshold",   { precision: 20, scale: 4 }),
+  minFloatThreshold:  numeric("min_float_threshold",  { precision: 20, scale: 4 }),
+  maxCashBalance:     numeric("max_cash_balance",     { precision: 20, scale: 4 }),
+  updatedAt:          timestamp("updated_at").defaultNow(),
+}, (t) => [
+  index("agwallet_agent_idx").on(t.agentId),
+  index("agwallet_wallet_idx").on(t.walletId),
+]);
+
+export const liquidityTransfersTable = pgTable("liquidity_transfers", {
+  id:           text("id").primaryKey(),
+  fromAgentId:  text("from_agent_id"),
+  toAgentId:    text("to_agent_id"),
+  amount:       numeric("amount", { precision: 20, scale: 4 }).notNull(),
+  type:         liquidityTypeEnum("type").notNull(),
+  status:       liquidityStatusEnum("status").default("PENDING"),
+  initiatedBy:  text("initiated_by"),
+  note:         text("note"),
+  createdAt:    timestamp("created_at").defaultNow(),
+  completedAt:  timestamp("completed_at"),
+}, (t) => [
+  index("liqtx_from_idx").on(t.fromAgentId),
+  index("liqtx_to_idx").on(t.toAgentId),
+  index("liqtx_status_idx").on(t.status),
+]);
+
+export const liquidityAlertsTable = pgTable("liquidity_alerts", {
+  id:              text("id").primaryKey(),
+  agentId:         text("agent_id").notNull(),
+  type:            alertTypeEnum("type").notNull(),
+  level:           alertLevelEnum("level").notNull(),
+  message:         text("message").notNull(),
+  suggestedAction: text("suggested_action"),
+  nearestAgentId:  text("nearest_agent_id"),
+  resolved:        boolean("resolved").default(false),
+  resolvedAt:      timestamp("resolved_at"),
+  createdAt:       timestamp("created_at").defaultNow(),
+}, (t) => [
+  index("liqalert_agent_idx").on(t.agentId),
+  index("liqalert_type_idx").on(t.type),
+  index("liqalert_level_idx").on(t.level),
+  index("liqalert_resolved_idx").on(t.resolved),
+]);
+
+export const agentCommissionsTable = pgTable("agent_commissions", {
+  id:               text("id").primaryKey(),
+  agentId:          text("agent_id").notNull(),
+  transactionId:    text("transaction_id"),
+  operationType:    text("operation_type").notNull(),
+  grossAmount:      numeric("gross_amount",       { precision: 20, scale: 4 }).notNull(),
+  commissionAmount: numeric("commission_amount",  { precision: 20, scale: 4 }).notNull(),
+  agentShare:       numeric("agent_share",        { precision: 20, scale: 4 }).notNull(),
+  superAgentShare:  numeric("super_agent_share",  { precision: 20, scale: 4 }).default("0"),
+  kowriShare:       numeric("kowri_share",        { precision: 20, scale: 4 }).notNull(),
+  status:           text("status").default("pending"),
+  paidAt:           timestamp("paid_at"),
+  createdAt:        timestamp("created_at").defaultNow(),
+}, (t) => [
+  index("agcom_agent_idx").on(t.agentId),
+  index("agcom_tx_idx").on(t.transactionId),
+  index("agcom_status_idx").on(t.status),
+  index("agcom_optype_idx").on(t.operationType),
+]);

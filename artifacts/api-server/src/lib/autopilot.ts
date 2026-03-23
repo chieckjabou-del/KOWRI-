@@ -35,6 +35,7 @@ import { strategyEngine, getStrategyMode }                       from "./strateg
 import { learningEngine }                                        from "./learningEngine";
 import { selfOptimize }                                          from "./selfOptimizer";
 import { optimizeFees }                                          from "./feeOptimizer";
+import { runLiquidityMonitor }                                  from "./liquidityEngine";
 import { resetBatchLock }                                        from "./batchController";
 import { writeAutopilotState }                                   from "./autopilotStateStore";
 import { db }                                                    from "@workspace/db";
@@ -300,6 +301,19 @@ export async function runAutopilotCycle(): Promise<void> {
         result: (err as any)?.message ?? "unknown",
       });
       console.error("[Autopilot] feeOptimizer error:", err);
+    }
+
+    // Step 11 — liquidity monitor: check all active agents for cash/float thresholds
+    // and detect zone tension.  Completely isolated — never affects any other layer.
+    try {
+      await runLiquidityMonitor();
+    } catch (err) {
+      logIncident({
+        type:   "liquidity_monitor",
+        action: "cycle_error",
+        result: (err as any)?.message ?? "unknown",
+      });
+      console.error("[Autopilot] liquidityMonitor error:", err);
     }
 
     // Persist state snapshot (fire-and-forget — never blocks the cycle).

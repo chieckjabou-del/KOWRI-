@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { incidentsTable, metricsTable, ledgerEntriesTable, transactionsTable, walletsTable, feeConfigTable } from "@workspace/db";
+import { incidentsTable, metricsTable, ledgerEntriesTable, transactionsTable, walletsTable, feeConfigTable, agentsTable, agentWalletsTable, liquidityAlertsTable, agentCommissionsTable } from "@workspace/db";
 import { desc, sql, eq, and, asc } from "drizzle-orm";
 import { getAllSwitches }           from "../lib/killSwitch";
 import { getBatchSize, DEFAULT_BATCH_SIZE } from "../lib/outboxWorker";
@@ -145,6 +145,7 @@ router.get("/live", async (_req, res, next) => {
       incidentsAutoResolved,
       feeEngineData,
       floatData,
+      agentNetworkData,
     ] = await Promise.all([
       // 1. Total auto-resolved incidents (existing query)
       db
@@ -243,6 +244,52 @@ router.get("/live", async (_req, res, next) => {
           : 0;
         return { totalBalance, dormantBalance, activeBalance, circulationRate };
       }),
+
+      // 4. Agent network snapshot
+      Promise.all([
+        db.select({ count: sql<number>`COUNT(*)::int` }).from(agentsTable)
+          .then(r => Number(r[0]?.count ?? 0)),
+        db.select({ count: sql<number>`COUNT(*)::int` }).from(agentsTable)
+          .where(eq(agentsTable.status, "ACTIVE"))
+          .then(r => Number(r[0]?.count ?? 0)),
+        db.select({ count: sql<number>`COUNT(*)::int` }).from(liquidityAlertsTable)
+          .where(and(eq(liquidityAlertsTable.level, "CRITICAL"), eq(liquidityAlertsTable.resolved, false)))
+          .then(r => Number(r[0]?.count ?? 0)),
+        db.select({ count: sql<number>`COUNT(*)::int` }).from(liquidityAlertsTable)
+          .where(and(eq(liquidityAlertsTable.level, "WARNING"), eq(liquidityAlertsTable.resolved, false)))
+          .then(r => Number(r[0]?.count ?? 0)),
+        db.select({ totalFloat: sql<number>`COALESCE(SUM(CAST(float_balance AS NUMERIC)), 0)` })
+          .from(agentWalletsTable)
+          .then(r => Number(r[0]?.totalFloat ?? 0)),
+        db.select({ totalCash: sql<number>`COALESCE(SUM(CAST(cash_balance AS NUMERIC)), 0)` })
+          .from(agentWalletsTable)
+          .then(r => Number(r[0]?.totalCash ?? 0)),
+        db.select({ total: sql<number>`COALESCE(SUM(CAST(commission_amount AS NUMERIC)), 0)` })
+          .from(agentCommissionsTable)
+          .where(sql`${agentCommissionsTable.createdAt} >= ${todayMidnight}`)
+          .then(r => Number(r[0]?.total ?? 0)),
+        // Zones in tension: zones where >= 3 agents have unresolved LOW_CASH alerts
+        db.execute(sql`
+          SELECT a.zone
+          FROM liquidity_alerts la
+          JOIN agents a ON a.id = la.agent_id
+          WHERE la.type = 'LOW_CASH' AND la.resolved = false
+          GROUP BY a.zone
+          HAVING COUNT(*) >= 3
+        `).then(result => {
+          const rows = (result as any).rows ?? result ?? [];
+          return rows.map((r: any) => r.zone as string);
+        }),
+      ]).then(([totalAgents, activeAgents, criticalAlerts, warningAlerts, totalFloat, totalCash, commissionsToday, zonesInTension]) => ({
+        totalAgents,
+        activeAgents,
+        criticalAlerts,
+        warningAlerts,
+        zonesInTension,
+        totalFloat,
+        totalCash,
+        commissionsToday,
+      })),
     ]);
 
     // ── 1. TRUST SCORE ─────────────────────────────────────────────────────
@@ -354,6 +401,7 @@ router.get("/live", async (_req, res, next) => {
       impact,
       feeEngine:       feeEngineData,
       float:           floatData,
+      agentNetwork:    agentNetworkData,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) { next(err); }
