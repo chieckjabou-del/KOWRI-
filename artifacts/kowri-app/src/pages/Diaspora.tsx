@@ -498,13 +498,11 @@ export default function Diaspora() {
               </button>
             </div>
 
-            {recurQ.isLoading && (
+            {recurQ.isLoading ? (
               <div className="space-y-3">
                 {[0,1].map(i => <div key={i} className="h-20 bg-white rounded-2xl animate-pulse border border-gray-100" />)}
               </div>
-            )}
-
-            {!recurQ.isLoading && recurring.length === 0 && (
+            ) : recurring.length === 0 ? (
               <div className="bg-white rounded-2xl p-8 text-center border border-gray-100 shadow-sm">
                 <p className="text-3xl mb-3">🔄</p>
                 <p className="font-semibold text-gray-900 mb-1">Aucun virement programmé</p>
@@ -519,7 +517,7 @@ export default function Diaspora() {
                   <Plus size={15} /> Programmer un virement
                 </button>
               </div>
-            )}
+            ) : null}
 
             <div className="space-y-3">
               {recurring.map((r: any) => {

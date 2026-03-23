@@ -317,13 +317,11 @@ export default function Savings() {
 
         {/* ─── Plans list ────────────────────────────────────────── */}
         <section>
-          {plansQ.isLoading && (
+          {plansQ.isLoading ? (
             <div className="space-y-3">
               {[0,1].map(i => <div key={i} className="h-36 bg-white rounded-2xl animate-pulse border border-gray-100" />)}
             </div>
-          )}
-
-          {!plansQ.isLoading && plans.length === 0 && (
+          ) : plans.length === 0 ? (
             <div className="bg-white rounded-2xl p-8 text-center shadow-sm border border-gray-100">
               <div className="w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center text-2xl" style={{ background: "#F0FDF4" }}>
                 🏦
@@ -339,7 +337,7 @@ export default function Savings() {
                 Créer mon premier plan
               </button>
             </div>
-          )}
+          ) : null}
 
           <div className="space-y-3">
             {plans.map((plan: any) => (

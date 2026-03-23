@@ -200,18 +200,16 @@ function Decouvrir() {
         </div>
       )}
 
-      {publicQ.isLoading && (
+      {publicQ.isLoading ? (
         <div className="space-y-3">
           {[0, 1, 2].map(i => <div key={i} className="bg-white rounded-2xl h-24 animate-pulse border border-gray-100" />)}
         </div>
-      )}
-
-      {!publicQ.isLoading && filtered.length === 0 && (
+      ) : filtered.length === 0 ? (
         <div className="text-center py-10">
           <Globe size={32} className="mx-auto mb-3 text-gray-300" />
           <p className="text-gray-500 text-sm">Aucune tontine publique disponible</p>
         </div>
-      )}
+      ) : null}
 
       <div className="space-y-3">
         {filtered.map((t: any) => (
@@ -284,18 +282,16 @@ function Marche() {
         </div>
       )}
 
-      {listingsQ.isLoading && (
+      {listingsQ.isLoading ? (
         <div className="space-y-3">
           {[0, 1, 2].map(i => <div key={i} className="bg-white rounded-2xl h-20 animate-pulse border border-gray-100" />)}
         </div>
-      )}
-
-      {!listingsQ.isLoading && listings.length === 0 && (
+      ) : listings.length === 0 ? (
         <div className="text-center py-10">
           <ShoppingCart size={32} className="mx-auto mb-3 text-gray-300" />
           <p className="text-gray-500 text-sm">Aucune position disponible sur le marché</p>
         </div>
-      )}
+      ) : null}
 
       <div className="space-y-3">
         {listings.map((l: any) => (

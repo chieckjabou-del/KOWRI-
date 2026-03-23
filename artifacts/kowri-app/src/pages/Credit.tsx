@@ -407,13 +407,13 @@ export default function Credit() {
         )}
 
         {/* ─── Active loans ──────────────────────────────────── */}
-        {loansQ.isLoading && (
+        {loansQ.isLoading ? (
           <div className="space-y-3">
             {[0,1].map(i => (
               <div key={i} className="bg-white rounded-2xl h-36 animate-pulse border border-gray-100" />
             ))}
           </div>
-        )}
+        ) : null}
 
         {activeLoans.length > 0 && (
           <section>

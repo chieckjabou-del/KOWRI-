@@ -279,16 +279,14 @@ export default function Merchant() {
           </button>
         </Link>
 
-        {merchantsQ.isLoading && (
+        {merchantsQ.isLoading ? (
           <div className="space-y-4 animate-pulse">
             <div className="h-40 bg-white rounded-3xl border border-gray-100" />
             <div className="h-64 bg-white rounded-3xl border border-gray-100" />
           </div>
-        )}
-
-        {!merchantsQ.isLoading && !merchant && (
+        ) : !merchant ? (
           <Onboarding userId={user?.id ?? ""} onCreated={() => setRefreshKey(k => k + 1)} />
-        )}
+        ) : null}
 
         {merchant && (
           <>
@@ -340,7 +338,7 @@ export default function Merchant() {
                 <h2 className="font-semibold text-gray-900 text-sm">Derniers paiements</h2>
               </div>
 
-              {txQ.isLoading && (
+              {txQ.isLoading ? (
                 <div className="divide-y divide-gray-50">
                   {[0,1,2].map(i => (
                     <div key={i} className="flex items-center gap-3 px-4 py-3 animate-pulse">
@@ -353,13 +351,11 @@ export default function Merchant() {
                     </div>
                   ))}
                 </div>
-              )}
-
-              {!txQ.isLoading && payments.length === 0 && (
+              ) : payments.length === 0 ? (
                 <div className="py-8 text-center text-sm text-gray-400">
                   Aucun paiement reçu pour l'instant
                 </div>
-              )}
+              ) : null}
 
               <div className="divide-y divide-gray-50">
                 {payments.map((tx: any) => {
