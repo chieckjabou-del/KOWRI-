@@ -23,18 +23,22 @@ export async function runContributionCycle(tontineId: string): Promise<{
   const members = await db.select().from(tontineMembersTable)
     .where(eq(tontineMembersTable.tontineId, tontineId));
 
-  const amount = Number(tontine.contributionAmount);
-  const currency = tontine.currency;
-  const poolWalletId = tontine.walletId!;
+  const defaultAmount = Number(tontine.contributionAmount);
+  const currency      = tontine.currency;
+  const poolWalletId  = tontine.walletId!;
   const expectedRound = tontine.currentRound + 1;
 
-  let collected = 0;
+  let collected     = 0;
+  let totalCollected = 0;
   const failed: string[] = [];
 
   for (const member of members) {
     if (member.contributionsCount >= expectedRound) {
       continue;
     }
+
+    // Multi-amount: use member's personal contribution if set, else tontine default
+    const memberAmount = Number(member.personalContribution ?? defaultAmount);
 
     const memberWallets = await db.select().from(walletsTable)
       .where(and(eq(walletsTable.userId, member.userId), eq(walletsTable.status, "active")));
@@ -48,7 +52,7 @@ export async function runContributionCycle(tontineId: string): Promise<{
       await processTransfer({
         fromWalletId: wallet.id,
         toWalletId:   poolWalletId,
-        amount,
+        amount:       memberAmount,
         currency,
         description:  `Tontine contribution – Round ${expectedRound}`,
         skipFraudCheck: true,
@@ -57,6 +61,7 @@ export async function runContributionCycle(tontineId: string): Promise<{
         .set({ contributionsCount: sql`${tontineMembersTable.contributionsCount} + 1` })
         .where(eq(tontineMembersTable.id, member.id));
       collected++;
+      totalCollected += memberAmount;
     } catch {
       failed.push(member.userId);
     }
@@ -66,7 +71,7 @@ export async function runContributionCycle(tontineId: string): Promise<{
 
   await createSchedulerJob("tontine_payout", tontineId, "tontine", new Date());
 
-  return { collected, failed, totalCollected: collected * amount };
+  return { collected, failed, totalCollected };
 }
 
 export async function runPayoutCycle(tontineId: string): Promise<{
@@ -105,7 +110,10 @@ export async function runPayoutCycle(tontineId: string): Promise<{
     if (!recipientWallet) throw new Error(`Recipient wallet not found`);
     if (recipientWallet.id === tontine.walletId) throw new Error(`Recipient wallet resolves to the pool wallet — check adminUserId wallet setup`);
 
-    const payoutAmount = Number(tontine.contributionAmount) * tontine.memberCount;
+    // Multi-amount: payout = sum of each member's personal contribution (or tontine default)
+    const allMembers   = await db.select().from(tontineMembersTable).where(eq(tontineMembersTable.tontineId, tontineId));
+    const defaultAmt   = Number(tontine.contributionAmount);
+    const payoutAmount = allMembers.reduce((sum, m) => sum + Number(m.personalContribution ?? defaultAmt), 0);
 
     await processTransfer({
       fromWalletId: tontine.walletId!,
