@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { incidentsTable, metricsTable } from "@workspace/db";
-import { desc, sql } from "drizzle-orm";
+import { incidentsTable, metricsTable, ledgerEntriesTable, transactionsTable, walletsTable, feeConfigTable } from "@workspace/db";
+import { desc, sql, eq, and, asc } from "drizzle-orm";
 import { getAllSwitches }           from "../lib/killSwitch";
 import { getBatchSize, DEFAULT_BATCH_SIZE } from "../lib/outboxWorker";
 import { getStrategyMode, getStrategyState }   from "../lib/strategyEngine";
@@ -137,12 +137,113 @@ router.get("/live", async (_req, res, next) => {
     const { transactionsProtected } = getHealingImpact();
     const now = Date.now();
 
-    // ── One DB query: total auto-resolved incidents ────────────────────────
-    const incidentsAutoResolved = await db
-      .select({ count: sql<number>`COUNT(*)::int` })
-      .from(incidentsTable)
-      .where(sql`action LIKE 'recover:%' AND result = 'recovered'`)
-      .then(rows => Number(rows[0]?.count ?? 0));
+    // ── Parallel DB queries: incidents + fee engine + float ───────────────
+    const todayMidnight = new Date();
+    todayMidnight.setHours(0, 0, 0, 0);
+
+    const [
+      incidentsAutoResolved,
+      feeEngineData,
+      floatData,
+    ] = await Promise.all([
+      // 1. Total auto-resolved incidents (existing query)
+      db
+        .select({ count: sql<number>`COUNT(*)::int` })
+        .from(incidentsTable)
+        .where(sql`action LIKE 'recover:%' AND result = 'recovered'`)
+        .then(rows => Number(rows[0]?.count ?? 0)),
+
+      // 2. Fee engine metrics
+      Promise.all([
+        // Cashout rate: primary active cashout rule (lowest minAmount)
+        db
+          .select({ id: feeConfigTable.id, feeRateBps: feeConfigTable.feeRateBps })
+          .from(feeConfigTable)
+          .where(and(eq(feeConfigTable.operationType, "cashout"), eq(feeConfigTable.active, true)))
+          .orderBy(asc(feeConfigTable.minAmount))
+          .limit(1)
+          .then(rows => rows[0]?.feeRateBps ?? 0),
+
+        // Revenue today: sum of platform_fees credits since midnight
+        db
+          .select({ total: sql<number>`COALESCE(SUM(CAST(${ledgerEntriesTable.creditAmount} AS NUMERIC)), 0)` })
+          .from(ledgerEntriesTable)
+          .where(
+            sql`${ledgerEntriesTable.accountId} = 'platform_fees'
+              AND ${ledgerEntriesTable.createdAt} >= ${todayMidnight}`,
+          )
+          .then(rows => Number(rows[0]?.total ?? 0)),
+
+        // Count of fee-generating transactions today (withdrawals with fee entries)
+        db
+          .select({ count: sql<number>`COUNT(DISTINCT ${ledgerEntriesTable.transactionId})::int` })
+          .from(ledgerEntriesTable)
+          .where(
+            sql`${ledgerEntriesTable.accountId} = 'platform_fees'
+              AND CAST(${ledgerEntriesTable.creditAmount} AS NUMERIC) > 0
+              AND ${ledgerEntriesTable.createdAt} >= ${todayMidnight}`,
+          )
+          .then(rows => Number(rows[0]?.count ?? 0)),
+
+        // Free transfer %: P2P transfers as % of all transactions today
+        db
+          .select({
+            total:    sql<number>`COUNT(*)::int`,
+            freeOnes: sql<number>`COUNT(*) FILTER (WHERE type = 'transfer')::int`,
+          })
+          .from(transactionsTable)
+          .where(sql`${transactionsTable.createdAt} >= ${todayMidnight}`)
+          .then(rows => {
+            const total = Number(rows[0]?.total ?? 0);
+            const free  = Number(rows[0]?.freeOnes ?? 0);
+            return total > 0 ? Math.round((free / total) * 100) : 0;
+          }),
+      ]).then(([cashoutRateBps, revenueToday, feeTxCount, freeTransferPct]) => ({
+        cashoutRateBps,
+        revenueToday,
+        avgFeePerTx:    feeTxCount > 0 ? Math.round(revenueToday / feeTxCount) : 0,
+        freeTransferPct,
+      })),
+
+      // 3. Float tracking
+      Promise.all([
+        // Total active wallet balance
+        db
+          .select({ total: sql<number>`COALESCE(SUM(CAST(balance AS NUMERIC)), 0)` })
+          .from(walletsTable)
+          .where(eq(walletsTable.status, "active"))
+          .then(rows => Number(rows[0]?.total ?? 0)),
+
+        // Dormant wallet balance: wallets with no transaction (either side) in last 30 days
+        db
+          .select({ dormant: sql<number>`COALESCE(SUM(CAST(balance AS NUMERIC)), 0)` })
+          .from(walletsTable)
+          .where(sql`
+            status = 'active'
+            AND id NOT IN (
+              SELECT DISTINCT from_wallet_id FROM transactions
+              WHERE from_wallet_id IS NOT NULL AND created_at > NOW() - INTERVAL '30 days'
+              UNION
+              SELECT DISTINCT to_wallet_id FROM transactions
+              WHERE to_wallet_id IS NOT NULL AND created_at > NOW() - INTERVAL '30 days'
+            )
+          `)
+          .then(rows => Number(rows[0]?.dormant ?? 0)),
+
+        // Volume that moved this month (sum of transaction amounts in last 30 days)
+        db
+          .select({ moved: sql<number>`COALESCE(SUM(CAST(amount AS NUMERIC)), 0)` })
+          .from(transactionsTable)
+          .where(sql`created_at > NOW() - INTERVAL '30 days' AND status = 'completed'`)
+          .then(rows => Number(rows[0]?.moved ?? 0)),
+      ]).then(([totalBalance, dormantBalance, movedThisMonth]) => {
+        const activeBalance   = Math.max(0, totalBalance - dormantBalance);
+        const circulationRate = totalBalance > 0
+          ? Math.min(100, Math.round((movedThisMonth / totalBalance) * 100))
+          : 0;
+        return { totalBalance, dormantBalance, activeBalance, circulationRate };
+      }),
+    ]);
 
     // ── 1. TRUST SCORE ─────────────────────────────────────────────────────
     // 4 boolean signals → composite percentage → RELIABLE / DEGRADED / BLIND.
@@ -251,6 +352,8 @@ router.get("/live", async (_req, res, next) => {
       aiDecisionPanel,
       moneyMode,
       impact,
+      feeEngine:       feeEngineData,
+      float:           floatData,
       updatedAt: new Date().toISOString(),
     });
   } catch (err) { next(err); }

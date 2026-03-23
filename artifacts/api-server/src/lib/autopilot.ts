@@ -31,9 +31,10 @@ import {
 }                                                                 from "./actionExecutor";
 import { autoHeal }                                               from "./healingEngine";
 import { globalEvaluator }                                       from "./globalEvaluator";
-import { strategyEngine }                                        from "./strategyEngine";
+import { strategyEngine, getStrategyMode }                       from "./strategyEngine";
 import { learningEngine }                                        from "./learningEngine";
 import { selfOptimize }                                          from "./selfOptimizer";
+import { optimizeFees }                                          from "./feeOptimizer";
 import { resetBatchLock }                                        from "./batchController";
 import { writeAutopilotState }                                   from "./autopilotStateStore";
 import { db }                                                    from "@workspace/db";
@@ -286,6 +287,19 @@ export async function runAutopilotCycle(): Promise<void> {
       await selfOptimize(metrics);
     } catch (err) {
       console.error("[Autopilot] selfOptimizer error:", err);
+    }
+
+    // Step 10 — fee optimizer: adjust cashout rate based on live metrics and strategy.
+    // Completely isolated — a failure here never affects any other autopilot layer.
+    try {
+      await optimizeFees(metrics, getStrategyMode());
+    } catch (err) {
+      logIncident({
+        type:   "fee_optimizer",
+        action: "cycle_error",
+        result: (err as any)?.message ?? "unknown",
+      });
+      console.error("[Autopilot] feeOptimizer error:", err);
     }
 
     // Persist state snapshot (fire-and-forget — never blocks the cycle).
