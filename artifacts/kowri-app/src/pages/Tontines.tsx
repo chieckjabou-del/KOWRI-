@@ -10,6 +10,14 @@ import { TYPE_META, STATUS_META, FREQ_LABELS } from "@/lib/tontineTypes";
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
+function friendlyName(name: string, type?: string): string {
+  const raw = (name ?? "").trim();
+  if (!raw || /^\d+$/.test(raw)) {
+    return `Tontine ${TYPE_META[type ?? "classic"]?.label ?? "Classique"}`;
+  }
+  return raw.length > 20 ? raw.slice(0, 20) + "…" : raw;
+}
+
 function TypeBadge({ type }: { type: string }) {
   const meta = TYPE_META[type] ?? { label: type, colorClass: "bg-gray-100 text-gray-700", icon: "●" };
   const isHybrid = type === "hybrid";
@@ -96,7 +104,7 @@ function MesTontines() {
                     <TypeBadge type={t.tontineType ?? "classic"} />
                     <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${status.colorClass}`}>{status.label}</span>
                   </div>
-                  <h3 className="font-semibold text-gray-900 text-base leading-tight truncate">{t.name}</h3>
+                  <h3 className="font-semibold text-gray-900 text-base leading-tight truncate">{friendlyName(t.name, t.tontineType)}</h3>
                 </div>
                 <ProgressRing current={t.currentRound ?? 0} total={t.totalRounds ?? t.maxMembers ?? 1} />
               </div>
@@ -211,7 +219,7 @@ function Decouvrir() {
             <div className="flex items-start justify-between gap-2 mb-3">
               <div>
                 <TypeBadge type={t.tontineType ?? "classic"} />
-                <h3 className="font-semibold text-gray-900 mt-1 text-sm leading-tight">{t.name}</h3>
+                <h3 className="font-semibold text-gray-900 mt-1 text-sm leading-tight">{friendlyName(t.name, t.tontineType)}</h3>
               </div>
               <button
                 onClick={() => joinMut.mutate(t.id)}
