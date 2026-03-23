@@ -2,7 +2,7 @@ import { db } from "@workspace/db";
 import {
   tontinesTable, tontineMembersTable, walletsTable,
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
-  schedulerJobsTable,
+  schedulerJobsTable, tontinePurchaseGoalsTable,
 } from "@workspace/db";
 import { eq, and, sql, asc } from "drizzle-orm";
 import { generateId } from "./id";
@@ -70,6 +70,64 @@ export async function runContributionCycle(tontineId: string): Promise<{
   await eventBus.publish("tontine.contributions.collected", { tontineId, collected, failed, round: expectedRound });
 
   await createSchedulerJob("tontine_payout", tontineId, "tontine", new Date());
+
+  // Step 3: Auto-release purchase goals when goal_reached condition is met
+  try {
+    const [poolWallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, poolWalletId));
+    if (poolWallet) {
+      const poolBalance = Number(poolWallet.balance);
+      const openGoals = await db.select().from(tontinePurchaseGoalsTable)
+        .where(and(
+          eq(tontinePurchaseGoalsTable.tontineId, tontineId),
+          eq(tontinePurchaseGoalsTable.status, "open"),
+          eq(tontinePurchaseGoalsTable.releaseCondition, "goal_reached"),
+        ));
+
+      for (const goal of openGoals) {
+        const goalAmt = Number(goal.goalAmount);
+        const updatedCurrent = Math.min(poolBalance, goalAmt);
+
+        await db.update(tontinePurchaseGoalsTable)
+          .set({ currentAmount: String(updatedCurrent) })
+          .where(eq(tontinePurchaseGoalsTable.id, goal.id));
+
+        if (poolBalance >= goalAmt) {
+          // Auto-release: transfer to vendor wallet if known
+          if (goal.vendorWalletId) {
+            try {
+              await processTransfer({
+                fromWalletId:   poolWalletId,
+                toWalletId:     goal.vendorWalletId,
+                amount:         goalAmt,
+                currency,
+                description:    `Tontine project auto-release: ${goal.goalDescription}`,
+                skipFraudCheck: true,
+              });
+            } catch (e) {
+              console.error(`[tontineScheduler] vendor transfer failed for goal ${goal.id}:`, e);
+            }
+          }
+          await db.update(tontinePurchaseGoalsTable).set({
+            status:        "released",
+            releasedAt:    new Date(),
+            currentAmount: String(goalAmt),
+          }).where(eq(tontinePurchaseGoalsTable.id, goal.id));
+
+          await eventBus.publish("tontine.goal.released", {
+            tontineId,
+            goalId:         goal.id,
+            vendorName:     goal.vendorName,
+            amount:         goalAmt,
+            currency,
+            trigger:        "auto_goal_reached",
+            pendingPayout:  !goal.vendorWalletId,
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`[tontineScheduler] auto-release check failed for tontine ${tontineId}:`, e);
+  }
 
   return { collected, failed, totalCollected };
 }

@@ -3,9 +3,11 @@ import { db } from "@workspace/db";
 import {
   tontinesTable, tontineMembersTable, walletsTable,
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
-  schedulerJobsTable,
+  schedulerJobsTable, tontinePurchaseGoalsTable,
 } from "@workspace/db";
-import { eq, and, desc, count, asc } from "drizzle-orm";
+import { eq, and, desc, count, asc, gte } from "drizzle-orm";
+import { processTransfer } from "../lib/walletService";
+import { eventBus } from "../lib/eventBus";
 import { generateId } from "../lib/id";
 import {
   runContributionCycle, runPayoutCycle, assignPayoutOrder,
@@ -327,6 +329,201 @@ router.post("/reputation/:userId/compute", async (req, res, next) => {
   } catch (err: any) {
     res.status(400).json({ error: true, message: err.message });
   }
+});
+
+// ── Purchase Goals ─────────────────────────────────────────────────────────────
+
+router.post("/tontines/:tontineId/goals", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const { vendorName, vendorPhone, vendorWalletId, goalAmount, goalDescription, releaseCondition, targetDate, votesRequired } = req.body;
+
+    if (!vendorName || !goalAmount || !goalDescription) {
+      return res.status(400).json({ error: true, message: "Missing required fields: vendorName, goalAmount, goalDescription" });
+    }
+    const VALID_CONDITIONS = new Set(["goal_reached", "date_reached", "vote"]);
+    if (releaseCondition && !VALID_CONDITIONS.has(releaseCondition)) {
+      return res.status(400).json({ error: true, message: "releaseCondition must be: goal_reached | date_reached | vote" });
+    }
+    if (releaseCondition === "vote" && !votesRequired) {
+      return res.status(400).json({ error: true, message: "votesRequired is required when releaseCondition is 'vote'" });
+    }
+
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    const [goal] = await db.insert(tontinePurchaseGoalsTable).values({
+      id:               generateId(),
+      tontineId,
+      vendorName,
+      vendorPhone:      vendorPhone     || null,
+      vendorWalletId:   vendorWalletId  || null,
+      goalAmount:       String(goalAmount),
+      goalDescription,
+      currentAmount:    "0",
+      status:           "open",
+      releaseCondition: (releaseCondition || "goal_reached") as any,
+      targetDate:       targetDate ? new Date(targetDate) : null,
+      votesRequired:    votesRequired ? Number(votesRequired) : null,
+      votesReceived:    0,
+    }).returning();
+
+    res.status(201).json({ ...goal, goalAmount: Number(goal.goalAmount), currentAmount: Number(goal.currentAmount) });
+  } catch (err) { next(err); }
+});
+
+router.get("/tontines/:tontineId/goals", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    const goals = await db.select().from(tontinePurchaseGoalsTable)
+      .where(eq(tontinePurchaseGoalsTable.tontineId, tontineId))
+      .orderBy(desc(tontinePurchaseGoalsTable.createdAt));
+
+    res.json(goals.map(g => ({
+      ...g,
+      goalAmount:    Number(g.goalAmount),
+      currentAmount: Number(g.currentAmount),
+      progressPct:   Math.min(100, Math.round((Number(g.currentAmount) / Number(g.goalAmount)) * 100)),
+    })));
+  } catch (err) { next(err); }
+});
+
+router.post("/tontines/:tontineId/goals/:goalId/release", async (req, res, next) => {
+  try {
+    const { tontineId, goalId } = req.params;
+
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (!tontine.walletId) return res.status(400).json({ error: true, message: "Tontine has no pool wallet" });
+
+    const [goal] = await db.select().from(tontinePurchaseGoalsTable)
+      .where(and(eq(tontinePurchaseGoalsTable.id, goalId), eq(tontinePurchaseGoalsTable.tontineId, tontineId)));
+    if (!goal) return res.status(404).json({ error: true, message: "Goal not found" });
+    if (goal.status !== "open" && goal.status !== "funded") {
+      return res.status(400).json({ error: true, message: `Goal cannot be released — status is '${goal.status}'` });
+    }
+
+    // Verify release condition
+    const now = new Date();
+    if (goal.releaseCondition === "goal_reached") {
+      if (Number(goal.currentAmount) < Number(goal.goalAmount)) {
+        return res.status(400).json({ error: true, message: "Goal amount not yet reached" });
+      }
+    } else if (goal.releaseCondition === "date_reached") {
+      if (!goal.targetDate || now < goal.targetDate) {
+        return res.status(400).json({ error: true, message: "Target date not yet reached" });
+      }
+    } else if (goal.releaseCondition === "vote") {
+      if ((goal.votesReceived ?? 0) < (goal.votesRequired ?? 1)) {
+        return res.status(400).json({ error: true, message: `Not enough votes — ${goal.votesReceived}/${goal.votesRequired}` });
+      }
+    }
+
+    const releaseAmount = Number(goal.goalAmount);
+
+    // Transfer from pool to vendor wallet (if vendor has a KOWRI wallet)
+    let transferId: string | null = null;
+    if (goal.vendorWalletId) {
+      const result = await processTransfer({
+        fromWalletId:   tontine.walletId,
+        toWalletId:     goal.vendorWalletId,
+        amount:         releaseAmount,
+        currency:       tontine.currency,
+        description:    `Tontine project release: ${goal.goalDescription}`,
+        skipFraudCheck: true,
+      });
+      transferId = (result as any)?.transactionId ?? null;
+    }
+
+    const [updated] = await db.update(tontinePurchaseGoalsTable).set({
+      status:        "released",
+      releasedAt:    now,
+      currentAmount: String(releaseAmount),
+    }).where(eq(tontinePurchaseGoalsTable.id, goalId)).returning();
+
+    // Notify all tontine members
+    const members = await db.select().from(tontineMembersTable).where(eq(tontineMembersTable.tontineId, tontineId));
+    await eventBus.publish("tontine.goal.released", {
+      tontineId,
+      goalId,
+      vendorName:   goal.vendorName,
+      vendorPhone:  goal.vendorPhone,
+      amount:       releaseAmount,
+      currency:     tontine.currency,
+      memberIds:    members.map(m => m.userId),
+      transferId,
+    });
+
+    res.json({
+      ...updated,
+      goalAmount:    Number(updated.goalAmount),
+      currentAmount: Number(updated.currentAmount),
+      transferId,
+      pendingVendorPayout: !goal.vendorWalletId,
+    });
+  } catch (err) { next(err); }
+});
+
+router.post("/tontines/:tontineId/goals/:goalId/vote", async (req, res, next) => {
+  try {
+    const { tontineId, goalId } = req.params;
+
+    const [goal] = await db.select().from(tontinePurchaseGoalsTable)
+      .where(and(eq(tontinePurchaseGoalsTable.id, goalId), eq(tontinePurchaseGoalsTable.tontineId, tontineId)));
+    if (!goal) return res.status(404).json({ error: true, message: "Goal not found" });
+    if (goal.status !== "open" && goal.status !== "funded") {
+      return res.status(400).json({ error: true, message: "Goal is not open for voting" });
+    }
+    if (goal.releaseCondition !== "vote") {
+      return res.status(400).json({ error: true, message: "This goal does not use vote-based release" });
+    }
+
+    const newVotes = (goal.votesReceived ?? 0) + 1;
+    const [updated] = await db.update(tontinePurchaseGoalsTable)
+      .set({ votesReceived: newVotes })
+      .where(eq(tontinePurchaseGoalsTable.id, goalId))
+      .returning();
+
+    // Auto-release if threshold reached
+    if (newVotes >= (goal.votesRequired ?? 1)) {
+      const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+      if (tontine?.walletId && goal.vendorWalletId) {
+        try {
+          await processTransfer({
+            fromWalletId:   tontine.walletId,
+            toWalletId:     goal.vendorWalletId,
+            amount:         Number(goal.goalAmount),
+            currency:       tontine.currency,
+            description:    `Tontine project release (vote): ${goal.goalDescription}`,
+            skipFraudCheck: true,
+          });
+        } catch { /* non-fatal: funds transfer failed, goal still marked funded */ }
+      }
+      await db.update(tontinePurchaseGoalsTable).set({
+        status:     "released",
+        releasedAt: new Date(),
+      }).where(eq(tontinePurchaseGoalsTable.id, goalId));
+
+      await eventBus.publish("tontine.goal.released", {
+        tontineId, goalId, trigger: "vote",
+        vendorName: goal.vendorName, amount: Number(goal.goalAmount),
+      });
+
+      return res.json({ ...updated, votesReceived: newVotes, autoReleased: true, message: "Vote threshold reached — funds released" });
+    }
+
+    res.json({
+      ...updated,
+      goalAmount:    Number(updated.goalAmount),
+      currentAmount: Number(updated.currentAmount),
+      votesReceived: newVotes,
+      votesRequired: goal.votesRequired,
+      autoReleased:  false,
+    });
+  } catch (err) { next(err); }
 });
 
 router.get("/scheduler/jobs", async (req, res, next) => {

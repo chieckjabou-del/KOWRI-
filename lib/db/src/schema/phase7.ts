@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, integer, numeric, timestamp, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, integer, numeric, timestamp, jsonb, index, pgEnum } from "drizzle-orm/pg-core";
 
 export const savingsPlansTable = pgTable("savings_plans", {
   id:                text("id").primaryKey(),
@@ -290,6 +290,30 @@ export const loanRepaymentsTable = pgTable("loan_repayments", {
   index("repay_loan_idx").on(t.loanId),
   index("repay_user_idx").on(t.userId),
   index("repay_status_idx").on(t.status),
+]);
+
+export const purchaseGoalStatusEnum  = pgEnum("purchase_goal_status",  ["open", "funded", "released", "cancelled"]);
+export const releaseConditionEnum    = pgEnum("release_condition",     ["goal_reached", "date_reached", "vote"]);
+
+export const tontinePurchaseGoalsTable = pgTable("tontine_purchase_goals", {
+  id:                text("id").primaryKey(),
+  tontineId:         text("tontine_id").notNull(),
+  vendorName:        text("vendor_name").notNull(),
+  vendorWalletId:    text("vendor_wallet_id"),
+  vendorPhone:       text("vendor_phone"),
+  goalAmount:        numeric("goal_amount",   { precision: 20, scale: 4 }).notNull(),
+  goalDescription:   text("goal_description").notNull(),
+  currentAmount:     numeric("current_amount", { precision: 20, scale: 4 }).notNull().default("0"),
+  status:            purchaseGoalStatusEnum("status").notNull().default("open"),
+  releaseCondition:  releaseConditionEnum("release_condition").notNull().default("goal_reached"),
+  targetDate:        timestamp("target_date"),
+  votesRequired:     integer("votes_required"),
+  votesReceived:     integer("votes_received").notNull().default(0),
+  releasedAt:        timestamp("released_at"),
+  createdAt:         timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("pgoal_tontine_idx").on(t.tontineId),
+  index("pgoal_status_idx").on(t.status),
 ]);
 
 export const schedulerJobsTable = pgTable("scheduler_jobs", {
