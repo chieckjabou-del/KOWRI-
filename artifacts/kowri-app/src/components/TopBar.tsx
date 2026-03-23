@@ -1,6 +1,8 @@
 import { Bell } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
+import { apiFetch } from "@/lib/api";
+import { useQuery } from "@tanstack/react-query";
 
 interface TopBarProps {
   title?: string;
@@ -9,7 +11,18 @@ interface TopBarProps {
 }
 
 export function TopBar({ title, showBack, onBack }: TopBarProps) {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
+  const [, setLocation] = useLocation();
+
+  const { data } = useQuery({
+    queryKey: ["notifications", "badge"],
+    queryFn: () => apiFetch<{ unreadCount: number }>("/notifications", token),
+    refetchInterval: 30000,
+    enabled: !!token,
+    select: (d) => d.unreadCount,
+  });
+
+  const unread = data ?? 0;
 
   return (
     <header
@@ -35,9 +48,22 @@ export function TopBar({ title, showBack, onBack }: TopBarProps) {
       </div>
 
       <div className="flex items-center gap-2">
-        <button className="relative w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100">
+        <button
+          onClick={() => setLocation("/notifications")}
+          className="relative w-10 h-10 flex items-center justify-center rounded-full hover:bg-gray-100"
+          aria-label="Notifications"
+        >
           <Bell size={20} className="text-gray-600" />
+          {unread > 0 && (
+            <span
+              className="absolute top-1.5 right-1.5 min-w-[16px] h-4 rounded-full flex items-center justify-center text-white text-[10px] font-bold px-1"
+              style={{ background: "#E53E3E" }}
+            >
+              {unread > 99 ? "99+" : unread}
+            </span>
+          )}
         </button>
+
         {user && (
           <Link href="/profile">
             <div
