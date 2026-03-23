@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { usersTable, walletsTable, merchantsTable, webhooksTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { usersTable, walletsTable, merchantsTable, webhooksTable, tontineStrategyTargetsTable } from "@workspace/db";
+import { eq, sql } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { createSession, requireAuth } from "../lib/productAuth";
 import {
@@ -213,6 +213,60 @@ router.post("/qr/generate", async (req, res) => {
   } catch (err: any) {
     if (err.message === "Merchant not found") return res.status(404).json({ error: "Merchant not found" });
     res.status(500).json({ error: "QR generation failed" });
+  }
+});
+
+// ── Strategy performance tracking ───────────────────────────────────────────
+// POST /api/merchants/:id/payment — record a completed sale and update
+// any linked tontine strategy target performance scores.
+router.post("/:merchantId/payment", async (req, res) => {
+  const { merchantId } = req.params;
+  const { amount, description, reference } = req.body;
+  if (!amount || Number(amount) <= 0) {
+    return res.status(400).json({ error: "amount required and must be > 0" });
+  }
+  try {
+    const merchant = await getMerchantById(merchantId);
+    if (!merchant) return res.status(404).json({ error: "Merchant not found" });
+    if (merchant.status !== "active") return res.status(403).json({ error: "Merchant not active" });
+
+    const saleAmount = Number(amount);
+
+    // 1. Update merchant total revenue
+    await db.update(merchantsTable)
+      .set({ totalRevenue: sql`${merchantsTable.totalRevenue}::numeric + ${saleAmount}` })
+      .where(eq(merchantsTable.id, merchantId));
+
+    // 2. Find all active/funded strategy targets for this merchant
+    const targets = await db.select().from(tontineStrategyTargetsTable)
+      .where(eq(tontineStrategyTargetsTable.merchantId, merchantId));
+
+    const updatedTargets: Array<{ targetId: string; revenueGenerated: number; performanceScore: number }> = [];
+
+    for (const target of targets) {
+      if (target.status === "completed" || target.status === "defaulted") continue;
+      const newRevenue      = Number(target.revenueGenerated) + saleAmount;
+      const allocated       = Number(target.allocatedAmount);
+      const performanceScore = allocated > 0 ? (newRevenue / allocated) * 100 : 0;
+
+      await db.update(tontineStrategyTargetsTable).set({
+        revenueGenerated: String(newRevenue.toFixed(4)),
+        performanceScore: String(Math.min(9999.99, performanceScore).toFixed(2)),
+      }).where(eq(tontineStrategyTargetsTable.id, target.id));
+
+      updatedTargets.push({ targetId: target.id, revenueGenerated: newRevenue, performanceScore });
+    }
+
+    res.status(201).json({
+      success:        true,
+      merchantId,
+      saleAmount,
+      description:    description ?? `Sale for ${merchant.businessName}`,
+      reference:      reference ?? `SALE-${Date.now()}`,
+      updatedTargets,
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to record payment" });
   }
 });
 

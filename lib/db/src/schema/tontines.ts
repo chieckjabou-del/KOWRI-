@@ -1,4 +1,4 @@
-import { pgTable, text, numeric, timestamp, integer, pgEnum, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, numeric, timestamp, integer, pgEnum, boolean, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -37,6 +37,11 @@ export const tontinesTable = pgTable("tontines", {
   yieldPoolBalance:     numeric("yield_pool_balance",     { precision: 20, scale: 4 }).notNull().default("0"),
   // ── Growth mechanics ─────────────────────────────────────────────────────────
   growthRate:           numeric("growth_rate",            { precision: 5,  scale: 2 }),
+  // ── Strategy mode ────────────────────────────────────────────────────────────
+  strategyMode:       boolean("strategy_mode").notNull().default(false),
+  strategyZone:       text("strategy_zone"),
+  strategyObjective:  text("strategy_objective"),
+  networkWallets:     jsonb("network_wallets"),
   // ── Meta ─────────────────────────────────────────────────────────────────────
   adminUserId:          text("admin_user_id").notNull().references(() => usersTable.id),
   walletId:             text("wallet_id").references(() => walletsTable.id),

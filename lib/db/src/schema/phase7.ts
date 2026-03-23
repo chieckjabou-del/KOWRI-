@@ -336,6 +336,25 @@ export const tontinePurchaseGoalsTable = pgTable("tontine_purchase_goals", {
   index("pgoal_status_idx").on(t.status),
 ]);
 
+export const strategyTargetStatusEnum = pgEnum("strategy_target_status", ["funded", "active", "completed", "defaulted"]);
+
+export const tontineStrategyTargetsTable = pgTable("tontine_strategy_targets", {
+  id:               text("id").primaryKey(),
+  tontineId:        text("tontine_id").notNull(),
+  merchantId:       text("merchant_id").notNull(),
+  allocatedAmount:  numeric("allocated_amount",  { precision: 20, scale: 4 }).notNull(),
+  purpose:          text("purpose").notNull(),
+  performanceScore: numeric("performance_score", { precision: 5, scale: 2 }).notNull().default("0"),
+  revenueGenerated: numeric("revenue_generated", { precision: 20, scale: 4 }).notNull().default("0"),
+  status:           strategyTargetStatusEnum("status").notNull().default("funded"),
+  fundedAt:         timestamp("funded_at"),
+  createdAt:        timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("strat_tontine_idx").on(t.tontineId),
+  index("strat_merchant_idx").on(t.merchantId),
+  index("strat_status_idx").on(t.status),
+]);
+
 export const schedulerJobsTable = pgTable("scheduler_jobs", {
   id:          text("id").primaryKey(),
   jobType:     text("job_type").notNull(),

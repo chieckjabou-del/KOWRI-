@@ -4,6 +4,7 @@ import {
   tontinesTable, tontineMembersTable, walletsTable,
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
   schedulerJobsTable, tontinePurchaseGoalsTable, tontineAiAssessmentsTable,
+  tontineStrategyTargetsTable, merchantsTable,
 } from "@workspace/db";
 import { eq, and, desc, count, asc, gte } from "drizzle-orm";
 import { processTransfer } from "../lib/walletService";
@@ -631,6 +632,144 @@ router.get("/tontines/:tontineId/growth-projection", async (req, res, next) => {
       currentContributionAmount: currentAmount,
       projections,
       totalFundedIfAllRounds:   Number(projections.reduce((s, p) => s + p.contributionAmount, 0).toFixed(4)),
+    });
+  } catch (err) { next(err); }
+});
+
+// ── Strategy Tontine ────────────────────────────────────────────────────────
+
+router.post("/tontines/:tontineId/strategy/targets", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const { merchantId, allocatedAmount, purpose } = req.body;
+    if (!merchantId || !allocatedAmount || !purpose) {
+      return res.status(400).json({ error: true, message: "merchantId, allocatedAmount, purpose required" });
+    }
+
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    const [merchant] = await db.select().from(merchantsTable).where(eq(merchantsTable.id, merchantId));
+    if (!merchant) return res.status(404).json({ error: true, message: "Merchant not found" });
+
+    const [target] = await db.insert(tontineStrategyTargetsTable).values({
+      id: generateId(),
+      tontineId,
+      merchantId,
+      allocatedAmount: String(allocatedAmount),
+      purpose,
+      status: "funded",
+    }).returning();
+
+    await eventBus.publish("tontine.strategy.target_added", {
+      tontineId, targetId: target.id, merchantId, allocatedAmount, purpose,
+    });
+
+    res.status(201).json({ target, merchant: { id: merchant.id, businessName: merchant.businessName } });
+  } catch (err) { next(err); }
+});
+
+router.get("/tontines/:tontineId/strategy/targets", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    const targets = await db.select().from(tontineStrategyTargetsTable)
+      .where(eq(tontineStrategyTargetsTable.tontineId, tontineId));
+
+    const enriched = await Promise.all(targets.map(async (t) => {
+      const [merchant] = await db.select({
+        id: merchantsTable.id, businessName: merchantsTable.businessName,
+        walletId: merchantsTable.walletId, totalRevenue: merchantsTable.totalRevenue,
+      }).from(merchantsTable).where(eq(merchantsTable.id, t.merchantId));
+      return { ...t, merchant: merchant ?? null };
+    }));
+
+    res.json({
+      tontineId, strategyMode: tontine.strategyMode, strategyZone: tontine.strategyZone,
+      strategyObjective: tontine.strategyObjective,
+      targetCount: enriched.length,
+      totalAllocated: enriched.reduce((s, t) => s + Number(t.allocatedAmount), 0),
+      targets: enriched,
+    });
+  } catch (err) { next(err); }
+});
+
+router.post("/tontines/:tontineId/strategy/distribute", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (!tontine.strategyMode) {
+      return res.status(400).json({ error: true, message: "This tontine is not in strategy mode. Set strategy_mode=true first." });
+    }
+
+    const { distributeToTargets: distribute } = await import("../lib/tontineScheduler");
+    const result = await distribute(tontineId);
+
+    res.json({
+      success: true,
+      tontineId,
+      distributed:      result.distributed,
+      totalDistributed: result.totalDistributed,
+      failed:           result.failed,
+    });
+  } catch (err: any) { res.status(500).json({ error: true, message: err.message }); }
+});
+
+router.get("/tontines/:tontineId/strategy/performance", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    const targets = await db.select().from(tontineStrategyTargetsTable)
+      .where(eq(tontineStrategyTargetsTable.tontineId, tontineId));
+
+    if (!targets.length) {
+      return res.json({ tontineId, totalRevenue: 0, roi: 0, targetCount: 0, targets: [] });
+    }
+
+    const totalAllocated    = targets.reduce((s, t) => s + Number(t.allocatedAmount), 0);
+    const totalRevenue      = targets.reduce((s, t) => s + Number(t.revenueGenerated), 0);
+    const roi               = totalAllocated > 0 ? ((totalRevenue - totalAllocated) / totalAllocated) * 100 : 0;
+
+    const sorted        = [...targets].sort((a, b) => Number(b.performanceScore) - Number(a.performanceScore));
+    const bestPerformer  = sorted[0];
+    const worstPerformer = sorted[sorted.length - 1];
+
+    const enriched = await Promise.all(sorted.map(async (t) => {
+      const [m] = await db.select({ businessName: merchantsTable.businessName })
+        .from(merchantsTable).where(eq(merchantsTable.id, t.merchantId));
+      return {
+        targetId:        t.id,
+        merchantId:      t.merchantId,
+        businessName:    m?.businessName ?? "Unknown",
+        allocatedAmount: Number(t.allocatedAmount),
+        revenueGenerated:Number(t.revenueGenerated),
+        performanceScore:Number(t.performanceScore),
+        status:          t.status,
+        roi:             Number(t.allocatedAmount) > 0
+          ? ((Number(t.revenueGenerated) - Number(t.allocatedAmount)) / Number(t.allocatedAmount)) * 100 : 0,
+      };
+    }));
+
+    res.json({
+      tontineId,
+      strategyZone:      tontine.strategyZone,
+      strategyObjective: tontine.strategyObjective,
+      summary: {
+        targetCount:      targets.length,
+        activeTargets:    targets.filter(t => t.status === "active").length,
+        totalAllocated,
+        totalRevenue,
+        roi:              Number(roi.toFixed(2)),
+        netGain:          totalRevenue - totalAllocated,
+      },
+      bestPerformer: enriched[0] ? { merchantId: enriched[0].merchantId, businessName: enriched[0].businessName, performanceScore: enriched[0].performanceScore } : null,
+      worstPerformer: enriched[enriched.length - 1] ? { merchantId: enriched[enriched.length - 1].merchantId, businessName: enriched[enriched.length - 1].businessName, performanceScore: enriched[enriched.length - 1].performanceScore } : null,
+      targets: enriched,
     });
   } catch (err) { next(err); }
 });

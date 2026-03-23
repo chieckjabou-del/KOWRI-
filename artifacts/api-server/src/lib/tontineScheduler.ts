@@ -2,7 +2,8 @@ import { db } from "@workspace/db";
 import {
   tontinesTable, tontineMembersTable, walletsTable,
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
-  schedulerJobsTable, tontinePurchaseGoalsTable,
+  schedulerJobsTable, tontinePurchaseGoalsTable, tontineStrategyTargetsTable,
+  merchantsTable,
 } from "@workspace/db";
 import { eq, and, sql, asc } from "drizzle-orm";
 import { generateId } from "./id";
@@ -426,4 +427,62 @@ export async function getPendingJobs(jobType?: string) {
     ? and(eq(schedulerJobsTable.jobType, jobType as any), eq(schedulerJobsTable.status, "pending"))
     : eq(schedulerJobsTable.status, "pending");
   return db.select().from(schedulerJobsTable).where(where).orderBy(asc(schedulerJobsTable.scheduledAt));
+}
+
+export async function distributeToTargets(tontineId: string): Promise<{
+  distributed: number; failed: string[]; totalDistributed: number;
+}> {
+  const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+  if (!tontine) throw new Error(`Tontine ${tontineId} not found`);
+  if (!tontine.strategyMode) throw new Error(`Tontine ${tontineId} is not in strategy mode`);
+  if (!tontine.walletId)     throw new Error(`Tontine ${tontineId} has no pool wallet`);
+
+  const targets = await db.select().from(tontineStrategyTargetsTable)
+    .where(and(eq(tontineStrategyTargetsTable.tontineId, tontineId), eq(tontineStrategyTargetsTable.status, "funded")));
+
+  if (!targets.length) throw new Error("No funded strategy targets found");
+
+  const distributed: number  = 0;
+  const failed: string[]     = [];
+  let   totalDistributed     = 0;
+
+  for (const target of targets) {
+    const [merchant] = await db.select().from(merchantsTable).where(eq(merchantsTable.id, target.merchantId));
+    if (!merchant) { failed.push(`target ${target.id}: merchant not found`); continue; }
+
+    try {
+      const amount = Number(target.allocatedAmount);
+      await processTransfer({
+        fromWalletId: tontine.walletId!,
+        toWalletId:   merchant.walletId,
+        amount,
+        currency:     tontine.currency,
+        description:  `Strategy distribution – ${tontine.name} → ${merchant.businessName}`,
+        reference:    `STRAT-${tontineId}-${target.id}`,
+        initiatedBy:  tontine.adminUserId,
+        type:         "tontine_strategy_fund",
+      });
+
+      await db.update(tontineStrategyTargetsTable).set({
+        status:   "active",
+        fundedAt: new Date(),
+      }).where(eq(tontineStrategyTargetsTable.id, target.id));
+
+      totalDistributed += amount;
+      await eventBus.publish("tontine.strategy.target_funded", {
+        tontineId, targetId: target.id, merchantId: target.merchantId, amount,
+      });
+    } catch (err: any) {
+      failed.push(`target ${target.id}: ${err.message}`);
+    }
+  }
+
+  await audit({
+    action:    "strategy_distribution",
+    entityId:  tontineId,
+    entityType:"tontine",
+    metadata:  { totalDistributed, failedCount: failed.length },
+  });
+
+  return { distributed: targets.length - failed.length, failed, totalDistributed };
 }
