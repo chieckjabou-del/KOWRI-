@@ -66,6 +66,9 @@ export const tontineMembersTable = pgTable("tontine_members", {
   yieldPaid:            numeric("yield_paid",            { precision: 20, scale: 4 }).notNull().default("0"),
   receivedPayoutAt:     timestamp("received_payout_at"),
   joinedAt:             timestamp("joined_at").notNull().defaultNow(),
+  // ── Missed contribution tracking ─────────────────────────────────────────────
+  missedContributions:  integer("missed_contributions").notNull().default(0),
+  memberStatus:         text("member_status").notNull().default("active"), // 'active' | 'suspended'
 });
 
 export const insertTontineSchema       = createInsertSchema(tontinesTable).omit({ id: true, createdAt: true, updatedAt: true });

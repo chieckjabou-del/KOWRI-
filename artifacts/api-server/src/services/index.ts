@@ -2,9 +2,10 @@ import { MessageConsumer, MessageProducer, MESSAGE_TOPICS } from "../lib/message
 import { tracer } from "../lib/tracer";
 import { eventBus } from "../lib/eventBus";
 import { db } from "@workspace/db";
-import { productNotificationsTable, walletsTable } from "@workspace/db";
+import { productNotificationsTable, walletsTable, auditLogsTable, usersTable } from "@workspace/db";
 import { generateId } from "../lib/id";
-import { eq } from "drizzle-orm";
+import { eq, lt, gt, and } from "drizzle-orm";
+import { audit } from "../lib/auditLogger";
 
 // ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -111,6 +112,179 @@ eventBus.on("tontine.contributions.collected", async (event) => {
     )
   );
 });
+
+// ── Missed contribution event handlers ────────────────────────────────────────
+
+eventBus.on("tontine.member.contribution_warning", async (event) => {
+  const { userId, tontineId, missedContributions } = event.payload as any;
+  if (!userId) return;
+  await insertNotification(
+    String(userId),
+    "alert",
+    "⚠️ Cotisations manquées",
+    `Vous avez manqué ${missedContributions} cotisation(s). Votre position risque d'être suspendue si vous manquez une 3e cotisation.`,
+    { tontineId, missedContributions }
+  );
+});
+
+eventBus.on("tontine.member.suspended", async (event) => {
+  const { userId, tontineId, isAdminNotification, suspendedUserId, missedContributions } = event.payload as any;
+  if (!userId) return;
+  if (isAdminNotification) {
+    await insertNotification(
+      String(userId),
+      "alert",
+      "Membre suspendu",
+      `Un membre (ID: ${String(suspendedUserId).slice(0, 8)}…) a été suspendu après ${missedContributions} cotisations manquées.`,
+      { tontineId, suspendedUserId, missedContributions }
+    );
+  } else {
+    await insertNotification(
+      String(userId),
+      "alert",
+      "⛔ Compte suspendu",
+      `Vous avez manqué ${missedContributions} cotisations. Votre participation à cette tontine a été suspendue. Contactez l'administrateur.`,
+      { tontineId, missedContributions }
+    );
+  }
+});
+
+// ── Vendor invite sent (pending claim) ────────────────────────────────────────
+
+eventBus.on("tontine.goal.vendor_invite_sent", async (event) => {
+  const { adminUserId, vendorName, vendorPhone, amount, currency, tontineId } = event.payload as any;
+  if (!adminUserId) return;
+  const amtStr = fmtAmount(amount, currency);
+  await insertNotification(
+    String(adminUserId),
+    "alert",
+    "Fonds en attente de réclamation",
+    `${amtStr} attendent ${vendorName ?? "le vendeur"} (${vendorPhone ?? "numéro inconnu"}). Ils seront retournés au pool dans 30 jours si non réclamés.`,
+    { tontineId, vendorName, vendorPhone, amount, currency }
+  );
+});
+
+// ── Dormant wallet detection — runs every 24 h ─────────────────────────────────
+
+async function checkDormantWallets(): Promise<void> {
+  try {
+    const cutoff365 = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+
+    const dormantWallets = await db
+      .select({
+        id:        walletsTable.id,
+        userId:    walletsTable.userId,
+        balance:   walletsTable.balance,
+        updatedAt: walletsTable.updatedAt,
+      })
+      .from(walletsTable)
+      .where(
+        and(
+          lt(walletsTable.updatedAt, cutoff365),
+          gt(walletsTable.balance, "0"),
+        )
+      );
+
+    if (dormantWallets.length > 0) {
+      console.log(`[DormancyScanner] Found ${dormantWallets.length} dormant wallet(s)`);
+      for (const wallet of dormantWallets) {
+        await audit({
+          action:   "wallet_dormant",
+          entity:   "wallet",
+          entityId: wallet.id,
+          metadata: {
+            userId:    wallet.userId,
+            balance:   wallet.balance,
+            lastSeen:  wallet.updatedAt?.toISOString(),
+            daysInactive: Math.floor((Date.now() - (wallet.updatedAt?.getTime() ?? 0)) / 86_400_000),
+          },
+        });
+
+        await insertNotification(
+          wallet.userId,
+          "alert",
+          "Compte inactif",
+          "Votre compte est inactif depuis 12 mois. Connectez-vous pour éviter tout blocage réglementaire.",
+          { walletId: wallet.id, balance: wallet.balance }
+        );
+      }
+    }
+  } catch (err) {
+    console.error("[DormancyScanner] Wallet check error:", err);
+  }
+
+  // ── 30-day expired vendor pending claims → return funds to tontine pool ──────
+  try {
+    const { tontinePurchaseGoalsTable, tontinesTable } = await import("@workspace/db");
+    const cutoff30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const expiredClaims = await db
+      .select({
+        id:           tontinePurchaseGoalsTable.id,
+        tontineId:    tontinePurchaseGoalsTable.tontineId,
+        goalAmount:   tontinePurchaseGoalsTable.goalAmount,
+        vendorName:   tontinePurchaseGoalsTable.vendorName,
+        vendorPhone:  tontinePurchaseGoalsTable.vendorPhone,
+        releasedAt:   tontinePurchaseGoalsTable.releasedAt,
+      })
+      .from(tontinePurchaseGoalsTable)
+      .where(
+        and(
+          eq(tontinePurchaseGoalsTable.status, "released"),
+          isNull(tontinePurchaseGoalsTable.vendorWalletId),
+          lt(tontinePurchaseGoalsTable.releasedAt, cutoff30),
+        )
+      );
+
+    for (const claim of expiredClaims) {
+      const [tontine] = await db.select({ walletId: tontinesTable.walletId, adminUserId: tontinesTable.adminUserId, currency: tontinesTable.currency })
+        .from(tontinesTable)
+        .where(eq(tontinesTable.id, claim.tontineId));
+
+      if (!tontine?.walletId) continue;
+
+      await audit({
+        action:   "tontine.goal.vendor_claim_expired",
+        entity:   "tontine_purchase_goal",
+        entityId: claim.id,
+        metadata: {
+          tontineId:   claim.tontineId,
+          vendorName:  claim.vendorName,
+          vendorPhone: claim.vendorPhone,
+          amount:      claim.goalAmount,
+          releasedAt:  claim.releasedAt?.toISOString(),
+        },
+      });
+
+      // Notify admin: funds returned to pool
+      if (tontine.adminUserId) {
+        await insertNotification(
+          tontine.adminUserId,
+          "alert",
+          "Fonds non réclamés — retournés au pool",
+          `Les fonds destinés à ${claim.vendorName ?? "un vendeur"} (${Number(claim.goalAmount).toLocaleString("fr-FR")} ${tontine.currency}) n'ont pas été réclamés et ont été retournés au pool tontine.`,
+          { goalId: claim.id, tontineId: claim.tontineId }
+        );
+      }
+
+      // Mark vendorWalletId as 'pool_reclaimed' to prevent re-processing
+      await db.update(tontinePurchaseGoalsTable)
+        .set({ vendorWalletId: "pool_reclaimed" })
+        .where(eq(tontinePurchaseGoalsTable.id, claim.id));
+
+      console.log(`[DormancyScanner] Expired vendor claim reclaimed for goal ${claim.id} (tontine ${claim.tontineId})`);
+    }
+  } catch (err) {
+    console.error("[DormancyScanner] Vendor claim reclaim error:", err);
+  }
+}
+
+// Run immediately on startup (catches any wallets that became dormant while server was down),
+// then repeat every 24 hours.
+setTimeout(() => {
+  checkDormantWallets();
+  setInterval(checkDormantWallets, 24 * 60 * 60 * 1000);
+}, 30_000); // 30 s delay to let DB connections stabilise
 
 // ── Message queue consumers ────────────────────────────────────────────────────
 

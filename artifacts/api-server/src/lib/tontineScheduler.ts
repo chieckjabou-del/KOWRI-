@@ -6,7 +6,7 @@ import {
   merchantsTable, investmentPoolsTable, poolPositionsTable,
   tontineHybridCyclesTable, tontineSolidaryClaimsTable,
 } from "@workspace/db";
-import { eq, and, sql, asc } from "drizzle-orm";
+import { eq, and, sql, asc, ne } from "drizzle-orm";
 import { generateId } from "./id";
 import { processTransfer } from "./walletService";
 import { eventBus } from "./eventBus";
@@ -57,6 +57,11 @@ export async function runContributionCycle(tontineId: string): Promise<{
     if (member.contributionsCount >= expectedRound) {
       continue;
     }
+    // Skip suspended members
+    if ((member as any).memberStatus === "suspended") {
+      failed.push(member.userId);
+      continue;
+    }
 
     // Multi-amount: use member's personal contribution if set, else tontine default
     const memberAmount = Number(member.personalContribution ?? defaultAmount);
@@ -95,6 +100,59 @@ export async function runContributionCycle(tontineId: string): Promise<{
       totalCollected += memberAmount;
     } catch {
       failed.push(member.userId);
+
+      // ── Missed contribution tracking ──────────────────────────────────────
+      const currentMissed = Number((member as any).missedContributions ?? 0);
+      const newMissed = currentMissed + 1;
+      const updates: Record<string, any> = {
+        missedContributions: newMissed,
+      };
+
+      if (newMissed >= 3) {
+        // Suspend member
+        updates.memberStatus = "suspended";
+
+        await audit({
+          action:   "tontine_missed_contribution",
+          entity:   "tontine_member",
+          entityId: member.id,
+          metadata: { tontineId, userId: member.userId, missedCount: newMissed, round: expectedRound },
+        });
+
+        // Notify suspended member
+        await eventBus.publish("tontine.member.suspended", {
+          tontineId,
+          userId: member.userId,
+          missedContributions: newMissed,
+          round: expectedRound,
+        });
+
+        // Notify admin
+        await eventBus.publish("tontine.member.suspended", {
+          tontineId,
+          userId: tontine.adminUserId,
+          isAdminNotification: true,
+          suspendedUserId: member.userId,
+          missedContributions: newMissed,
+        });
+      } else if (newMissed >= 2) {
+        await audit({
+          action:   "tontine_missed_contribution",
+          entity:   "tontine_member",
+          entityId: member.id,
+          metadata: { tontineId, userId: member.userId, missedCount: newMissed, round: expectedRound },
+        });
+
+        // Warn member at 2 misses
+        await eventBus.publish("tontine.member.contribution_warning", {
+          tontineId,
+          userId: member.userId,
+          missedContributions: newMissed,
+          round: expectedRound,
+        });
+      }
+
+      await db.update(tontineMembersTable).set(updates).where(eq(tontineMembersTable.id, member.id));
     }
   }
 

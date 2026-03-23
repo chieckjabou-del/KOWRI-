@@ -1,13 +1,14 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import {
-  tontinesTable, tontineMembersTable, walletsTable,
+  tontinesTable, tontineMembersTable, walletsTable, usersTable,
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
   schedulerJobsTable, tontinePurchaseGoalsTable, tontineAiAssessmentsTable,
   tontineStrategyTargetsTable, merchantsTable,
   tontineHybridCyclesTable, tontineSolidaryClaimsTable,
 } from "@workspace/db";
-import { eq, and, desc, count, asc, gte } from "drizzle-orm";
+import { eq, and, desc, count, asc, gte, isNull, lt } from "drizzle-orm";
+import { audit } from "../lib/auditLogger";
 import { processTransfer } from "../lib/walletService";
 import { eventBus } from "../lib/eventBus";
 import { generateId } from "../lib/id";
@@ -426,18 +427,70 @@ router.post("/tontines/:tontineId/goals/:goalId/release", async (req, res, next)
 
     const releaseAmount = Number(goal.goalAmount);
 
-    // Transfer from pool to vendor wallet (if vendor has a KOWRI wallet)
+    // ── Vendor resolution: walletId → phone lookup → pending claim ────────────
     let transferId: string | null = null;
-    if (goal.vendorWalletId) {
+    let resolvedWalletId: string | null = goal.vendorWalletId ?? null;
+
+    if (!resolvedWalletId && goal.vendorPhone) {
+      // Try to find vendor by phone in users table
+      const [vendorUser] = await db.select({ id: usersTable.id })
+        .from(usersTable)
+        .where(eq(usersTable.phone, goal.vendorPhone))
+        .limit(1);
+
+      if (vendorUser) {
+        // Vendor has a KOWRI account — find their primary wallet
+        const vendorWallets = await db.select().from(walletsTable)
+          .where(and(eq(walletsTable.userId, vendorUser.id), eq(walletsTable.status, "active")));
+        const vendorWallet =
+          vendorWallets.find(w => w.walletType === "personal") ??
+          vendorWallets.find(w => w.walletType !== "tontine") ??
+          vendorWallets[0];
+        if (vendorWallet) resolvedWalletId = vendorWallet.id;
+      }
+    }
+
+    if (resolvedWalletId) {
       const result = await processTransfer({
         fromWalletId:   tontine.walletId,
-        toWalletId:     goal.vendorWalletId,
+        toWalletId:     resolvedWalletId,
         amount:         releaseAmount,
         currency:       tontine.currency,
         description:    `Tontine project release: ${goal.goalDescription}`,
         skipFraudCheck: true,
       });
       transferId = (result as any)?.transactionId ?? null;
+    } else {
+      // No known vendor wallet — log a pending claim and simulate SMS invite
+      await audit({
+        action:   "tontine.goal.pending_vendor_claim",
+        entity:   "tontine_purchase_goal",
+        entityId: goalId,
+        metadata: {
+          tontineId,
+          vendorName:  goal.vendorName,
+          vendorPhone: goal.vendorPhone ?? null,
+          amount:      releaseAmount,
+          currency:    tontine.currency,
+          expiresAt:   new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        },
+      });
+
+      // Notify tontine admin that funds are pending vendor claim
+      await eventBus.publish("tontine.goal.vendor_invite_sent", {
+        tontineId,
+        goalId,
+        vendorName:  goal.vendorName,
+        vendorPhone: goal.vendorPhone,
+        amount:      releaseAmount,
+        currency:    tontine.currency,
+        adminUserId: tontine.adminUserId,
+      });
+
+      console.log(
+        `[GoalRelease] Pending vendor claim: ${goal.vendorName} (${goal.vendorPhone ?? "no phone"})` +
+        ` will receive ${releaseAmount} ${tontine.currency} — expires in 30 days`
+      );
     }
 
     const [updated] = await db.update(tontinePurchaseGoalsTable).set({
@@ -464,7 +517,11 @@ router.post("/tontines/:tontineId/goals/:goalId/release", async (req, res, next)
       goalAmount:    Number(updated.goalAmount),
       currentAmount: Number(updated.currentAmount),
       transferId,
-      pendingVendorPayout: !goal.vendorWalletId,
+      resolvedVendorWalletId: resolvedWalletId,
+      pendingVendorPayout: !resolvedWalletId,
+      pendingClaimExpiresAt: !resolvedWalletId
+        ? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        : null,
     });
   } catch (err) { next(err); }
 });
