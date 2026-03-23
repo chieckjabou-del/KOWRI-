@@ -152,9 +152,10 @@ function applyEvaluation(ev: RuleEvaluation): void {
 // ── Main cycle ────────────────────────────────────────────────────────────────
 
 export async function runAutopilotCycle(): Promise<void> {
-  const [{ acquired }] = await db.execute(
+  const lockResult = await db.execute(
     sql`SELECT pg_try_advisory_lock(${ADVISORY_LOCK_ID}) AS acquired`,
-  ) as any;
+  );
+  const acquired = (lockResult as any).rows?.[0]?.acquired ?? lockResult?.[0]?.acquired ?? false;
   if (!acquired) return;
 
   try {
