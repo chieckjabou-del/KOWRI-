@@ -16,7 +16,7 @@ export const tontinesTable = pgTable("tontines", {
   id:                   text("id").primaryKey(),
   name:                 text("name").notNull(),
   description:          text("description"),
-  contributionAmount:   numeric("contribution_amount",  { precision: 20, scale: 4 }).notNull(),
+  contributionAmount:   numeric("contribution_amount",   { precision: 20, scale: 4 }).notNull(),
   currency:             text("currency").notNull().default("XOF"),
   frequency:            tontineFrequencyEnum("frequency").notNull(),
   maxMembers:           integer("max_members").notNull(),
@@ -28,10 +28,16 @@ export const tontinesTable = pgTable("tontines", {
   isPublic:             boolean("is_public").notNull().default(true),
   isMultiAmount:        boolean("is_multi_amount").notNull().default(false),
   goalDescription:      text("goal_description"),
-  goalAmount:           numeric("goal_amount",          { precision: 20, scale: 4 }),
+  goalAmount:           numeric("goal_amount",            { precision: 20, scale: 4 }),
   merchantId:           text("merchant_id"),
   investmentPoolId:     text("investment_pool_id"),
   currencyMode:         currencyModeEnum("currency_mode").notNull().default("single"),
+  // ── Yield mechanics ──────────────────────────────────────────────────────────
+  yieldRate:            numeric("yield_rate",             { precision: 5,  scale: 2 }),
+  yieldPoolBalance:     numeric("yield_pool_balance",     { precision: 20, scale: 4 }).notNull().default("0"),
+  // ── Growth mechanics ─────────────────────────────────────────────────────────
+  growthRate:           numeric("growth_rate",            { precision: 5,  scale: 2 }),
+  // ── Meta ─────────────────────────────────────────────────────────────────────
   adminUserId:          text("admin_user_id").notNull().references(() => usersTable.id),
   walletId:             text("wallet_id").references(() => walletsTable.id),
   nextPayoutDate:       timestamp("next_payout_date"),
@@ -47,6 +53,10 @@ export const tontineMembersTable = pgTable("tontine_members", {
   hasReceivedPayout:    integer("has_received_payout").notNull().default(0),
   contributionsCount:   integer("contributions_count").notNull().default(0),
   personalContribution: numeric("personal_contribution", { precision: 20, scale: 4 }),
+  // ── Yield tracking ───────────────────────────────────────────────────────────
+  yieldOwed:            numeric("yield_owed",            { precision: 20, scale: 4 }).notNull().default("0"),
+  yieldPaid:            numeric("yield_paid",            { precision: 20, scale: 4 }).notNull().default("0"),
+  receivedPayoutAt:     timestamp("received_payout_at"),
   joinedAt:             timestamp("joined_at").notNull().defaultNow(),
 });
 

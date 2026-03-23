@@ -23,13 +23,32 @@ export async function runContributionCycle(tontineId: string): Promise<{
   const members = await db.select().from(tontineMembersTable)
     .where(eq(tontineMembersTable.tontineId, tontineId));
 
-  const defaultAmount = Number(tontine.contributionAmount);
   const currency      = tontine.currency;
   const poolWalletId  = tontine.walletId!;
   const expectedRound = tontine.currentRound + 1;
 
-  let collected     = 0;
-  let totalCollected = 0;
+  // ── Growth tontine: compound contribution_amount before this cycle ────────────
+  if (tontine.tontineType === "growth" && tontine.growthRate) {
+    const growthRate    = Number(tontine.growthRate);
+    const prevAmount    = Number(tontine.contributionAmount);
+    const newAmount     = prevAmount * (1 + growthRate / 100);
+    const newAmountStr  = newAmount.toFixed(4);
+    await db.update(tontinesTable)
+      .set({ contributionAmount: newAmountStr, updatedAt: new Date() })
+      .where(eq(tontinesTable.id, tontineId));
+    await audit({
+      action:   "tontine.growth.rate_applied",
+      entity:   "tontine",
+      entityId: tontineId,
+      metadata: { previousAmount: prevAmount, newAmount, growthRate, round: expectedRound },
+    });
+    tontine.contributionAmount = newAmountStr;
+  }
+
+  const defaultAmount   = Number(tontine.contributionAmount);
+  let collected         = 0;
+  let totalCollected    = 0;
+  let yieldCollected    = 0;
   const failed: string[] = [];
 
   for (const member of members) {
@@ -39,6 +58,11 @@ export async function runContributionCycle(tontineId: string): Promise<{
 
     // Multi-amount: use member's personal contribution if set, else tontine default
     const memberAmount = Number(member.personalContribution ?? defaultAmount);
+    // Yield tontine: collect any unpaid yield surcharge on top of base contribution
+    const yieldSurcharge = tontine.tontineType === "yield"
+      ? Math.max(0, Number(member.yieldOwed ?? 0) - Number(member.yieldPaid ?? 0))
+      : 0;
+    const totalDebit = memberAmount + yieldSurcharge;
 
     const memberWallets = await db.select().from(walletsTable)
       .where(and(eq(walletsTable.userId, member.userId), eq(walletsTable.status, "active")));
@@ -52,14 +76,19 @@ export async function runContributionCycle(tontineId: string): Promise<{
       await processTransfer({
         fromWalletId: wallet.id,
         toWalletId:   poolWalletId,
-        amount:       memberAmount,
+        amount:       totalDebit,
         currency,
-        description:  `Tontine contribution – Round ${expectedRound}`,
+        description:  `Tontine contribution – Round ${expectedRound}${yieldSurcharge > 0 ? ` (+${yieldSurcharge.toFixed(2)} yield)` : ""}`,
         skipFraudCheck: true,
       });
-      await db.update(tontineMembersTable)
-        .set({ contributionsCount: sql`${tontineMembersTable.contributionsCount} + 1` })
-        .where(eq(tontineMembersTable.id, member.id));
+      const memberUpdates: Record<string, any> = {
+        contributionsCount: sql`${tontineMembersTable.contributionsCount} + 1`,
+      };
+      if (yieldSurcharge > 0) {
+        memberUpdates.yieldPaid = String((Number(member.yieldPaid ?? 0) + yieldSurcharge).toFixed(4));
+        yieldCollected += yieldSurcharge;
+      }
+      await db.update(tontineMembersTable).set(memberUpdates).where(eq(tontineMembersTable.id, member.id));
       collected++;
       totalCollected += memberAmount;
     } catch {
@@ -67,7 +96,14 @@ export async function runContributionCycle(tontineId: string): Promise<{
     }
   }
 
-  await eventBus.publish("tontine.contributions.collected", { tontineId, collected, failed, round: expectedRound });
+  // Persist yield collected this cycle → add to tontine's yield_pool_balance
+  if (yieldCollected > 0) {
+    const [cur] = await db.select({ y: tontinesTable.yieldPoolBalance }).from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    const newBal = (Number(cur?.y ?? 0) + yieldCollected).toFixed(4);
+    await db.update(tontinesTable).set({ yieldPoolBalance: newBal, updatedAt: new Date() }).where(eq(tontinesTable.id, tontineId));
+  }
+
+  await eventBus.publish("tontine.contributions.collected", { tontineId, collected, failed, round: expectedRound, yieldCollected });
 
   await createSchedulerJob("tontine_payout", tontineId, "tontine", new Date());
 
@@ -173,44 +209,72 @@ export async function runPayoutCycle(tontineId: string): Promise<{
     const defaultAmt   = Number(tontine.contributionAmount);
     const payoutAmount = allMembers.reduce((sum, m) => sum + Number(m.personalContribution ?? defaultAmt), 0);
 
+    // ── Yield tontine mechanics ───────────────────────────────────────────────
+    let yieldShare = 0;
+    let yieldOwed  = 0;
+    const yieldPoolBal = Number(tontine.yieldPoolBalance ?? 0);
+
+    if (tontine.tontineType === "yield" && tontine.yieldRate) {
+      const yieldRate           = Number(tontine.yieldRate);
+      const remainingAfter      = tontine.totalRounds - nextOrder;       // rounds AFTER this one
+      const remainingInclusive  = tontine.totalRounds - nextOrder + 1;   // including current round
+
+      // Early recipient: owes interest back to pool (proportional to rounds remaining)
+      yieldOwed = payoutAmount * (yieldRate / 100) * (remainingAfter / tontine.totalRounds);
+
+      // Current recipient's fair share of accumulated yield pool
+      yieldShare = remainingInclusive > 0
+        ? yieldPoolBal / remainingInclusive
+        : yieldPoolBal;
+    }
+
+    const actualPayoutAmount = payoutAmount + yieldShare;
+
     await processTransfer({
       fromWalletId: tontine.walletId!,
       toWalletId:   recipientWallet.id,
-      amount:       payoutAmount,
+      amount:       actualPayoutAmount,
       currency:     tontine.currency,
-      description:  `Tontine payout – Round ${nextOrder}`,
+      description:  `Tontine payout – Round ${nextOrder}${yieldShare > 0 ? ` (+${yieldShare.toFixed(2)} yield share)` : ""}`,
       skipFraudCheck: true,
     });
 
-    const newRound = nextOrder;
-    const isComplete = newRound >= tontine.totalRounds;
+    const newRound       = nextOrder;
+    const isComplete     = newRound >= tontine.totalRounds;
     const nextPayoutDate = computeNextDate(tontine.frequency);
+    const newYieldPool   = Math.max(0, yieldPoolBal - yieldShare).toFixed(4);
 
     await db.transaction(async (tx) => {
       await tx.update(tontineMembersTable)
-        .set({ hasReceivedPayout: 1 })
+        .set({
+          hasReceivedPayout: 1,
+          receivedPayoutAt:  new Date(),
+          yieldOwed:         yieldOwed > 0 ? String(yieldOwed.toFixed(4)) : "0",
+        })
         .where(eq(tontineMembersTable.id, recipient.id));
 
       await tx.update(tontinesTable).set({
-        currentRound: newRound,
-        status: isComplete ? "completed" : "active",
-        nextPayoutDate: isComplete ? null : nextPayoutDate,
-        updatedAt: new Date(),
+        currentRound:    newRound,
+        status:          isComplete ? "completed" : "active",
+        nextPayoutDate:  isComplete ? null : nextPayoutDate,
+        yieldPoolBalance: newYieldPool,
+        updatedAt:       new Date(),
       }).where(eq(tontinesTable.id, tontineId));
     });
 
     await audit({
-      action: "tontine.payout.completed",
-      entity: "tontine",
+      action:   "tontine.payout.completed",
+      entity:   "tontine",
       entityId: tontineId,
-      metadata: { round: newRound, recipientUserId: recipient.userId, payoutAmount },
+      metadata: { round: newRound, recipientUserId: recipient.userId, payoutAmount: actualPayoutAmount, yieldShare, yieldOwed },
     });
 
     await eventBus.publish("tontine.payout.completed", {
-      tontineId, round: newRound, recipientUserId: recipient.userId, payoutAmount,
+      tontineId, round: newRound, recipientUserId: recipient.userId,
+      payoutAmount: actualPayoutAmount, yieldShare, yieldOwed,
     });
 
-    return { recipientUserId: recipient.userId, amount: payoutAmount, round: newRound };
+    return { recipientUserId: recipient.userId, amount: actualPayoutAmount, round: newRound };
   } catch (err) {
     await db.update(tontineMembersTable)
       .set({ hasReceivedPayout: 0 })

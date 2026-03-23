@@ -526,6 +526,115 @@ router.post("/tontines/:tontineId/goals/:goalId/vote", async (req, res, next) =>
   } catch (err) { next(err); }
 });
 
+// ── Yield & Growth analytics ────────────────────────────────────────────────
+
+router.get("/tontines/:tontineId/yield-summary", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (tontine.tontineType !== "yield") {
+      return res.status(400).json({ error: true, message: "yield-summary is only available for type='yield' tontines" });
+    }
+
+    const members = await db
+      .select({
+        memberId:          tontineMembersTable.id,
+        userId:            tontineMembersTable.userId,
+        payoutOrder:       tontineMembersTable.payoutOrder,
+        hasReceivedPayout: tontineMembersTable.hasReceivedPayout,
+        yieldOwed:         tontineMembersTable.yieldOwed,
+        yieldPaid:         tontineMembersTable.yieldPaid,
+        receivedPayoutAt:  tontineMembersTable.receivedPayoutAt,
+        personalContribution: tontineMembersTable.personalContribution,
+      })
+      .from(tontineMembersTable)
+      .where(eq(tontineMembersTable.tontineId, tontineId))
+      .orderBy(asc(tontineMembersTable.payoutOrder));
+
+    const yieldRate      = Number(tontine.yieldRate ?? 0);
+    const yieldPoolBal   = Number(tontine.yieldPoolBalance ?? 0);
+    const defaultAmt     = Number(tontine.contributionAmount);
+    const totalRounds    = tontine.totalRounds;
+    const currentRound   = tontine.currentRound;
+
+    // Projected payout for each remaining member = basePayout + their share of yield pool
+    const remainingMembers = members.filter(m => m.hasReceivedPayout === 0);
+    const projectedPayouts = remainingMembers.map((m, idx) => {
+      const round          = currentRound + idx + 1;
+      const basePayout     = members.reduce((sum, x) => sum + Number(x.personalContribution ?? defaultAmt), 0);
+      // Their share of whatever yield pool exists when it's their turn
+      const shareCount     = remainingMembers.length - idx;
+      const yieldShare     = shareCount > 0 ? yieldPoolBal / shareCount : 0;
+      return {
+        round,
+        userId:              m.userId,
+        payoutOrder:         m.payoutOrder,
+        basePayout:          Number(basePayout.toFixed(4)),
+        projectedYieldShare: Number(yieldShare.toFixed(4)),
+        projectedTotal:      Number((basePayout + yieldShare).toFixed(4)),
+      };
+    });
+
+    res.json({
+      tontineId,
+      tontineType:      tontine.tontineType,
+      yieldRate,
+      yieldPoolBalance: yieldPoolBal,
+      currentRound,
+      totalRounds,
+      members: members.map(m => ({
+        userId:           m.userId,
+        payoutOrder:      m.payoutOrder,
+        hasReceivedPayout: m.hasReceivedPayout === 1,
+        yieldOwed:        Number(m.yieldOwed ?? 0),
+        yieldPaid:        Number(m.yieldPaid ?? 0),
+        yieldUnpaid:      Math.max(0, Number(m.yieldOwed ?? 0) - Number(m.yieldPaid ?? 0)),
+        receivedPayoutAt: m.receivedPayoutAt,
+      })),
+      projectedPayouts,
+    });
+  } catch (err) { next(err); }
+});
+
+router.get("/tontines/:tontineId/growth-projection", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (tontine.tontineType !== "growth") {
+      return res.status(400).json({ error: true, message: "growth-projection is only available for type='growth' tontines" });
+    }
+
+    const growthRate       = Number(tontine.growthRate ?? 0);
+    const currentAmount    = Number(tontine.contributionAmount);
+    const remainingRounds  = tontine.totalRounds - tontine.currentRound;
+    const requestedN       = Math.min(Number(req.query.n) || remainingRounds, 100);
+
+    const projections: Array<{ round: number; contributionAmount: number; cumulativeIncrease: number }> = [];
+    let amt = currentAmount;
+    for (let i = 1; i <= requestedN; i++) {
+      amt = amt * (1 + growthRate / 100);
+      projections.push({
+        round:              tontine.currentRound + i,
+        contributionAmount: Number(amt.toFixed(4)),
+        cumulativeIncrease: Number((amt - currentAmount).toFixed(4)),
+      });
+    }
+
+    res.json({
+      tontineId,
+      tontineType:              tontine.tontineType,
+      growthRate,
+      currentRound:             tontine.currentRound,
+      totalRounds:              tontine.totalRounds,
+      currentContributionAmount: currentAmount,
+      projections,
+      totalFundedIfAllRounds:   Number(projections.reduce((s, p) => s + p.contributionAmount, 0).toFixed(4)),
+    });
+  } catch (err) { next(err); }
+});
+
 router.get("/scheduler/jobs", async (req, res, next) => {
   try {
     const jobs = await db.select().from(schedulerJobsTable)
