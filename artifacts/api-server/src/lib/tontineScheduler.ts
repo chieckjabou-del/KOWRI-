@@ -3,7 +3,8 @@ import {
   tontinesTable, tontineMembersTable, walletsTable,
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
   schedulerJobsTable, tontinePurchaseGoalsTable, tontineStrategyTargetsTable,
-  merchantsTable,
+  merchantsTable, investmentPoolsTable, poolPositionsTable,
+  tontineHybridCyclesTable, tontineSolidaryClaimsTable,
 } from "@workspace/db";
 import { eq, and, sql, asc } from "drizzle-orm";
 import { generateId } from "./id";
@@ -175,6 +176,11 @@ export async function runPayoutCycle(tontineId: string): Promise<{
   const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
   if (!tontine) throw new Error(`Tontine ${tontineId} not found`);
   if (tontine.status !== "active") throw new Error(`Tontine ${tontineId} is not active`);
+
+  // ── Hybrid type: delegate entirely to runHybridCycle ─────────────────────
+  if (tontine.tontineType === "hybrid") {
+    return runHybridCycle(tontineId);
+  }
 
   const nextOrder = tontine.currentRound + 1;
   const [recipient] = await db.select().from(tontineMembersTable)
@@ -420,6 +426,211 @@ export async function createSchedulerJob(
     id: generateId(), jobType, entityId, entityType,
     scheduledAt, status: "pending", metadata: metadata ?? null,
   });
+}
+
+// ── Hybrid Cycle ──────────────────────────────────────────────────────────────
+type HybridConfig = {
+  rotation_pct: number; investment_pct: number;
+  solidarity_pct: number; yield_pct: number;
+  rebalance_each_cycle?: boolean;
+};
+
+export async function runHybridCycle(tontineId: string): Promise<{
+  recipientUserId: string; amount: number; round: number;
+}> {
+  const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+  if (!tontine)               throw new Error(`Tontine ${tontineId} not found`);
+  if (tontine.status !== "active") throw new Error(`Tontine ${tontineId} is not active`);
+  if (!tontine.hybridConfig)  throw new Error(`Tontine ${tontineId} has no hybrid_config — set it via POST /hybrid-config first`);
+  if (!tontine.walletId)      throw new Error(`Tontine ${tontineId} has no pool wallet`);
+
+  const cfg   = tontine.hybridConfig as HybridConfig;
+  const round = tontine.currentRound + 1;
+  const currency = tontine.currency;
+
+  // ── Get pool wallet balance (= what was collected in this cycle) ──────────
+  const [poolWallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, tontine.walletId));
+  if (!poolWallet) throw new Error("Pool wallet not found");
+
+  // Available = balance minus already-reserved solidarity fund
+  const existingReserve = Number(tontine.solidarityReserve ?? 0);
+  const totalBalance    = Number(poolWallet.balance);
+  const available       = Math.max(0, totalBalance - existingReserve);
+
+  if (available <= 0) throw new Error("No funds available for hybrid distribution (all reserved as solidarity)");
+
+  const rotationAmount   = parseFloat((available * (cfg.rotation_pct   / 100)).toFixed(4));
+  const investmentAmount = parseFloat((available * (cfg.investment_pct  / 100)).toFixed(4));
+  const solidarityAmount = parseFloat((available * (cfg.solidarity_pct  / 100)).toFixed(4));
+  const yieldAmount      = parseFloat((available * (cfg.yield_pct       / 100)).toFixed(4));
+
+  // ── 1. Rotation: pay the next member ─────────────────────────────────────
+  const [recipient] = await db.select().from(tontineMembersTable)
+    .where(and(eq(tontineMembersTable.tontineId, tontineId), eq(tontineMembersTable.payoutOrder, round)));
+  if (!recipient) throw new Error(`No recipient found for round ${round}`);
+
+  const claimed = await db.update(tontineMembersTable)
+    .set({ hasReceivedPayout: 2 })
+    .where(and(eq(tontineMembersTable.id, recipient.id), eq(tontineMembersTable.hasReceivedPayout, 0)))
+    .returning({ id: tontineMembersTable.id });
+  if (!claimed.length) throw new Error("Payout already in progress or completed for this member");
+
+  try {
+    const recipientWallets = await db.select().from(walletsTable)
+      .where(and(eq(walletsTable.userId, recipient.userId), eq(walletsTable.status, "active")));
+    const recipientWallet  =
+      recipientWallets.find(w => w.walletType === "personal") ??
+      recipientWallets.find(w => w.walletType !== "tontine") ??
+      recipientWallets[0];
+    if (!recipientWallet || recipientWallet.id === tontine.walletId) {
+      throw new Error("Recipient wallet not found or resolves to pool wallet");
+    }
+
+    if (rotationAmount > 0) {
+      await processTransfer({
+        fromWalletId: tontine.walletId!,
+        toWalletId:   recipientWallet.id,
+        amount:       rotationAmount,
+        currency,
+        description:  `Hybrid tontine payout – Round ${round} (${cfg.rotation_pct}% rotation)`,
+        skipFraudCheck: true,
+      });
+    }
+
+    // ── 2. Investment: transfer to pool wallet ────────────────────────────
+    if (investmentAmount > 0 && tontine.investmentPoolId) {
+      const [invPool] = await db.select().from(investmentPoolsTable)
+        .where(eq(investmentPoolsTable.id, tontine.investmentPoolId));
+      if (invPool?.walletId) {
+        await processTransfer({
+          fromWalletId: tontine.walletId!,
+          toWalletId:   invPool.walletId,
+          amount:       investmentAmount,
+          currency,
+          description:  `Hybrid tontine – Investment tranche Round ${round}`,
+          skipFraudCheck: true,
+        });
+        // Update investment pool running total
+        await db.update(investmentPoolsTable)
+          .set({ currentAmount: sql`${investmentPoolsTable.currentAmount}::numeric + ${investmentAmount}` })
+          .where(eq(investmentPoolsTable.id, tontine.investmentPoolId));
+
+        // Update or create pool positions proportionally for each member
+        const allMembers = await db.select().from(tontineMembersTable).where(eq(tontineMembersTable.tontineId, tontineId));
+        const perMemberInvestment = parseFloat((investmentAmount / allMembers.length).toFixed(4));
+        for (const m of allMembers) {
+          const [pos] = await db.select().from(poolPositionsTable)
+            .where(and(eq(poolPositionsTable.poolId, tontine.investmentPoolId), eq(poolPositionsTable.userId, m.userId)));
+          if (pos) {
+            await db.update(poolPositionsTable)
+              .set({ investedAmount: sql`${poolPositionsTable.investedAmount}::numeric + ${perMemberInvestment}`, updatedAt: new Date() })
+              .where(eq(poolPositionsTable.id, pos.id));
+          } else {
+            await db.insert(poolPositionsTable).values({
+              id: generateId(), poolId: tontine.investmentPoolId, userId: m.userId,
+              investedAmount: String(perMemberInvestment), currency, status: "active",
+              shares: String(perMemberInvestment),
+            });
+          }
+        }
+      }
+    }
+
+    // ── 3. Solidarity: keep in pool, update solidarity_reserve balance ────
+    const newReserve = existingReserve + solidarityAmount;
+    await audit({
+      action:    "tontine.hybrid.solidarity_reserve_tagged",
+      entity:    "tontine",
+      entityId:  tontineId,
+      metadata:  { round, solidarityAmount, newReserve, tag: "SOLIDARITY_RESERVE" },
+    });
+
+    // ── 4. Yield: distribute equally to already-paid members ─────────────
+    let yieldRecipients = 0;
+    if (yieldAmount > 0) {
+      const paidMembers = (await db.select().from(tontineMembersTable)
+        .where(and(eq(tontineMembersTable.tontineId, tontineId), eq(tontineMembersTable.hasReceivedPayout, 1)))
+      ).filter(m => m.id !== recipient.id);
+
+      if (paidMembers.length > 0) {
+        const perMemberYield = parseFloat((yieldAmount / paidMembers.length).toFixed(4));
+        for (const pm of paidMembers) {
+          const pmWallets = await db.select().from(walletsTable)
+            .where(and(eq(walletsTable.userId, pm.userId), eq(walletsTable.status, "active")));
+          const pmWallet  =
+            pmWallets.find(w => w.walletType === "personal") ??
+            pmWallets.find(w => w.walletType !== "tontine") ??
+            pmWallets[0];
+          if (!pmWallet || pmWallet.id === tontine.walletId) continue;
+          try {
+            await processTransfer({
+              fromWalletId: tontine.walletId!,
+              toWalletId:   pmWallet.id,
+              amount:       perMemberYield,
+              currency,
+              description:  `Hybrid yield bonus – Round ${round} patience reward`,
+              skipFraudCheck: true,
+            });
+            yieldRecipients++;
+          } catch (e) {
+            console.error(`[hybrid] yield transfer to ${pm.userId} failed:`, e);
+          }
+        }
+      }
+    }
+
+    // ── Persist cycle record + update tontine state ───────────────────────
+    const isComplete = round >= tontine.totalRounds;
+
+    await db.transaction(async (tx) => {
+      await tx.insert(tontineHybridCyclesTable).values({
+        id: generateId(), tontineId, round,
+        totalPool:        String(available.toFixed(4)),
+        rotationAmount:   String(rotationAmount.toFixed(4)),
+        investmentAmount: String(investmentAmount.toFixed(4)),
+        solidarityAmount: String(solidarityAmount.toFixed(4)),
+        yieldAmount:      String(yieldAmount.toFixed(4)),
+        recipientUserId:  recipient.userId,
+        yieldRecipients,
+        metadata: { cfg, existingReserve, newReserve },
+      });
+
+      await tx.update(tontineMembersTable).set({
+        hasReceivedPayout: 1,
+        receivedPayoutAt:  new Date(),
+      }).where(eq(tontineMembersTable.id, recipient.id));
+
+      await tx.update(tontinesTable).set({
+        currentRound:     round,
+        status:           isComplete ? "completed" : "active",
+        nextPayoutDate:   isComplete ? null : computeNextDate(tontine.frequency),
+        solidarityReserve: String(newReserve.toFixed(4)),
+        updatedAt:        new Date(),
+      }).where(eq(tontinesTable.id, tontineId));
+    });
+
+    await audit({
+      action:   "tontine.hybrid.cycle_completed",
+      entity:   "tontine",
+      entityId: tontineId,
+      metadata: {
+        round, totalPool: available, rotationAmount, investmentAmount,
+        solidarityAmount, yieldAmount, yieldRecipients,
+        recipientUserId: recipient.userId,
+      },
+    });
+
+    await eventBus.publish("tontine.hybrid.cycle_completed", {
+      tontineId, round, rotationAmount, investmentAmount, solidarityAmount, yieldAmount, yieldRecipients,
+    });
+
+    return { recipientUserId: recipient.userId, amount: rotationAmount, round };
+  } catch (err) {
+    await db.update(tontineMembersTable)
+      .set({ hasReceivedPayout: 0 })
+      .where(eq(tontineMembersTable.id, recipient.id));
+    throw err;
+  }
 }
 
 export async function getPendingJobs(jobType?: string) {

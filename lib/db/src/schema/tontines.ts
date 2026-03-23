@@ -8,7 +8,7 @@ export const tontineStatusEnum    = pgEnum("tontine_status",    ["active", "comp
 export const tontineFrequencyEnum = pgEnum("tontine_frequency", ["weekly", "biweekly", "monthly"]);
 export const tontineTypeEnum      = pgEnum("tontine_type",      [
   "classic", "investment", "project", "solidarity",
-  "business", "diaspora", "yield", "growth",
+  "business", "diaspora", "yield", "growth", "hybrid",
 ]);
 export const currencyModeEnum     = pgEnum("currency_mode",     ["single", "multi"]);
 
@@ -37,6 +37,9 @@ export const tontinesTable = pgTable("tontines", {
   yieldPoolBalance:     numeric("yield_pool_balance",     { precision: 20, scale: 4 }).notNull().default("0"),
   // ── Growth mechanics ─────────────────────────────────────────────────────────
   growthRate:           numeric("growth_rate",            { precision: 5,  scale: 2 }),
+  // ── Hybrid config ────────────────────────────────────────────────────────────
+  hybridConfig:         jsonb("hybrid_config"),
+  solidarityReserve:    numeric("solidarity_reserve", { precision: 20, scale: 4 }).notNull().default("0"),
   // ── Strategy mode ────────────────────────────────────────────────────────────
   strategyMode:       boolean("strategy_mode").notNull().default(false),
   strategyZone:       text("strategy_zone"),

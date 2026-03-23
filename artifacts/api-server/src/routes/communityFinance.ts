@@ -5,6 +5,7 @@ import {
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
   schedulerJobsTable, tontinePurchaseGoalsTable, tontineAiAssessmentsTable,
   tontineStrategyTargetsTable, merchantsTable,
+  tontineHybridCyclesTable, tontineSolidaryClaimsTable,
 } from "@workspace/db";
 import { eq, and, desc, count, asc, gte } from "drizzle-orm";
 import { processTransfer } from "../lib/walletService";
@@ -632,6 +633,181 @@ router.get("/tontines/:tontineId/growth-projection", async (req, res, next) => {
       currentContributionAmount: currentAmount,
       projections,
       totalFundedIfAllRounds:   Number(projections.reduce((s, p) => s + p.contributionAmount, 0).toFixed(4)),
+    });
+  } catch (err) { next(err); }
+});
+
+// ── Hybrid Tontine ──────────────────────────────────────────────────────────
+
+router.post("/tontines/:tontineId/hybrid-config", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const { rotation_pct, investment_pct, solidarity_pct, yield_pct, rebalance_each_cycle = true } = req.body;
+
+    if (rotation_pct == null || investment_pct == null || solidarity_pct == null || yield_pct == null) {
+      return res.status(400).json({ error: true, message: "rotation_pct, investment_pct, solidarity_pct, yield_pct all required" });
+    }
+
+    const total = Number(rotation_pct) + Number(investment_pct) + Number(solidarity_pct) + Number(yield_pct);
+    if (Math.abs(total - 100) > 0.01) {
+      return res.status(400).json({ error: true, message: `Percentages must sum to 100, got ${total.toFixed(2)}` });
+    }
+
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (tontine.status !== "pending") {
+      return res.status(400).json({ error: true, message: "hybrid_config can only be set on pending tontines" });
+    }
+
+    const hybridConfig = { rotation_pct: Number(rotation_pct), investment_pct: Number(investment_pct), solidarity_pct: Number(solidarity_pct), yield_pct: Number(yield_pct), rebalance_each_cycle };
+
+    const [updated] = await db.update(tontinesTable).set({
+      hybridConfig,
+      tontineType: "hybrid",
+      updatedAt:   new Date(),
+    }).where(eq(tontinesTable.id, tontineId)).returning();
+
+    await eventBus.publish("tontine.hybrid.config_set", { tontineId, hybridConfig });
+
+    res.json({
+      tontineId,
+      hybridConfig,
+      message: "Hybrid configuration saved. The tontine type has been set to 'hybrid'.",
+    });
+  } catch (err) { next(err); }
+});
+
+router.get("/tontines/:tontineId/hybrid-summary", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    const cycles = await db.select().from(tontineHybridCyclesTable)
+      .where(eq(tontineHybridCyclesTable.tontineId, tontineId))
+      .orderBy(desc(tontineHybridCyclesTable.round));
+
+    const lastCycle = cycles[0] ?? null;
+
+    const totalRotation   = cycles.reduce((s, c) => s + Number(c.rotationAmount),   0);
+    const totalInvestment = cycles.reduce((s, c) => s + Number(c.investmentAmount), 0);
+    const totalYield      = cycles.reduce((s, c) => s + Number(c.yieldAmount),      0);
+    const totalSolidarity = cycles.reduce((s, c) => s + Number(c.solidarityAmount), 0);
+
+    // Solidarity reserve = current balance on tontine record
+    const solidarityReserve = Number(tontine.solidarityReserve ?? 0);
+
+    res.json({
+      tontineId,
+      hybridConfig:     tontine.hybridConfig,
+      cycleCount:       cycles.length,
+      currentRound:     tontine.currentRound,
+      totalRounds:      tontine.totalRounds,
+      solidarityReserveBalance: solidarityReserve,
+      cumulative: {
+        rotationDistributed:   totalRotation,
+        investmentDeployed:    totalInvestment,
+        yieldDistributed:      totalYield,
+        solidarityAccrued:     totalSolidarity,
+      },
+      lastCycle: lastCycle ? {
+        round:            lastCycle.round,
+        totalPool:        Number(lastCycle.totalPool),
+        rotationAmount:   Number(lastCycle.rotationAmount),
+        investmentAmount: Number(lastCycle.investmentAmount),
+        solidarityAmount: Number(lastCycle.solidarityAmount),
+        yieldAmount:      Number(lastCycle.yieldAmount),
+        recipientUserId:  lastCycle.recipientUserId,
+        yieldRecipients:  lastCycle.yieldRecipients,
+        executedAt:       lastCycle.createdAt,
+      } : null,
+    });
+  } catch (err) { next(err); }
+});
+
+router.post("/tontines/:tontineId/solidarity-claim", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const { amount, reason, urgency = "low" } = req.body;
+    const userId = (req as any).auth?.userId;
+
+    if (!amount || !reason) {
+      return res.status(400).json({ error: true, message: "amount and reason are required" });
+    }
+    if (!["low", "medium", "high"].includes(urgency)) {
+      return res.status(400).json({ error: true, message: "urgency must be 'low', 'medium', or 'high'" });
+    }
+
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    const [membership] = await db.select().from(tontineMembersTable)
+      .where(and(eq(tontineMembersTable.tontineId, tontineId), eq(tontineMembersTable.userId, userId ?? "")));
+    if (!membership && userId) {
+      return res.status(403).json({ error: true, message: "You are not a member of this tontine" });
+    }
+
+    const reserve    = Number(tontine.solidarityReserve ?? 0);
+    const memberCount = Math.max(1, tontine.memberCount);
+    const claimAmt   = Number(amount);
+
+    // Auto-approve rules: urgency='high' AND amount <= reserve / member count
+    const autoApprove = urgency === "high" && claimAmt <= (reserve / memberCount);
+    let claimStatus: "pending_admin" | "approved" | "disbursed" = autoApprove ? "approved" : "pending_admin";
+
+    const [claim] = await db.insert(tontineSolidaryClaimsTable).values({
+      id:          generateId(),
+      tontineId,
+      userId:      userId ?? "anonymous",
+      amount:      String(claimAmt),
+      reason,
+      urgency:     urgency as "low" | "medium" | "high",
+      status:      claimStatus,
+      autoApproved:autoApprove,
+    }).returning();
+
+    // If auto-approved, disburse immediately from pool wallet
+    if (autoApprove && tontine.walletId) {
+      const memberWallets = await db.select().from(walletsTable)
+        .where(and(eq(walletsTable.userId, userId ?? ""), eq(walletsTable.status, "active")));
+      const memberWallet = memberWallets.find(w => w.walletType === "personal") ?? memberWallets[0];
+
+      if (memberWallet && memberWallet.id !== tontine.walletId && reserve >= claimAmt) {
+        await processTransfer({
+          fromWalletId: tontine.walletId,
+          toWalletId:   memberWallet.id,
+          amount:       claimAmt,
+          currency:     tontine.currency,
+          description:  `Solidarity emergency claim – ${reason}`,
+          skipFraudCheck: true,
+        });
+        const newReserve = Math.max(0, reserve - claimAmt);
+        await db.update(tontinesTable)
+          .set({ solidarityReserve: String(newReserve.toFixed(4)), updatedAt: new Date() })
+          .where(eq(tontinesTable.id, tontineId));
+        await db.update(tontineSolidaryClaimsTable)
+          .set({ status: "disbursed", disbursedAt: new Date() })
+          .where(eq(tontineSolidaryClaimsTable.id, claim.id));
+        claimStatus = "disbursed";
+      }
+    }
+
+    await eventBus.publish("tontine.solidarity.claim_created", {
+      tontineId, claimId: claim.id, userId: claim.userId,
+      amount: claimAmt, urgency, autoApprove, status: claimStatus,
+    });
+
+    res.status(201).json({
+      claimId:       claim.id,
+      status:        claimStatus,
+      autoApproved:  autoApprove,
+      amount:        claimAmt,
+      urgency,
+      reason,
+      reserveBalance:Number(tontine.solidarityReserve ?? 0),
+      message:       autoApprove
+        ? "Emergency claim auto-approved and disbursed immediately"
+        : "Claim submitted for admin review",
     });
   } catch (err) { next(err); }
 });

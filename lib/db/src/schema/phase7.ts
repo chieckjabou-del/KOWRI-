@@ -336,6 +336,46 @@ export const tontinePurchaseGoalsTable = pgTable("tontine_purchase_goals", {
   index("pgoal_status_idx").on(t.status),
 ]);
 
+export const solidarityClaimUrgencyEnum = pgEnum("solidarity_claim_urgency", ["low", "medium", "high"]);
+export const solidarityClaimStatusEnum  = pgEnum("solidarity_claim_status",  ["pending_admin", "approved", "rejected", "disbursed"]);
+
+export const tontineHybridCyclesTable = pgTable("tontine_hybrid_cycles", {
+  id:               text("id").primaryKey(),
+  tontineId:        text("tontine_id").notNull(),
+  round:            integer("round").notNull(),
+  totalPool:        numeric("total_pool",        { precision: 20, scale: 4 }).notNull(),
+  rotationAmount:   numeric("rotation_amount",   { precision: 20, scale: 4 }).notNull(),
+  investmentAmount: numeric("investment_amount", { precision: 20, scale: 4 }).notNull(),
+  solidarityAmount: numeric("solidarity_amount", { precision: 20, scale: 4 }).notNull(),
+  yieldAmount:      numeric("yield_amount",      { precision: 20, scale: 4 }).notNull(),
+  recipientUserId:  text("recipient_user_id"),
+  yieldRecipients:  integer("yield_recipients").notNull().default(0),
+  metadata:         jsonb("metadata"),
+  createdAt:        timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("hybrid_cycle_tontine_idx").on(t.tontineId),
+  index("hybrid_cycle_round_idx").on(t.round),
+]);
+
+export const tontineSolidaryClaimsTable = pgTable("tontine_solidarity_claims", {
+  id:          text("id").primaryKey(),
+  tontineId:   text("tontine_id").notNull(),
+  userId:      text("user_id").notNull(),
+  amount:      numeric("amount", { precision: 20, scale: 4 }).notNull(),
+  reason:      text("reason").notNull(),
+  urgency:     solidarityClaimUrgencyEnum("urgency").notNull().default("low"),
+  status:      solidarityClaimStatusEnum("status").notNull().default("pending_admin"),
+  autoApproved:boolean("auto_approved").notNull().default(false),
+  reviewedBy:  text("reviewed_by"),
+  reviewedAt:  timestamp("reviewed_at"),
+  disbursedAt: timestamp("disbursed_at"),
+  createdAt:   timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("solidclaim_tontine_idx").on(t.tontineId),
+  index("solidclaim_user_idx").on(t.userId),
+  index("solidclaim_status_idx").on(t.status),
+]);
+
 export const strategyTargetStatusEnum = pgEnum("strategy_target_status", ["funded", "active", "completed", "defaulted"]);
 
 export const tontineStrategyTargetsTable = pgTable("tontine_strategy_targets", {

@@ -6,7 +6,7 @@ import { seedLedgerBalanceSummary, installLedgerTrigger } from "./lib/ledgerBala
 import { rehydrateAutopilotState }                        from "./lib/autopilotStateStore";
 import { reconcileAllWallets }                            from "./lib/walletService";
 import { logIncident }                                    from "./lib/incidentStore";
-import { getPendingJobs, runContributionCycle, runPayoutCycle, distributeToTargets } from "./lib/tontineScheduler";
+import { getPendingJobs, runContributionCycle, runPayoutCycle, distributeToTargets, runHybridCycle } from "./lib/tontineScheduler";
 import { db }                                             from "@workspace/db";
 import { tontinePositionListingsTable, schedulerJobsTable } from "@workspace/db";
 import { eq, and, lt, isNotNull }                         from "drizzle-orm";
@@ -58,6 +58,8 @@ function startTontineScheduler() {
             await runPayoutCycle(job.entityId);
           } else if (job.jobType === "tontine_strategy_distribute") {
             await distributeToTargets(job.entityId);
+          } else if (job.jobType === "tontine_hybrid_rebalance") {
+            await runHybridCycle(job.entityId);
           }
           await db.update(schedulerJobsTable)
             .set({ status: "completed" })
