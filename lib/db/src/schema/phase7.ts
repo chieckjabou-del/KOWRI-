@@ -246,11 +246,31 @@ export const reputationScoresTable = pgTable("reputation_scores", {
   regularityScore:     integer("regularity_score").notNull().default(0),
   tontineScore:        integer("tontine_score").notNull().default(0),
   tier:                text("tier").notNull().default("new"),
+  badges:              jsonb("badges").$type<Array<{ badge: string; earnedAt: string; criteria: string }>>(),
   calculatedAt:        timestamp("calculated_at").notNull().defaultNow(),
 }, (t) => [
   index("rep_user_idx").on(t.userId),
   index("rep_score_idx").on(t.score),
   index("rep_tier_idx").on(t.tier),
+]);
+
+export const tontineAiAssessmentsTable = pgTable("tontine_ai_assessments", {
+  id:             text("id").primaryKey(),
+  tontineId:      text("tontine_id").notNull(),
+  userId:         text("user_id").notNull(),
+  priorityScore:  numeric("priority_score", { precision: 5, scale: 2 }).notNull().default("0"),
+  factors:        jsonb("factors").$type<{
+    creditScore: number; reputationScore: number;
+    needScore: number;   projectScore: number;
+    creditFactor: number; reputationFactor: number;
+  }>(),
+  recommendation: text("recommendation"),
+  assessedAt:     timestamp("assessed_at").notNull().defaultNow(),
+  applied:        boolean("applied").notNull().default(false),
+}, (t) => [
+  index("aiassess_tontine_idx").on(t.tontineId),
+  index("aiassess_user_idx").on(t.userId),
+  index("aiassess_score_idx").on(t.priorityScore),
 ]);
 
 export const creatorCommunitiesTable = pgTable("creator_communities", {

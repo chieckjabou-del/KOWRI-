@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import {
   tontinesTable, tontineMembersTable, walletsTable,
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
-  schedulerJobsTable, tontinePurchaseGoalsTable,
+  schedulerJobsTable, tontinePurchaseGoalsTable, tontineAiAssessmentsTable,
 } from "@workspace/db";
 import { eq, and, desc, count, asc, gte } from "drizzle-orm";
 import { processTransfer } from "../lib/walletService";
@@ -13,7 +13,7 @@ import {
   runContributionCycle, runPayoutCycle, assignPayoutOrder,
   listPositionForSale, buyTontinePosition, computeNextDate, createSchedulerJob,
 } from "../lib/tontineScheduler";
-import { computeReputationScore, getReputationScore } from "../lib/reputationEngine";
+import { computeReputationScore, getReputationScore, computeTontineAIPriority } from "../lib/reputationEngine";
 import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
@@ -631,6 +631,143 @@ router.get("/tontines/:tontineId/growth-projection", async (req, res, next) => {
       currentContributionAmount: currentAmount,
       projections,
       totalFundedIfAllRounds:   Number(projections.reduce((s, p) => s + p.contributionAmount, 0).toFixed(4)),
+    });
+  } catch (err) { next(err); }
+});
+
+// ── AI Priority Assessment ──────────────────────────────────────────────────
+
+router.post("/tontines/:tontineId/ai-assess", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    const ranked = await computeTontineAIPriority(tontineId);
+
+    res.json({
+      tontineId,
+      assessedAt: new Date(),
+      memberCount: ranked.length,
+      rankedMembers: ranked.map(a => ({
+        rank:           a.rank,
+        userId:         a.userId,
+        priorityScore:  Number(a.priorityScore),
+        recommendation: a.recommendation,
+        factors:        a.factors,
+      })),
+    });
+  } catch (err: any) { res.status(500).json({ error: true, message: err.message }); }
+});
+
+router.get("/tontines/:tontineId/ai-assessment", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    const assessments = await db.select().from(tontineAiAssessmentsTable)
+      .where(eq(tontineAiAssessmentsTable.tontineId, tontineId))
+      .orderBy(desc(tontineAiAssessmentsTable.priorityScore));
+
+    if (assessments.length === 0) {
+      return res.status(404).json({ error: true, message: "No AI assessment found — run POST /ai-assess first" });
+    }
+
+    res.json({
+      tontineId,
+      applied:    assessments.some(a => a.applied),
+      assessedAt: assessments[0].assessedAt,
+      rankedMembers: assessments.map((a, i) => ({
+        rank:           i + 1,
+        userId:         a.userId,
+        priorityScore:  Number(a.priorityScore),
+        recommendation: a.recommendation,
+        factors:        a.factors,
+        applied:        a.applied,
+      })),
+    });
+  } catch (err) { next(err); }
+});
+
+router.post("/tontines/:tontineId/apply-ai-order", async (req, res, next) => {
+  try {
+    const { tontineId } = req.params;
+    const { adminOverride = false } = req.body;
+
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+
+    if (tontine.status !== "pending" && !adminOverride) {
+      return res.status(400).json({ error: true, message: "AI order can only be applied to pending tontines. Pass adminOverride=true to force." });
+    }
+
+    const assessments = await db.select().from(tontineAiAssessmentsTable)
+      .where(eq(tontineAiAssessmentsTable.tontineId, tontineId))
+      .orderBy(desc(tontineAiAssessmentsTable.priorityScore));
+
+    if (assessments.length === 0) {
+      return res.status(400).json({ error: true, message: "No AI assessment found — run POST /ai-assess first" });
+    }
+
+    // Apply ranked order: highest priority_score → payoutOrder 1 (receives first)
+    const updates: Array<{ userId: string; newOrder: number; priorityScore: number }> = [];
+    for (let i = 0; i < assessments.length; i++) {
+      const newOrder = i + 1;
+      await db.update(tontineMembersTable)
+        .set({ payoutOrder: newOrder })
+        .where(and(
+          eq(tontineMembersTable.tontineId, tontineId),
+          eq(tontineMembersTable.userId, assessments[i].userId),
+        ));
+      await db.update(tontineAiAssessmentsTable)
+        .set({ applied: true })
+        .where(eq(tontineAiAssessmentsTable.id, assessments[i].id));
+      updates.push({ userId: assessments[i].userId, newOrder, priorityScore: Number(assessments[i].priorityScore) });
+    }
+
+    await eventBus.publish("tontine.ai.order_applied", { tontineId, updatedMembers: updates.length, adminOverride });
+
+    res.json({
+      success: true,
+      tontineId,
+      message:  `AI payout order applied to ${updates.length} members`,
+      appliedOrder: updates,
+    });
+  } catch (err) { next(err); }
+});
+
+// ── Reputation Badges ───────────────────────────────────────────────────────
+
+router.get("/reputation/:userId/badges", async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const [rep] = await db.select().from(reputationScoresTable).where(eq(reputationScoresTable.userId, userId));
+    if (!rep) {
+      return res.status(404).json({ error: true, message: "No reputation score found. Run POST /reputation/:userId/compute first." });
+    }
+
+    const badges = rep.badges ?? [];
+    const BADGE_META: Record<string, { label: string; description: string }> = {
+      reliable_contributor: { label: "Contributeur Fiable",   description: "Zéro paiement manqué sur 5+ cycles de tontine" },
+      trusted_organizer:    { label: "Organisateur Reconnu",  description: "A créé et complété 3+ tontines en tant qu'admin" },
+      fast_repayer:         { label: "Rembourseur Rapide",    description: "Tous les prêts remboursés à temps (3+ prêts)" },
+      community_champion:   { label: "Champion Communautaire",description: "Top 10% du score de réputation sur la plateforme" },
+      diaspora_connector:   { label: "Connecteur Diaspora",   description: "Participation à une tontine multi-pays" },
+    };
+
+    res.json({
+      userId,
+      score:      rep.score,
+      tier:       rep.tier,
+      badgeCount: badges.length,
+      badges: badges.map(b => ({
+        ...b,
+        ...(BADGE_META[b.badge] ?? { label: b.badge, description: b.criteria }),
+      })),
+      availableBadges: Object.entries(BADGE_META)
+        .filter(([key]) => !badges.some(b => b.badge === key))
+        .map(([key, meta]) => ({ badge: key, ...meta, earned: false })),
     });
   } catch (err) { next(err); }
 });
