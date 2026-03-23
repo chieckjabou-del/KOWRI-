@@ -75,10 +75,11 @@ export default function TontineCreate() {
     mutationFn: async () => {
       const body: Record<string, any> = {
         name:               basic.name.trim(),
-        contributionAmount: parseFloat(basic.contributionAmount),
+        contributionAmount: Number(basic.contributionAmount),
+        currency:           "XOF",
         frequency:          basic.frequency,
         maxMembers:         parseInt(basic.maxMembers),
-        createdBy:          user?.id,
+        adminUserId:        user?.id,
         tontineType:        type,
         isPublic:           basic.isPublic,
         isMultiAmount:      basic.isMultiAmount,
