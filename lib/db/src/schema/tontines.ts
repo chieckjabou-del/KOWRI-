@@ -1,4 +1,4 @@
-import { pgTable, text, numeric, timestamp, integer, pgEnum, boolean, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, numeric, timestamp, integer, pgEnum, boolean, jsonb, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -69,7 +69,11 @@ export const tontineMembersTable = pgTable("tontine_members", {
   // ── Missed contribution tracking ─────────────────────────────────────────────
   missedContributions:  integer("missed_contributions").notNull().default(0),
   memberStatus:         text("member_status").notNull().default("active"), // 'active' | 'suspended'
-});
+}, (t) => [
+  index("tontine_members_tontine_idx").on(t.tontineId),
+  index("tontine_members_user_idx").on(t.userId),
+  index("tontine_members_payout_idx").on(t.payoutOrder),
+]);
 
 export const insertTontineSchema       = createInsertSchema(tontinesTable).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertTontineMemberSchema = createInsertSchema(tontineMembersTable).omit({ id: true, joinedAt: true });

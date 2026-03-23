@@ -36,14 +36,15 @@ import { learningEngine }                                        from "./learnin
 import { selfOptimize }                                          from "./selfOptimizer";
 import { resetBatchLock }                                        from "./batchController";
 import { writeAutopilotState }                                   from "./autopilotStateStore";
+import { db }                                                    from "@workspace/db";
+import { sql }                                                   from "drizzle-orm";
 
 const POLL_MS = 5_000;
 
-// Guards against concurrent cycle execution when a cycle outlasts the poll interval.
-// setInterval fires N+1 regardless of whether N has returned.  Under DB stress a
-// single collectMetrics call can block far longer than POLL_MS, so without this flag
-// two cycles would interleave at every await boundary on shared module-level state.
-let cycleRunning = false;
+// Advisory lock constant — uniquely identifies the autopilot process in pg_try_advisory_lock.
+// Using a distributed DB lock instead of an in-memory flag makes the guard safe
+// across multiple autoscale instances (each process has cycleRunning=false on start).
+const ADVISORY_LOCK_ID = 42424242;
 
 // ── Sentinel state ────────────────────────────────────────────────────────────
 // Tracks the previous cycle's readings so frozen/zero values are caught before
@@ -151,8 +152,11 @@ function applyEvaluation(ev: RuleEvaluation): void {
 // ── Main cycle ────────────────────────────────────────────────────────────────
 
 export async function runAutopilotCycle(): Promise<void> {
-  if (cycleRunning) return;
-  cycleRunning = true;
+  const [{ acquired }] = await db.execute(
+    sql`SELECT pg_try_advisory_lock(${ADVISORY_LOCK_ID}) AS acquired`,
+  ) as any;
+  if (!acquired) return;
+
   try {
     // Reset the per-cycle batch-change lock so all layers start with a clean slate.
     // Must be the first operation — before any layer that could call requestBatchChange.
@@ -286,7 +290,7 @@ export async function runAutopilotCycle(): Promise<void> {
     // Persist state snapshot (fire-and-forget — never blocks the cycle).
     writeAutopilotState();
   } finally {
-    cycleRunning      = false;
+    await db.execute(sql`SELECT pg_advisory_unlock(${ADVISORY_LOCK_ID})`);
     _lastCycleEndTime = Date.now();
   }
 }

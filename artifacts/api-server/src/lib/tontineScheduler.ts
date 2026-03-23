@@ -1,12 +1,12 @@
 import { db } from "@workspace/db";
 import {
-  tontinesTable, tontineMembersTable, walletsTable,
+  tontinesTable, tontineMembersTable, walletsTable, transactionsTable,
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
   schedulerJobsTable, tontinePurchaseGoalsTable, tontineStrategyTargetsTable,
   merchantsTable, investmentPoolsTable, poolPositionsTable,
   tontineHybridCyclesTable, tontineSolidaryClaimsTable,
 } from "@workspace/db";
-import { eq, and, sql, asc, ne } from "drizzle-orm";
+import { eq, and, sql, asc, ne, like } from "drizzle-orm";
 import { generateId } from "./id";
 import { processTransfer } from "./walletService";
 import { eventBus } from "./eventBus";
@@ -754,4 +754,119 @@ export async function distributeToTargets(tontineId: string): Promise<{
   });
 
   return { distributed: targets.length - failed.length, failed, totalDistributed };
+}
+
+// ── P2-A: Crash recovery for stuck payouts ───────────────────────────────────
+//
+// At startup, scan for tontine_members where hasReceivedPayout = 2 (in-progress
+// sentinel). These indicate a crash occurred AFTER the processTransfer call but
+// BEFORE the db.transaction marking the member as fully paid.
+//
+// Strategy:
+//   1. If tontine.currentRound >= member.payoutOrder:
+//      The final db.transaction DID commit (tontine round was advanced).
+//      The member record just wasn't updated. Safe to set hasReceivedPayout = 1.
+//
+//   2. Else if a "tontine_payout" transaction to the recipient's wallet exists:
+//      processTransfer committed (money sent) but the final tx did not.
+//      Advance state atomically: set member = 1, update tontine round.
+//
+//   3. Else:
+//      Neither transfer nor final tx committed. Safe to reset to 0 for retry.
+//
+export async function recoverStuckPayouts(): Promise<void> {
+  const stuck = await db.select({
+    id:          tontineMembersTable.id,
+    tontineId:   tontineMembersTable.tontineId,
+    userId:      tontineMembersTable.userId,
+    payoutOrder: tontineMembersTable.payoutOrder,
+  }).from(tontineMembersTable)
+    .where(eq(tontineMembersTable.hasReceivedPayout, 2));
+
+  if (stuck.length === 0) return;
+
+  console.warn(`[RecoverStuckPayouts] Found ${stuck.length} stuck member(s) — recovering...`);
+
+  for (const member of stuck) {
+    try {
+      const [tontine] = await db.select().from(tontinesTable)
+        .where(eq(tontinesTable.id, member.tontineId));
+      if (!tontine) continue;
+
+      // Case 1: tontine round was already advanced — just mark member as paid
+      if (tontine.currentRound >= member.payoutOrder) {
+        await db.update(tontineMembersTable)
+          .set({ hasReceivedPayout: 1, receivedPayoutAt: new Date() })
+          .where(eq(tontineMembersTable.id, member.id));
+
+        await audit({
+          action:   "tontine.payout.crash_recovery.marked_paid",
+          entity:   "tontine_member",
+          entityId: member.id,
+          metadata: { tontineId: member.tontineId, payoutOrder: member.payoutOrder, reason: "tontine_round_advanced" },
+        });
+        console.warn(`[RecoverStuckPayouts] Member ${member.id} set to paid (tontine round already advanced).`);
+        continue;
+      }
+
+      // Case 2: check if a payout transaction was committed to recipient's wallet
+      const recipientWallets = await db.select({ id: walletsTable.id })
+        .from(walletsTable)
+        .where(and(eq(walletsTable.userId, member.userId), eq(walletsTable.status, "active")));
+      const recipientWalletIds = recipientWallets.map(w => w.id);
+
+      let transferFound = false;
+      for (const walletId of recipientWalletIds) {
+        const [txn] = await db.select({ id: transactionsTable.id })
+          .from(transactionsTable)
+          .where(and(
+            eq(transactionsTable.toWalletId, walletId),
+            like(transactionsTable.description, `%Tontine payout – Round ${member.payoutOrder}%`),
+          ))
+          .limit(1);
+        if (txn) { transferFound = true; break; }
+      }
+
+      if (transferFound) {
+        // Transfer was made — advance state atomically
+        const isComplete = member.payoutOrder >= tontine.totalRounds;
+        await db.transaction(async (tx) => {
+          await tx.update(tontineMembersTable)
+            .set({ hasReceivedPayout: 1, receivedPayoutAt: new Date() })
+            .where(eq(tontineMembersTable.id, member.id));
+          await tx.update(tontinesTable)
+            .set({
+              currentRound:  member.payoutOrder,
+              status:        isComplete ? "completed" : "active",
+              nextPayoutDate: isComplete ? null : computeNextDate(tontine.frequency),
+              updatedAt:     new Date(),
+            })
+            .where(eq(tontinesTable.id, tontine.id));
+        });
+        await audit({
+          action:   "tontine.payout.crash_recovery.state_advanced",
+          entity:   "tontine_member",
+          entityId: member.id,
+          metadata: { tontineId: member.tontineId, payoutOrder: member.payoutOrder, reason: "transfer_found_in_ledger" },
+        });
+        console.warn(`[RecoverStuckPayouts] Member ${member.id}: transfer found — state advanced to round ${member.payoutOrder}.`);
+      } else {
+        // No transfer found — safe to reset for retry
+        await db.update(tontineMembersTable)
+          .set({ hasReceivedPayout: 0 })
+          .where(eq(tontineMembersTable.id, member.id));
+        await audit({
+          action:   "tontine.payout.crash_recovery.reset_for_retry",
+          entity:   "tontine_member",
+          entityId: member.id,
+          metadata: { tontineId: member.tontineId, payoutOrder: member.payoutOrder, reason: "no_transfer_found" },
+        });
+        console.warn(`[RecoverStuckPayouts] Member ${member.id}: no transfer found — reset to unpaid for retry.`);
+      }
+    } catch (err) {
+      console.error(`[RecoverStuckPayouts] Failed to recover member ${member.id}:`, err);
+    }
+  }
+
+  console.info("[RecoverStuckPayouts] Recovery complete.");
 }

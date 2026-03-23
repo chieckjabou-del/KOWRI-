@@ -1,4 +1,4 @@
-import { pgTable, text, numeric, timestamp, jsonb, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, numeric, timestamp, jsonb, pgEnum, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { walletsTable } from "./wallets";
@@ -26,7 +26,12 @@ export const transactionsTable = pgTable("transactions", {
   idempotencyKey: text("idempotency_key").unique(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   completedAt: timestamp("completed_at"),
-});
+}, (t) => [
+  index("txn_from_wallet_idx").on(t.fromWalletId),
+  index("txn_to_wallet_idx").on(t.toWalletId),
+  index("txn_created_idx").on(t.createdAt),
+  index("txn_status_idx").on(t.status),
+]);
 
 export const ledgerEntriesTable = pgTable("ledger_entries", {
   id: text("id").primaryKey(),
@@ -42,7 +47,12 @@ export const ledgerEntriesTable = pgTable("ledger_entries", {
   walletId: text("wallet_id"),
   reference: text("reference"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (t) => [
+  index("ledger_wallet_idx").on(t.walletId),
+  index("ledger_account_idx").on(t.accountId),
+  index("ledger_created_idx").on(t.createdAt),
+  index("ledger_tx_idx").on(t.transactionId),
+]);
 
 export const insertTransactionSchema = createInsertSchema(transactionsTable).omit({ id: true, createdAt: true });
 export const insertLedgerEntrySchema = createInsertSchema(ledgerEntriesTable).omit({ id: true, createdAt: true });

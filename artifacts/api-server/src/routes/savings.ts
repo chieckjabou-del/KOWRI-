@@ -105,7 +105,7 @@ router.get("/plans/:planId", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post("/plans/:planId/accrue", async (req, res, next) => {
+router.post("/plans/:planId/accrue", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const yieldAmount = await accrueYield(req.params.planId);
     res.json({ success: true, yieldAmount, message: `Accrued ${yieldAmount.toFixed(4)} yield` });
@@ -114,7 +114,7 @@ router.post("/plans/:planId/accrue", async (req, res, next) => {
   }
 });
 
-router.post("/plans/:planId/break", async (req, res, next) => {
+router.post("/plans/:planId/break", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { targetWalletId } = req.body;
     if (!targetWalletId) {

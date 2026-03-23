@@ -10,6 +10,7 @@ import {
   createNotification, getNotifications, markNotificationRead, markAllRead,
 } from "../lib/productWallet";
 import { processTransfer, processDeposit } from "../lib/walletService";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
 const router = Router();
 
@@ -90,18 +91,17 @@ router.get("/wallets", async (req, res) => {
   }
 });
 
-router.post("/transfer", async (req, res) => {
-  const { fromWalletId, toWalletId, amount, currency = "XOF", description, idempotencyKey } = req.body;
+router.post("/transfer", requireIdempotencyKey, checkIdempotency, async (req, res) => {
+  const { fromWalletId, toWalletId, amount, currency = "XOF", description } = req.body;
   if (!fromWalletId || !toWalletId || !amount) {
     return res.status(400).json({ error: "fromWalletId, toWalletId, amount required" });
   }
   try {
-    const idemKey = idempotencyKey ?? `wallet-transfer-${Date.now()}-${Math.random()}`;
-    const result  = await processTransfer({
+    const result = await processTransfer({
       fromWalletId, toWalletId,
       amount: Number(amount), currency,
       description: description ?? "P2P Transfer",
-      idempotencyKey: idemKey,
+      idempotencyKey: req.idempotencyKey,
     });
     await createNotification(fromWalletId, "transfer_sent", "Transfer Sent",
       `${Number(amount).toLocaleString()} ${currency} sent successfully.`);
@@ -137,7 +137,7 @@ router.post("/qr/generate", async (req, res) => {
   }
 });
 
-router.post("/qr/pay", async (req, res) => {
+router.post("/qr/pay", requireIdempotencyKey, checkIdempotency, async (req, res) => {
   const { qrData, fromWalletId } = req.body;
   if (!qrData || !fromWalletId) return res.status(400).json({ error: "qrData and fromWalletId required" });
   try {

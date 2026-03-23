@@ -6,7 +6,7 @@ import { seedLedgerBalanceSummary, installLedgerTrigger } from "./lib/ledgerBala
 import { rehydrateAutopilotState }                        from "./lib/autopilotStateStore";
 import { reconcileAllWallets }                            from "./lib/walletService";
 import { logIncident }                                    from "./lib/incidentStore";
-import { getPendingJobs, runContributionCycle, runPayoutCycle, distributeToTargets, runHybridCycle } from "./lib/tontineScheduler";
+import { getPendingJobs, runContributionCycle, runPayoutCycle, distributeToTargets, runHybridCycle, recoverStuckPayouts } from "./lib/tontineScheduler";
 import { db }                                             from "@workspace/db";
 import { tontinePositionListingsTable, schedulerJobsTable } from "@workspace/db";
 import { eq, and, lt, isNotNull }                         from "drizzle-orm";
@@ -99,6 +99,9 @@ app.listen(port, () => {
     .then(() => installLedgerTrigger())
     .then(() => seedLedgerBalanceSummary())
     .then(() => rehydrateAutopilotState())
+    .then(() => recoverStuckPayouts().catch((err) =>
+      console.error("[Startup] recoverStuckPayouts failed (non-fatal):", err),
+    ))
     .then(() => startAutopilot())
     .then(() => {
       setInterval(async () => {

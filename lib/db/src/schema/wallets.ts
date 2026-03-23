@@ -1,4 +1,4 @@
-import { pgTable, text, numeric, timestamp, pgEnum, check } from "drizzle-orm/pg-core";
+import { pgTable, text, numeric, timestamp, pgEnum, check, index } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
@@ -20,6 +20,8 @@ export const walletsTable = pgTable("wallets", {
 }, (t) => [
   check("wallets_balance_non_negative", sql`${t.balance} >= 0`),
   check("wallets_available_balance_non_negative", sql`${t.availableBalance} >= 0`),
+  index("wallets_user_idx").on(t.userId),
+  index("wallets_status_idx").on(t.status),
 ]);
 
 export const insertWalletSchema = createInsertSchema(walletsTable).omit({ id: true, createdAt: true, updatedAt: true });

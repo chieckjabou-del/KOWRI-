@@ -105,7 +105,7 @@ router.get("/loans", validateQueryParams({ status: VALID_LOAN_STATUSES }), async
   }
 });
 
-router.post("/loans", async (req, res, next) => {
+router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { userId, walletId, amount, currency, termDays, purpose } = req.body;
     if (!userId || !walletId || !amount || !currency || !termDays) {

@@ -24,7 +24,7 @@ export function setBatchSize(n: number): void {
 const POLL_MS           = 5_000;
 const MAX_DELAY_S       = 300;      // 5-minute ceiling on any single backoff
 const JITTER_FACTOR     = 0.15;     // ±15% randomised jitter
-const PRUNE_AFTER_DAYS  = 7;
+const PRUNE_AFTER_DAYS  = 30;
 
 // ── Analytics deferral ────────────────────────────────────────────────────────
 // When the last batch took > DEFER_LATENCY_MS to execute, analytics events

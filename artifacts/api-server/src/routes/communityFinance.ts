@@ -394,7 +394,7 @@ router.get("/tontines/:tontineId/goals", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post("/tontines/:tontineId/goals/:goalId/release", async (req, res, next) => {
+router.post("/tontines/:tontineId/goals/:goalId/release", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { tontineId, goalId } = req.params;
 

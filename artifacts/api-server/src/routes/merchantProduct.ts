@@ -10,6 +10,7 @@ import {
   generateMerchantQR,
 } from "../lib/productMerchant";
 import { randomBytes } from "crypto";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
 const router = Router();
 
@@ -75,7 +76,7 @@ router.get("/profile", async (req, res) => {
   }
 });
 
-router.post("/payment", async (req, res) => {
+router.post("/payment", requireIdempotencyKey, checkIdempotency, async (req, res) => {
   const { merchantId, fromWalletId, amount, currency = "XOF", description, reference } = req.body;
   if (!merchantId || !fromWalletId || !amount) {
     return res.status(400).json({ error: "merchantId, fromWalletId, amount required" });
@@ -219,7 +220,7 @@ router.post("/qr/generate", async (req, res) => {
 // ── Strategy performance tracking ───────────────────────────────────────────
 // POST /api/merchants/:id/payment — record a completed sale and update
 // any linked tontine strategy target performance scores.
-router.post("/:merchantId/payment", async (req, res) => {
+router.post("/:merchantId/payment", requireIdempotencyKey, checkIdempotency, async (req, res) => {
   const { merchantId } = req.params;
   const { amount, description, reference } = req.body;
   if (!amount || Number(amount) <= 0) {

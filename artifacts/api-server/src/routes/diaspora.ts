@@ -10,6 +10,7 @@ import {
   seedCorridors,
 } from "../lib/diasporaService";
 import { requireAuth } from "../lib/productAuth";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
 const router = Router();
 
@@ -126,7 +127,7 @@ router.delete("/beneficiaries/:beneficiaryId", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post("/send", async (req, res, next) => {
+router.post("/send", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { fromWalletId, senderUserId, beneficiaryId, amount, fromCurrency, toCurrency, description } = req.body;
     if (!fromWalletId || !senderUserId || !beneficiaryId || !amount || !fromCurrency || !toCurrency) {

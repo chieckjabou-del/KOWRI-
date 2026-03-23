@@ -5,6 +5,7 @@ import { eq, asc } from "drizzle-orm";
 import { paymentRouter } from "../lib/paymentRouter";
 import { selectOptimal } from "../lib/processorRouter";
 import { generateId } from "../lib/id";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
 const router = Router();
 
@@ -22,7 +23,7 @@ router.get("/", async (_req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", requireIdempotencyKey, checkIdempotency, async (req, res) => {
   try {
     const { routeType, processor, priority = 100, active = true, config = {} } = req.body;
     if (!routeType || !processor) return res.status(400).json({ error: "routeType and processor are required" });

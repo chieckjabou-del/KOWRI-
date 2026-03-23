@@ -1,4 +1,4 @@
-import { pgTable, text, jsonb, timestamp, smallint, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, jsonb, timestamp, smallint, integer, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -8,7 +8,10 @@ export const idempotencyKeysTable = pgTable("idempotency_keys", {
   endpoint: text("endpoint").notNull(),
   responseBody: jsonb("response_body").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-});
+}, (t) => [
+  index("idem_key_idx").on(t.key),
+  index("idem_created_idx").on(t.createdAt),
+]);
 
 export const eventLogTable = pgTable("event_log", {
   id: text("id").primaryKey(),
@@ -25,7 +28,11 @@ export const auditLogsTable = pgTable("audit_logs", {
   actor: text("actor").notNull().default("system"),
   timestamp: timestamp("timestamp").notNull().defaultNow(),
   metadata: jsonb("metadata"),
-});
+}, (t) => [
+  index("audit_entity_idx").on(t.entity, t.entityId),
+  index("audit_created_idx").on(t.timestamp),
+  index("audit_action_idx").on(t.action),
+]);
 
 export const outboxEventsTable = pgTable("outbox_events", {
   id:        text("id").primaryKey(),
