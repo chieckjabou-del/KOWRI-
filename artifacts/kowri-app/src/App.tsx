@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import Tontines from "@/pages/Tontines";
+import TontineCreate from "@/pages/TontineCreate";
 import TontineDetail from "@/pages/TontineDetail";
 import Send from "@/pages/Send";
 import Profile from "@/pages/Profile";
@@ -38,6 +39,9 @@ function AppRouter() {
       <Route path="/login" component={Login} />
       <Route path="/dashboard">
         {() => <ProtectedRoute component={Dashboard} />}
+      </Route>
+      <Route path="/tontines/create">
+        {() => <ProtectedRoute component={TontineCreate} />}
       </Route>
       <Route path="/tontines/:id">
         {(params) => <ProtectedRoute component={TontineDetail} params={params} />}
