@@ -15,6 +15,7 @@ import Savings from "@/pages/Savings";
 import Diaspora from "@/pages/Diaspora";
 import Merchant from "@/pages/Merchant";
 import Notifications from "@/pages/Notifications";
+import KYC from "@/pages/KYC";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient({
@@ -70,6 +71,9 @@ function AppRouter() {
       </Route>
       <Route path="/notifications">
         {() => <ProtectedRoute component={Notifications} />}
+      </Route>
+      <Route path="/kyc">
+        {() => <ProtectedRoute component={KYC} />}
       </Route>
       <Route path="/">
         {() => isAuthenticated ? <Redirect to="/dashboard" /> : <Redirect to="/login" />}

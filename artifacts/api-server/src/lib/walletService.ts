@@ -1,6 +1,6 @@
 import { db } from "@workspace/db";
-import { ledgerEntriesTable, walletsTable, transactionsTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { ledgerEntriesTable, walletsTable, transactionsTable, usersTable } from "@workspace/db";
+import { eq, sql, and, gte } from "drizzle-orm";
 import { generateId, generateReference } from "./id";
 import { assertValidTransition } from "./stateMachine";
 import { audit } from "./auditLogger";
@@ -161,6 +161,54 @@ export async function processDeposit(params: {
   return finalTx;
 }
 
+const KYC_MONTHLY_LIMITS: Record<number, number> = {
+  0: 100_000,
+  1: 1_000_000,
+  2: 10_000_000,
+};
+
+export async function getMonthlyVolume(fromWalletId: string): Promise<number> {
+  const startOfMonth = new Date();
+  startOfMonth.setDate(1);
+  startOfMonth.setHours(0, 0, 0, 0);
+
+  const [result] = await db
+    .select({ total: sql<number>`COALESCE(SUM(CAST(${transactionsTable.amount} AS NUMERIC)), 0)` })
+    .from(transactionsTable)
+    .where(and(
+      eq(transactionsTable.fromWalletId, fromWalletId),
+      eq(transactionsTable.type, "transfer"),
+      gte(transactionsTable.createdAt, startOfMonth),
+    ));
+  return Number(result?.total ?? 0);
+}
+
+async function enforceKycLimit(fromWalletId: string, amount: number): Promise<void> {
+  const [wallet] = await db
+    .select({ userId: walletsTable.userId })
+    .from(walletsTable)
+    .where(eq(walletsTable.id, fromWalletId))
+    .limit(1);
+  if (!wallet) return;
+
+  const [user] = await db
+    .select({ kycLevel: usersTable.kycLevel })
+    .from(usersTable)
+    .where(eq(usersTable.id, wallet.userId))
+    .limit(1);
+
+  const kycLevel = user?.kycLevel ?? 0;
+  const monthlyLimit = KYC_MONTHLY_LIMITS[kycLevel] ?? KYC_MONTHLY_LIMITS[0];
+  const monthlyVolume = await getMonthlyVolume(fromWalletId);
+
+  if (monthlyVolume + amount > monthlyLimit) {
+    throw new Error(
+      `Limite mensuelle atteinte (${monthlyLimit.toLocaleString("fr-FR")} XOF). ` +
+      `Complétez votre KYC pour augmenter votre plafond.`
+    );
+  }
+}
+
 export async function processTransfer(params: {
   fromWalletId: string;
   toWalletId: string;
@@ -171,11 +219,16 @@ export async function processTransfer(params: {
   idempotencyKey?: string;
   skipRateLimitCheck?: boolean;
   skipFraudCheck?: boolean;
+  skipKycCheck?: boolean;
 }): Promise<typeof transactionsTable.$inferSelect> {
-  const { fromWalletId, toWalletId, amount, currency, description, reference, idempotencyKey, skipRateLimitCheck, skipFraudCheck } = params;
+  const { fromWalletId, toWalletId, amount, currency, description, reference, idempotencyKey, skipRateLimitCheck, skipFraudCheck, skipKycCheck } = params;
   const start = Date.now();
 
   guard("outbound_transfers");   // throws KillSwitchError if switch is TRIGGERED or FORCED_OFF
+
+  if (!skipKycCheck) {
+    await enforceKycLimit(fromWalletId, amount);
+  }
 
   if (!skipRateLimitCheck) {
     await checkRateLimit(fromWalletId, amount);

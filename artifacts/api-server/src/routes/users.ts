@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { usersTable, walletsTable, tontineMembersTable, transactionsTable } from "@workspace/db";
-import { eq, count, sql, ilike, or } from "drizzle-orm";
+import { usersTable, walletsTable, tontineMembersTable, transactionsTable, kycRecordsTable } from "@workspace/db";
+import { eq, count, sql, desc } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { createHash } from "crypto";
 import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
-import { createSession } from "../lib/productAuth";
+import { createSession, requireAuth } from "../lib/productAuth";
 
 const router = Router();
 
@@ -162,6 +162,94 @@ router.get("/:userId", async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// ── KYC: GET latest record for a user ─────────────────────────────────────────
+router.get("/:userId/kyc", async (req, res, next) => {
+  try {
+    const auth = await requireAuth(req.headers.authorization);
+    if (!auth) { res.status(401).json({ error: true, message: "Unauthorized" }); return; }
+
+    const records = await db
+      .select()
+      .from(kycRecordsTable)
+      .where(eq(kycRecordsTable.userId, req.params.userId))
+      .orderBy(desc(kycRecordsTable.submittedAt))
+      .limit(10);
+
+    const latest = records[0] ?? null;
+    res.json({
+      record: latest ? {
+        id: latest.id,
+        kycLevel: latest.kycLevel,
+        status: latest.status,
+        documentType: latest.documentType,
+        documentNumber: latest.documentNumber,
+        fullName: latest.fullName,
+        dateOfBirth: latest.dateOfBirth,
+        rejectionReason: latest.rejectionReason,
+        submittedAt: latest.submittedAt,
+        verifiedAt: latest.verifiedAt,
+      } : null,
+      history: records.map(r => ({
+        id: r.id, kycLevel: r.kycLevel, status: r.status, submittedAt: r.submittedAt,
+      })),
+    });
+  } catch (err) { next(err); }
+});
+
+// ── KYC: POST submit new KYC application ──────────────────────────────────────
+router.post("/:userId/kyc", async (req, res, next) => {
+  try {
+    const auth = await requireAuth(req.headers.authorization);
+    if (!auth) { res.status(401).json({ error: true, message: "Unauthorized" }); return; }
+
+    const {
+      kycLevel, documentType, documentNumber,
+      fullName, dateOfBirth,
+      documentFront, selfie, proofOfAddress, secondDocument,
+    } = req.body;
+
+    if (!kycLevel || !documentType || !fullName || !dateOfBirth || !documentNumber) {
+      res.status(400).json({ error: true, message: "Missing required fields" });
+      return;
+    }
+
+    const [record] = await db.insert(kycRecordsTable).values({
+      id:             generateId(),
+      userId:         req.params.userId,
+      kycLevel:       Number(kycLevel),
+      documentType:   documentType as any,
+      documentNumber: documentNumber ?? null,
+      fullName:       fullName ?? null,
+      dateOfBirth:    dateOfBirth ?? null,
+      documentFront:  documentFront ?? null,
+      selfie:         selfie ?? null,
+      proofOfAddress: proofOfAddress ?? null,
+      secondDocument: secondDocument ?? null,
+      status:         "pending",
+    }).returning();
+
+    res.status(201).json({ success: true, record: { id: record.id, status: record.status, kycLevel: record.kycLevel } });
+  } catch (err) { next(err); }
+});
+
+// ── Avatar: PATCH update user avatar ──────────────────────────────────────────
+router.patch("/:userId/avatar", async (req, res, next) => {
+  try {
+    const auth = await requireAuth(req.headers.authorization);
+    if (!auth) { res.status(401).json({ error: true, message: "Unauthorized" }); return; }
+
+    const { avatarBase64 } = req.body;
+    if (!avatarBase64) { res.status(400).json({ error: true, message: "avatarBase64 required" }); return; }
+
+    await db
+      .update(usersTable)
+      .set({ avatarUrl: avatarBase64, updatedAt: new Date() })
+      .where(eq(usersTable.id, req.params.userId));
+
+    res.json({ success: true });
+  } catch (err) { next(err); }
 });
 
 export default router;
