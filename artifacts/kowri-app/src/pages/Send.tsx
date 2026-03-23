@@ -208,7 +208,7 @@ export default function Send() {
               className="w-full py-4 rounded-2xl font-bold text-white text-base flex items-center justify-center gap-2 disabled:opacity-70"
               style={{ background: "#1A6B32", minHeight: 52 }}
             >
-              {sendMut.isPending && <Loader2 size={18} className="animate-spin" />}
+              {sendMut.isPending ? <Loader2 size={18} className="animate-spin" /> : null}
               Confirmer et envoyer
             </button>
           </div>

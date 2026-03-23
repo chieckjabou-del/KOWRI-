@@ -137,7 +137,7 @@ function Onboarding({ userId, onCreated }: { userId: string; onCreated: () => vo
             className="w-full py-4 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
             style={{ background: "#1A6B32", minHeight: 52 }}
           >
-            {createMut.isPending && <Loader2 size={16} className="animate-spin" />}
+            {createMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
             Créer mon compte marchand
           </button>
         </form>

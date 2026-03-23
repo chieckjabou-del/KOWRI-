@@ -159,7 +159,7 @@ function PlanCard({
                   className="flex-1 py-2.5 text-xs font-bold border-l border-red-100 flex items-center justify-center gap-1"
                   style={{ color: "#DC2626" }}
                 >
-                  {breakMut.isPending && <Loader2 size={12} className="animate-spin" />}
+                  {breakMut.isPending ? <Loader2 size={12} className="animate-spin" /> : null}
                   Confirmer
                 </button>
               </div>
@@ -171,7 +171,7 @@ function PlanCard({
               className="w-full py-3 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
               style={{ background: "#2563EB", minHeight: 44 }}
             >
-              {breakMut.isPending && <Loader2 size={14} className="animate-spin" />}
+              {breakMut.isPending ? <Loader2 size={14} className="animate-spin" /> : null}
               Débloquer maintenant
             </button>
           ) : !isMatured && isActive ? (
@@ -461,7 +461,7 @@ export default function Savings() {
                 className="w-full py-4 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
                 style={{ background: "#1A6B32", minHeight: 52 }}
               >
-                {createMut.isPending && <Loader2 size={16} className="animate-spin" />}
+                {createMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
                 Créer ce plan
               </button>
             </form>

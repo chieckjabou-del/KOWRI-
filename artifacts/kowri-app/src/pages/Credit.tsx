@@ -192,7 +192,7 @@ function LoanCard({
                 className="px-4 py-2 rounded-xl font-semibold text-white text-sm flex items-center gap-1 disabled:opacity-60"
                 style={{ background: "#1A6B32", minHeight: 44 }}
               >
-                {repayMut.isPending && <Loader2 size={14} className="animate-spin" />}
+                {repayMut.isPending ? <Loader2 size={14} className="animate-spin" /> : null}
                 OK
               </button>
               <button
@@ -337,7 +337,7 @@ export default function Credit() {
                 className="px-6 py-3 rounded-xl font-bold text-white text-sm flex items-center gap-2 disabled:opacity-70"
                 style={{ background: "#1A6B32", minHeight: 44 }}
               >
-                {computeMut.isPending && <Loader2 size={16} className="animate-spin" />}
+                {computeMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
                 Calculer mon score
               </button>
             </div>
@@ -384,7 +384,7 @@ export default function Credit() {
                 className="w-full py-2.5 rounded-xl font-semibold text-sm border border-gray-200 flex items-center justify-center gap-2 disabled:opacity-60"
                 style={{ color: "#1A6B32", minHeight: 44 }}
               >
-                {computeMut.isPending && <Loader2 size={14} className="animate-spin" />}
+                {computeMut.isPending ? <Loader2 size={14} className="animate-spin" /> : null}
                 Recalculer
               </button>
             </div>
@@ -517,7 +517,7 @@ export default function Credit() {
                   className="w-full py-4 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
                   style={{ background: "#1A6B32", minHeight: 52 }}
                 >
-                  {applyMut.isPending && <Loader2 size={16} className="animate-spin" />}
+                  {applyMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
                   Demander ce prêt
                 </button>
               </form>

@@ -71,7 +71,7 @@ export default function Login() {
               type="tel"
               value={phone}
               onChange={e => setPhone(e.target.value)}
-              placeholder="+226 70 00 00 00"
+              placeholder="+2250700000000"
               className="w-full px-4 py-3.5 rounded-2xl border border-gray-200 bg-white text-gray-900 text-base focus:outline-none focus:ring-2 focus:border-transparent"
               style={{ minHeight: 52, "--tw-ring-color": "#1A6B32" } as any}
               autoComplete="tel"
@@ -110,7 +110,7 @@ export default function Login() {
             className="w-full py-4 rounded-2xl font-bold text-white text-base flex items-center justify-center gap-2 transition-opacity disabled:opacity-70"
             style={{ background: "#1A6B32", minHeight: 52 }}
           >
-            {loading && <Loader2 size={18} className="animate-spin" />}
+            {loading ? <Loader2 size={18} className="animate-spin" /> : null}
             Se connecter
           </button>
         </form>
@@ -121,6 +121,11 @@ export default function Login() {
             Créer un compte
           </span>
         </p>
+
+        <div className="mt-6 px-4 py-3 rounded-xl text-xs text-center" style={{ background: "#F0FDF4", color: "#166534" }}>
+          <p className="font-semibold mb-0.5">Compte démo</p>
+          <p>Tél: <span className="font-mono">+2250700000000</span> &nbsp;|&nbsp; PIN: <span className="font-mono">1234</span></p>
+        </div>
       </div>
     </div>
   );

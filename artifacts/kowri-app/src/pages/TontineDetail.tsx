@@ -169,7 +169,7 @@ export default function TontineDetail({ params }: TontineDetailProps) {
             className="w-full py-4 rounded-2xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
             style={{ background: "#1A6B32", minHeight: 52 }}
           >
-            {contributeMut.isPending && <Loader2 size={16} className="animate-spin" />}
+            {contributeMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
             Cotiser {formatXOF(tontine.contributionAmount)}
           </button>
         )}

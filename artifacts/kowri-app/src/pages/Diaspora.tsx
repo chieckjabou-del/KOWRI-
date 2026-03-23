@@ -456,7 +456,7 @@ export default function Diaspora() {
                             className="w-full py-4 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
                             style={{ background: "#1A6B32", minHeight: 52 }}
                           >
-                            {sendMut.isPending && <Loader2 size={16} className="animate-spin" />}
+                            {sendMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
                             Confirmer le transfert
                           </button>
                           <button
@@ -670,7 +670,7 @@ function SubmitBtn({ loading, children }: { loading: boolean; children: React.Re
     <button type="submit" disabled={loading}
       className="w-full py-4 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
       style={{ background: "#1A6B32", minHeight: 52 }}>
-      {loading && <Loader2 size={16} className="animate-spin" />}
+      {loading ? <Loader2 size={16} className="animate-spin" /> : null}
       {children}
     </button>
   );
