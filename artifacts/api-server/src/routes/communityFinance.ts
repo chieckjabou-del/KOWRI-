@@ -5,7 +5,7 @@ import {
   tontinePositionListingsTable, tontineBidsTable, reputationScoresTable,
   schedulerJobsTable,
 } from "@workspace/db";
-import { eq, and, desc, count } from "drizzle-orm";
+import { eq, and, desc, count, asc } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import {
   runContributionCycle, runPayoutCycle, assignPayoutOrder,
@@ -96,6 +96,53 @@ router.post("/tontines/:tontineId/members", async (req, res, next) => {
     }).where(eq(tontinesTable.id, tontineId));
 
     res.status(201).json(member);
+  } catch (err) { next(err); }
+});
+
+router.delete("/tontines/:tontineId/members/:userId", async (req, res, next) => {
+  try {
+    const { tontineId, userId } = req.params;
+
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (tontine.status !== "pending") {
+      return res.status(400).json({ error: true, message: "Can only leave a tontine that is still pending" });
+    }
+
+    const [member] = await db.select().from(tontineMembersTable)
+      .where(and(eq(tontineMembersTable.tontineId, tontineId), eq(tontineMembersTable.userId, userId)));
+    if (!member) return res.status(404).json({ error: true, message: "Member not found in this tontine" });
+    if (member.contributionsCount > 0) {
+      return res.status(400).json({ error: true, message: "Cannot leave a tontine after making contributions" });
+    }
+    if (tontine.adminUserId === userId) {
+      return res.status(400).json({ error: true, message: "Admin cannot leave their own tontine" });
+    }
+
+    await db.delete(tontineMembersTable)
+      .where(and(eq(tontineMembersTable.tontineId, tontineId), eq(tontineMembersTable.userId, userId)));
+
+    // Recompute payout order for remaining members (close any gaps)
+    const remaining = await db.select().from(tontineMembersTable)
+      .where(eq(tontineMembersTable.tontineId, tontineId))
+      .orderBy(asc(tontineMembersTable.payoutOrder));
+
+    for (let i = 0; i < remaining.length; i++) {
+      if (remaining[i].payoutOrder !== i + 1) {
+        await db.update(tontineMembersTable)
+          .set({ payoutOrder: i + 1 })
+          .where(eq(tontineMembersTable.id, remaining[i].id));
+      }
+    }
+
+    const newCount = tontine.memberCount - 1;
+    await db.update(tontinesTable).set({
+      memberCount: newCount,
+      totalRounds: newCount,
+      updatedAt: new Date(),
+    }).where(eq(tontinesTable.id, tontineId));
+
+    res.json({ success: true, message: "Member removed from tontine", remainingMembers: newCount });
   } catch (err) { next(err); }
 });
 

@@ -4,7 +4,7 @@ import { z } from "zod/v4";
 import { usersTable } from "./users";
 import { walletsTable } from "./wallets";
 
-export const tontineStatusEnum = pgEnum("tontine_status", ["active", "completed", "pending"]);
+export const tontineStatusEnum = pgEnum("tontine_status", ["active", "completed", "pending", "cancelled"]);
 export const tontineFrequencyEnum = pgEnum("tontine_frequency", ["weekly", "biweekly", "monthly"]);
 
 export const tontinesTable = pgTable("tontines", {
