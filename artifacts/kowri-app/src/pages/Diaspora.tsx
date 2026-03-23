@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "wouter";
 import {
   Plus, X, Loader2, CheckCircle2, Globe, Repeat, Send,
-  Pause, Play, ChevronRight,
+  Pause, Play, ChevronRight, Zap,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { apiFetch, formatXOF, generateIdempotencyKey } from "@/lib/api";
@@ -41,7 +41,7 @@ export default function Diaspora() {
   const { token, user } = useAuth();
   const qc = useQueryClient();
 
-  const [tab, setTab] = useState<"send" | "recurring">("send");
+  const [tab, setTab] = useState<"send" | "recurring" | "instant">("send");
 
   /* Transfer form state */
   const [selectedBene, setSelectedBene]       = useState<Beneficiary | null>(null);
@@ -61,6 +61,16 @@ export default function Diaspora() {
   const [beneError, setBeneError]               = useState("");
   const [recurForm, setRecurForm]               = useState({ beneficiaryId: "", amount: "", frequency: "monthly" });
   const [recurError, setRecurError]             = useState("");
+
+  /* Instant send state */
+  const [instBeneId, setInstBeneId]   = useState("");
+  const [instPhone, setInstPhone]     = useState("");
+  const [instUsePhone, setInstUsePhone] = useState(false);
+  const [instAmount, setInstAmount]   = useState("");
+  const [instCorrId, setInstCorrId]   = useState("");
+  const [instStep, setInstStep]       = useState<"form" | "confirm" | "success">("form");
+  const [instError, setInstError]     = useState("");
+  const [instRef, setInstRef]         = useState("");
 
   /* Wallet */
   const walletsQ = useQuery({
@@ -188,6 +198,52 @@ export default function Diaspora() {
     onError: (e: any) => setRecurError(e.message ?? "Erreur"),
   });
 
+  const instSendMut = useMutation({
+    mutationFn: () => {
+      if (!wallet) throw new Error("Wallet requis");
+      const corr = corridors.find(c => c.id === instCorrId);
+      if (!corr) throw new Error("Corridor requis");
+      const beneId = instUsePhone ? undefined : instBeneId;
+      if (!instUsePhone && !beneId) throw new Error("Bénéficiaire requis");
+      if (instUsePhone && !instPhone) throw new Error("Numéro de téléphone requis");
+      // For direct phone: find or fall back to first matching bene, else use a temporary bene
+      const resolvedBeneId = beneId || (() => {
+        const found = beneficiaries.find(b => b.phone === instPhone.trim());
+        return found?.id ?? "";
+      })();
+      if (!resolvedBeneId) throw new Error("Bénéficiaire introuvable pour ce numéro — ajoutez-le d'abord");
+      return apiFetch<any>("/diaspora/send", token, {
+        method: "POST",
+        body: JSON.stringify({
+          fromWalletId: wallet.id,
+          senderUserId: user?.id,
+          beneficiaryId: resolvedBeneId,
+          amount: parseFloat(instAmount),
+          fromCurrency: corr.fromCurrency,
+          toCurrency: corr.toCurrency,
+          description: `Envoi immédiat diaspora`,
+        }),
+      });
+    },
+    onSuccess: (data) => {
+      setInstRef(data?.transactionId ?? data?.id ?? generateIdempotencyKey());
+      setInstStep("success");
+      qc.invalidateQueries({ queryKey: ["wallets", user?.id] });
+    },
+    onError: (e: any) => setInstError(e.message ?? "Transfert échoué"),
+  });
+
+  function resetInst() {
+    setInstStep("form");
+    setInstBeneId("");
+    setInstPhone("");
+    setInstUsePhone(false);
+    setInstAmount("");
+    setInstCorrId("");
+    setInstError("");
+    setInstRef("");
+  }
+
   /* Handlers */
   function selectCorridor(c: Corridor) {
     setSelectedCorr(c);
@@ -216,14 +272,18 @@ export default function Diaspora() {
 
       {/* Tab bar */}
       <div className="sticky top-14 z-30 bg-white border-b border-gray-100 flex">
-        {([["send", <Globe size={14} />, "Envoyer"], ["recurring", <Repeat size={14} />, "Récurrents"]] as const).map(([t, icon, label]) => (
+        {[
+          { key: "send",      icon: <Globe size={13} />,  label: "Envoyer" },
+          { key: "instant",   icon: <Send size={13} />,   label: "Immédiat" },
+          { key: "recurring", icon: <Repeat size={13} />, label: "Récurrents" },
+        ].map(({ key, icon, label }) => (
           <button
-            key={t}
-            onClick={() => setTab(t as any)}
-            className="flex-1 flex items-center justify-center gap-1.5 py-3 text-sm font-semibold border-b-2 transition-colors"
+            key={key}
+            onClick={() => setTab(key as any)}
+            className="flex-1 flex items-center justify-center gap-1 py-3 text-xs font-semibold border-b-2 transition-colors"
             style={{
-              borderColor: tab === t ? "#1A6B32" : "transparent",
-              color: tab === t ? "#1A6B32" : "#9CA3AF",
+              borderColor: tab === key ? "#1A6B32" : "transparent",
+              color: tab === key ? "#1A6B32" : "#9CA3AF",
             }}
           >
             {icon} {label}
@@ -480,6 +540,206 @@ export default function Diaspora() {
                   </div>
                 )}
               </>
+            )}
+          </>
+        )}
+
+        {/* ─── TAB: ENVOI IMMÉDIAT ──────────────────────────────────── */}
+        {tab === "instant" && (
+          <>
+            {instStep === "success" ? (
+              <div className="bg-white rounded-3xl p-8 text-center shadow-sm border border-gray-100">
+                <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: "#F0FDF4" }}>
+                  <CheckCircle2 size={32} style={{ color: "#1A6B32" }} />
+                </div>
+                <h2 className="text-xl font-bold text-gray-900 mb-1">Transfert envoyé !</h2>
+                <p className="text-sm text-gray-500 mb-1">
+                  {formatXOF(parseFloat(instAmount))} envoyé immédiatement
+                </p>
+                {instRef && <p className="text-xs text-gray-400 mb-6">Réf: {instRef}</p>}
+                <button
+                  onClick={resetInst}
+                  className="w-full py-3 rounded-2xl font-bold text-white"
+                  style={{ background: "#1A6B32" }}
+                >
+                  Nouveau transfert
+                </button>
+              </div>
+            ) : (
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="p-4 space-y-5">
+                  <div>
+                    <p className="text-sm font-bold text-gray-900 mb-1">Envoi immédiat</p>
+                    <p className="text-xs text-gray-500">Transfert exécuté instantanément, sans programmation</p>
+                  </div>
+
+                  {/* Beneficiary or phone toggle */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Destinataire</label>
+                    <div className="grid grid-cols-2 gap-2 mb-3">
+                      <button
+                        onClick={() => setInstUsePhone(false)}
+                        className="py-2.5 rounded-xl text-xs font-semibold border transition-all"
+                        style={{
+                          background: !instUsePhone ? "#F0FDF4" : "#F9FAFB",
+                          borderColor: !instUsePhone ? "#1A6B32" : "#E5E7EB",
+                          color: !instUsePhone ? "#1A6B32" : "#6B7280",
+                          minHeight: 40,
+                        }}
+                      >
+                        Mes bénéficiaires
+                      </button>
+                      <button
+                        onClick={() => setInstUsePhone(true)}
+                        className="py-2.5 rounded-xl text-xs font-semibold border transition-all"
+                        style={{
+                          background: instUsePhone ? "#F0FDF4" : "#F9FAFB",
+                          borderColor: instUsePhone ? "#1A6B32" : "#E5E7EB",
+                          color: instUsePhone ? "#1A6B32" : "#6B7280",
+                          minHeight: 40,
+                        }}
+                      >
+                        Numéro direct
+                      </button>
+                    </div>
+
+                    {!instUsePhone ? (
+                      <select
+                        value={instBeneId}
+                        onChange={e => setInstBeneId(e.target.value)}
+                        className={INPUT_CLS}
+                        style={{ minHeight: 48 }}
+                      >
+                        <option value="">Choisir un bénéficiaire...</option>
+                        {beneficiaries.map(b => (
+                          <option key={b.id} value={b.id}>
+                            {COUNTRY_FLAG[b.country] ?? "🌍"} {b.name} {b.phone ? `· ${b.phone}` : ""}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="tel"
+                        value={instPhone}
+                        onChange={e => setInstPhone(e.target.value)}
+                        placeholder="+225 07 00 00 00 00"
+                        inputMode="tel"
+                        className={INPUT_CLS}
+                        style={{ minHeight: 48 }}
+                      />
+                    )}
+                  </div>
+
+                  {/* Corridor */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Corridor</label>
+                    <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
+                      {corridors.map(c => {
+                        const active = instCorrId === c.id;
+                        return (
+                          <button
+                            key={c.id}
+                            onClick={() => setInstCorrId(c.id)}
+                            className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-semibold border transition-all"
+                            style={{
+                              background: active ? "#F0FDF4" : "white",
+                              borderColor: active ? "#1A6B32" : "#E5E7EB",
+                              color: active ? "#1A6B32" : "#6B7280",
+                            }}
+                          >
+                            <span>{CURRENCY_FLAG[c.fromCurrency] ?? "🌍"}</span>
+                            <span>{c.fromCurrency}→{c.toCurrency}</span>
+                            <span>{CURRENCY_FLAG[c.toCurrency] ?? "🌍"}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Amount */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                      Montant {instCorrId ? `(${corridors.find(c => c.id === instCorrId)?.fromCurrency ?? "XOF"})` : "(XOF)"}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={instAmount}
+                        onChange={e => setInstAmount(e.target.value)}
+                        placeholder="0"
+                        inputMode="decimal"
+                        className={INPUT_CLS}
+                        style={{ minHeight: 52, paddingRight: 56 }}
+                      />
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs font-medium text-gray-400">
+                        {instCorrId ? (corridors.find(c => c.id === instCorrId)?.fromCurrency ?? "XOF") : "XOF"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">Disponible : {formatXOF(available)}</p>
+                  </div>
+
+                  {/* Confirm summary before send */}
+                  {instStep === "confirm" && (
+                    <div className="rounded-xl p-4 space-y-2 border border-gray-100" style={{ background: "#F9FAFB" }}>
+                      <p className="text-sm font-bold text-gray-900 text-center">Confirmer l'envoi</p>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-gray-500">Montant</span>
+                        <span className="font-semibold text-gray-900">{formatXOF(parseFloat(instAmount))}</span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-gray-500">Corridor</span>
+                        <span className="font-semibold text-gray-900">
+                          {(() => { const c = corridors.find(x => x.id === instCorrId); return c ? `${c.fromCurrency} → ${c.toCurrency}` : ""; })()}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-gray-500">Destinataire</span>
+                        <span className="font-semibold text-gray-900">
+                          {instUsePhone ? instPhone : (beneficiaries.find(b => b.id === instBeneId)?.name ?? "—")}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {instError ? (
+                    <div className="px-4 py-3 rounded-xl text-sm" style={{ background: "#FEF2F2", color: "#DC2626" }}>
+                      {instError}
+                    </div>
+                  ) : null}
+
+                  {instStep === "form" ? (
+                    <button
+                      onClick={() => { setInstError(""); setInstStep("confirm"); }}
+                      disabled={
+                        !instAmount || parseFloat(instAmount) <= 0 || !instCorrId ||
+                        (!instUsePhone && !instBeneId) || (instUsePhone && !instPhone)
+                      }
+                      className="w-full py-4 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-60"
+                      style={{ background: "#1A6B32", minHeight: 52 }}
+                    >
+                      <Send size={15} /> Continuer
+                    </button>
+                  ) : (
+                    <div className="space-y-2">
+                      <button
+                        onClick={() => instSendMut.mutate()}
+                        disabled={instSendMut.isPending}
+                        className="w-full py-4 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-70"
+                        style={{ background: "#1A6B32", minHeight: 52 }}
+                      >
+                        {instSendMut.isPending ? <Loader2 size={16} className="animate-spin" /> : <Send size={15} />}
+                        Envoyer maintenant
+                      </button>
+                      <button
+                        onClick={() => { setInstStep("form"); setInstError(""); }}
+                        className="w-full py-3 text-sm text-gray-500"
+                      >
+                        Modifier
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </>
         )}

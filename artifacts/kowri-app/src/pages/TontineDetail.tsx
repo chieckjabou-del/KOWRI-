@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import {
   Loader2, ChevronDown, ChevronUp, Tag, Gavel, ShoppingBag,
   Brain, AlertCircle, TrendingUp, Shield, Zap, X, Crown,
+  PiggyBank, CheckCircle2,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { apiFetch, formatXOF, generateIdempotencyKey } from "@/lib/api";
@@ -180,9 +181,15 @@ export default function TontineDetail({ params }: Props) {
   const { token, user }    = useAuth();
   const [, navigate]       = useLocation();
   const qc                 = useQueryClient();
-  const [showSell, setShowSell]   = useState(false);
-  const [showBid, setShowBid]     = useState(false);
-  const [error, setError]         = useState("");
+  const [showSell, setShowSell]         = useState(false);
+  const [showBid, setShowBid]           = useState(false);
+  const [error, setError]               = useState("");
+
+  /* Auto-save payout state */
+  const [autoSave, setAutoSave]         = useState(false);
+  const [autoSaveDays, setAutoSaveDays] = useState(90);
+  const [saveError, setSaveError]       = useState("");
+  const [saveSuccess, setSaveSuccess]   = useState(false);
 
   // ── Core data ──────────────────────────────────────────────────────────────
   const tontineQ = useQuery({
@@ -195,6 +202,15 @@ export default function TontineDetail({ params }: Props) {
     queryFn:  () => apiFetch<any>(`/tontines/${id}/members`, token),
     enabled:  !!id,
   });
+
+  /* Wallet (needed for savings) */
+  const walletQ = useQuery({
+    queryKey: ["wallets", user?.id],
+    queryFn:  () => apiFetch<any>(`/wallets?userId=${user?.id}&limit=1`, token),
+    enabled:  !!user?.id,
+    staleTime: 30_000,
+  });
+  const myWallet = walletQ.data?.wallets?.[0] ?? null;
 
   const tontine = tontineQ.data?.tontine ?? tontineQ.data;
   const members: any[] = membersQ.data?.members ?? [];
@@ -278,6 +294,31 @@ export default function TontineDetail({ params }: Props) {
     }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["tontine-goals", id] }),
     onError: (e: any) => setError(e.message ?? "Erreur"),
+  });
+
+  const saveMut = useMutation({
+    mutationFn: (amount: number) => {
+      if (!myWallet) throw new Error("Wallet introuvable");
+      const name = `Payout tontine — ${tontine?.name ?? id}`;
+      return apiFetch<any>("/savings/plans", token, {
+        method: "POST",
+        headers: { "Idempotency-Key": generateIdempotencyKey() } as any,
+        body: JSON.stringify({
+          userId: user?.id,
+          walletId: myWallet.id,
+          name,
+          amount,
+          currency: "XOF",
+          termDays: autoSaveDays,
+        }),
+      });
+    },
+    onSuccess: () => {
+      setSaveSuccess(true);
+      setSaveError("");
+      qc.invalidateQueries({ queryKey: ["wallets", user?.id] });
+    },
+    onError: (e: any) => setSaveError(e.message ?? "Erreur épargne"),
   });
 
   // ── Loading ────────────────────────────────────────────────────────────────
@@ -396,6 +437,103 @@ export default function TontineDetail({ params }: Props) {
                 {contributeMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
                 Cotiser maintenant
               </button>
+            )}
+
+            {/* ── Auto-save payout ─────────────────────────────────── */}
+            {isMember && tontine.status === "active" && (
+              <div className="rounded-xl border border-gray-100 overflow-hidden" style={{ background: "#FAFAF8" }}>
+                {/* Toggle row */}
+                <div className="flex items-center justify-between px-4 py-3">
+                  <div className="flex items-center gap-2.5">
+                    <PiggyBank size={16} style={{ color: "#1A6B32" }} />
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">Épargner mon payout</p>
+                      <p className="text-xs text-gray-500">Envoyer vers un plan d'épargne</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setAutoSave(a => !a); setSaveError(""); setSaveSuccess(false); }}
+                    className="relative w-11 h-6 rounded-full transition-colors flex-shrink-0"
+                    style={{ background: autoSave ? "#1A6B32" : "#D1D5DB" }}
+                  >
+                    <span
+                      className="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform"
+                      style={{ transform: autoSave ? "translateX(20px)" : "translateX(0)" }}
+                    />
+                  </button>
+                </div>
+
+                {/* Duration selector — only when enabled */}
+                {autoSave && (
+                  <div className="px-4 pb-4 space-y-3 border-t border-gray-100 pt-3">
+                    <p className="text-xs font-medium text-gray-600">Durée de l'épargne</p>
+                    <div className="grid grid-cols-4 gap-2">
+                      {[30, 60, 90, 180].map(d => (
+                        <button
+                          key={d}
+                          onClick={() => setAutoSaveDays(d)}
+                          className="py-2.5 rounded-xl text-xs font-semibold border transition-all"
+                          style={{
+                            background: autoSaveDays === d ? "#F0FDF4" : "white",
+                            borderColor: autoSaveDays === d ? "#1A6B32" : "#E5E7EB",
+                            color: autoSaveDays === d ? "#1A6B32" : "#6B7280",
+                            minHeight: 40,
+                          }}
+                        >
+                          {d}j
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Info banner */}
+                    <div className="rounded-xl px-3 py-2.5" style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
+                      <p className="text-xs text-green-800">
+                        Quand vous recevez un payout, cliquez{" "}
+                        <strong>Épargner ce payout</strong> pour le verrouiller {autoSaveDays} jours avec intérêts.
+                      </p>
+                    </div>
+
+                    {/* "Épargner ce payout" action — only visible when it's user's payout turn */}
+                    {(() => {
+                      const myMember = members.find(m => m.userId === user?.id);
+                      const isMyTurn = myMember && (myMember.payoutOrder === currentRound);
+                      const payoutAmt = Number(tontine.contributionAmount ?? 0) * members.length;
+                      if (!isMyTurn || payoutAmt <= 0) return null;
+                      if (saveSuccess) {
+                        return (
+                          <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl" style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
+                            <CheckCircle2 size={16} style={{ color: "#1A6B32" }} />
+                            <p className="text-sm font-semibold text-green-800">Payout épargné !</p>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="space-y-2">
+                          <div className="rounded-xl px-3 py-2 border border-yellow-200" style={{ background: "#FFFBEB" }}>
+                            <p className="text-xs font-semibold text-yellow-800">
+                              🎉 C'est votre tour ! Payout estimé : {formatXOF(payoutAmt)}
+                            </p>
+                          </div>
+                          {saveError ? (
+                            <div className="px-3 py-2 rounded-xl text-xs" style={{ background: "#FEF2F2", color: "#DC2626" }}>
+                              {saveError}
+                            </div>
+                          ) : null}
+                          <button
+                            onClick={() => saveMut.mutate(payoutAmt)}
+                            disabled={saveMut.isPending}
+                            className="w-full py-3 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-60"
+                            style={{ background: "#1A6B32", minHeight: 44 }}
+                          >
+                            {saveMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <PiggyBank size={14} />}
+                            Épargner ce payout ({formatXOF(payoutAmt)})
+                          </button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Project: goal progress */}
