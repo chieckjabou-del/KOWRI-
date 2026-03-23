@@ -24,3 +24,9 @@ id = "A6j2-AUuYEOsRvQTCT6ue"
 uri = "file://kowri_tontines_audit.md"
 type = "text"
 title = "KOWRI V5.0 — Audit Complet Fonctionnalités Tontines"
+
+[[outputs]]
+id = "lEdmUdcQLcXUSWItYlBBg"
+uri = "file://tmp/KOWRI-Audit-Production-v5.pdf"
+type = "pdf"
+title = "KOWRI v5.0 — Audit de Préparation Production (PDF)"
