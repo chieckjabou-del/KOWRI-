@@ -19,7 +19,11 @@ export async function apiFetch<T = unknown>(
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
 
-  if (res.status === 401) throw new ApiError(401, "Session expirée. Reconnectez-vous.");
+  if (res.status === 401) {
+    let msg = "Session expirée. Reconnectez-vous.";
+    try { const j = await res.json(); msg = j.message || j.error || msg; } catch { /* keep default */ }
+    throw new ApiError(401, msg);
+  }
   if (!res.ok) {
     let msg = `Erreur ${res.status}`;
     try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}

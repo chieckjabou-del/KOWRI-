@@ -316,15 +316,13 @@ export default function Credit() {
 
         {/* ─── Score card ──────────────────────────────────────── */}
         <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
-          {scoreQ.isLoading && (
+          {scoreQ.isLoading ? (
             <div className="py-10 flex flex-col items-center gap-4 animate-pulse">
               <div className="w-36 h-36 rounded-full bg-gray-100" />
               <div className="h-4 w-28 bg-gray-100 rounded" />
               <div className="h-3 w-48 bg-gray-100 rounded" />
             </div>
-          )}
-
-          {!scoreQ.isLoading && !score && (
+          ) : !score ? (
             <div className="py-8 flex flex-col items-center px-6 text-center">
               <div className="w-16 h-16 rounded-2xl mb-4 flex items-center justify-center" style={{ background: "#FEF3C7" }}>
                 <TrendingUp size={28} style={{ color: "#D97706" }} />
@@ -343,9 +341,7 @@ export default function Credit() {
                 Calculer mon score
               </button>
             </div>
-          )}
-
-          {score && (
+          ) : (
             <div className="px-5 pb-5">
               <ScoreRing score={score.score} tier={score.tier} />
 

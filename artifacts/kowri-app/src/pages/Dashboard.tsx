@@ -78,9 +78,9 @@ export default function Dashboard() {
           </div>
 
           <div className="space-y-3">
-            {tontinesQ.isLoading && [0,1].map(i => <TontineCardSkeleton key={i} />)}
-
-            {!tontinesQ.isLoading && tontines.length === 0 && (
+            {tontinesQ.isLoading ? (
+              [0,1].map(i => <TontineCardSkeleton key={i} />)
+            ) : tontines.length === 0 ? (
               <div className="bg-white rounded-2xl p-6 text-center shadow-sm border border-gray-100">
                 <p className="text-gray-500 text-sm mb-4">
                   Rejoignez une tontine ou créez la vôtre
@@ -95,17 +95,17 @@ export default function Dashboard() {
                   </button>
                 </Link>
               </div>
+            ) : (
+              tontines.map((t: any) => (
+                <TontineCard key={t.id} id={t.id} name={t.name}
+                  contributionAmount={t.contributionAmount} frequency={t.frequency}
+                  maxMembers={t.maxMembers} status={t.status}
+                  currentRound={t.currentRound} totalRounds={t.maxMembers}
+                  nextPayoutAt={t.nextPayoutAt} memberCount={t.memberCount}
+                  compact
+                />
+              ))
             )}
-
-            {tontines.map((t: any) => (
-              <TontineCard key={t.id} id={t.id} name={t.name}
-                contributionAmount={t.contributionAmount} frequency={t.frequency}
-                maxMembers={t.maxMembers} status={t.status}
-                currentRound={t.currentRound} totalRounds={t.maxMembers}
-                nextPayoutAt={t.nextPayoutAt} memberCount={t.memberCount}
-                compact
-              />
-            ))}
           </div>
         </section>
 
@@ -116,25 +116,25 @@ export default function Dashboard() {
           </div>
 
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 divide-y divide-gray-50 px-4">
-            {txQ.isLoading && [0,1,2].map(i => <TransactionRowSkeleton key={i} />)}
-
-            {!txQ.isLoading && transactions.length === 0 && (
+            {txQ.isLoading ? (
+              [0,1,2].map(i => <TransactionRowSkeleton key={i} />)
+            ) : transactions.length === 0 ? (
               <div className="py-8 text-center text-gray-400 text-sm">
                 Aucune transaction récente
               </div>
+            ) : (
+              transactions.map((tx: any) => (
+                <TransactionRow
+                  key={tx.id}
+                  type={tx.type}
+                  amount={tx.amount}
+                  description={tx.description}
+                  createdAt={tx.createdAt}
+                  fromWalletId={tx.fromWalletId}
+                  myWalletId={wallet?.id ?? ""}
+                />
+              ))
             )}
-
-            {transactions.map((tx: any) => (
-              <TransactionRow
-                key={tx.id}
-                type={tx.type}
-                amount={tx.amount}
-                description={tx.description}
-                createdAt={tx.createdAt}
-                fromWalletId={tx.fromWalletId}
-                myWalletId={wallet?.id ?? ""}
-              />
-            ))}
           </div>
         </section>
       </main>
