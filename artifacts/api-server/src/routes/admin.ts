@@ -3,6 +3,9 @@ import { reconcileAllWallets, syncWalletBalance } from "../lib/walletService";
 import { patchTontineMembers } from "../lib/seed";
 import { audit } from "../lib/auditLogger";
 import { generateId } from "../lib/id";
+import { db } from "@workspace/db";
+import { feeConfigTable, type FeeOperationType, type FeeUserTier } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import {
   getAllSwitches,
   getSwitch,
@@ -168,6 +171,126 @@ router.post("/kill-switches/:name/rollback", (req, res) => {
 
   const result = rollback(name, operator);
   res.json({ ...result, switch: name, currentState: getSwitch(name).state });
+});
+
+// ── Fee Configuration ─────────────────────────────────────────────────────────
+// GET    /admin/fees          — list all fee rules (active + inactive)
+// POST   /admin/fees          — create new rule
+// PATCH  /admin/fees/:id      — update rule (rate, limits, active flag)
+// DELETE /admin/fees/:id      — deactivate rule (soft delete — never hard-deletes)
+
+router.get("/fees", async (_req, res, next) => {
+  try {
+    const rules = await db.select().from(feeConfigTable);
+    res.json({ rules });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post("/fees", async (req, res, next) => {
+  try {
+    const {
+      operationType,
+      minAmount    = "0",
+      maxAmount    = null,
+      feeRateBps,
+      feeMinAbs    = "0",
+      feeMaxAbs    = null,
+      userTier     = "all",
+      active       = true,
+    } = req.body as {
+      operationType: FeeOperationType;
+      minAmount?:    string;
+      maxAmount?:    string | null;
+      feeRateBps:    number;
+      feeMinAbs?:    string;
+      feeMaxAbs?:    string | null;
+      userTier?:     FeeUserTier;
+      active?:       boolean;
+    };
+
+    if (!operationType || feeRateBps === undefined) {
+      return res.status(400).json({ error: "operationType and feeRateBps are required" });
+    }
+
+    const id = `fee-${generateId()}`;
+    await db.insert(feeConfigTable).values({
+      id,
+      operationType,
+      minAmount,
+      maxAmount: maxAmount ?? undefined,
+      feeRateBps,
+      feeMinAbs,
+      feeMaxAbs: feeMaxAbs ?? undefined,
+      userTier,
+      active,
+    });
+
+    const [rule] = await db.select().from(feeConfigTable).where(eq(feeConfigTable.id, id));
+    return res.status(201).json({ rule });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.patch("/fees/:id", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const {
+      feeRateBps,
+      minAmount,
+      maxAmount,
+      feeMinAbs,
+      feeMaxAbs,
+      userTier,
+      active,
+    } = req.body as Partial<{
+      feeRateBps: number;
+      minAmount:  string;
+      maxAmount:  string | null;
+      feeMinAbs:  string;
+      feeMaxAbs:  string | null;
+      userTier:   FeeUserTier;
+      active:     boolean;
+    }>;
+
+    const updates: Record<string, unknown> = {};
+    if (feeRateBps  !== undefined) updates.feeRateBps  = feeRateBps;
+    if (minAmount   !== undefined) updates.minAmount   = minAmount;
+    if (maxAmount   !== undefined) updates.maxAmount   = maxAmount;
+    if (feeMinAbs   !== undefined) updates.feeMinAbs   = feeMinAbs;
+    if (feeMaxAbs   !== undefined) updates.feeMaxAbs   = feeMaxAbs;
+    if (userTier    !== undefined) updates.userTier    = userTier;
+    if (active      !== undefined) updates.active      = active;
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({ error: "No fields to update" });
+    }
+
+    await db.update(feeConfigTable).set(updates as any).where(eq(feeConfigTable.id, id));
+    const [rule] = await db.select().from(feeConfigTable).where(eq(feeConfigTable.id, id));
+
+    if (!rule) return res.status(404).json({ error: "Fee rule not found", id });
+    return res.json({ rule });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.delete("/fees/:id", async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    // Soft-delete only — fee rules are never hard-deleted (audit trail)
+    const existing = await db.select({ id: feeConfigTable.id }).from(feeConfigTable).where(eq(feeConfigTable.id, id));
+    if (!existing.length) return res.status(404).json({ error: "Fee rule not found", id });
+
+    await db.update(feeConfigTable).set({ active: false }).where(eq(feeConfigTable.id, id));
+    return res.json({ id, active: false, message: "Fee rule deactivated (soft delete)" });
+  } catch (err) {
+    return next(err);
+  }
 });
 
 export default router;

@@ -4,7 +4,7 @@ import { z } from "zod/v4";
 import { walletsTable } from "./wallets";
 
 export const transactionTypeEnum = pgEnum("transaction_type", [
-  "deposit", "transfer", "loan_disbursement", "loan_repayment",
+  "deposit", "transfer", "withdrawal", "loan_disbursement", "loan_repayment",
   "subscription", "tontine_contribution", "tontine_payout", "merchant_payment"
 ]);
 

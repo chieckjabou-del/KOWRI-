@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, numeric, integer, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, timestamp, numeric, integer, jsonb, pgEnum } from "drizzle-orm/pg-core";
 
 // ── Kill Switches ─────────────────────────────────────────────────────────────
 // Persistent source of truth for all operational kill switches.
@@ -63,3 +63,40 @@ export type MetricRow               = typeof metricsTable.$inferSelect;
 export type IncidentRow             = typeof incidentsTable.$inferSelect;
 export type LedgerBalanceSummaryRow = typeof ledgerBalanceSummaryTable.$inferSelect;
 export type SystemStateRow          = typeof systemStateTable.$inferSelect;
+
+// ── Fee Configuration ─────────────────────────────────────────────────────────
+// Dynamic fee rules evaluated at runtime by feeEngine.ts.
+// Internal wallet-to-wallet transfers are ALWAYS free (enforced in code, not here).
+// "most specific tier wins over 'all'" — orderBy(desc(userTier)) in feeEngine.
+export const feeOperationTypeEnum = pgEnum("fee_operation_type", [
+  "cashout",
+  "tontine_payout",
+  "merchant_payment",
+  "diaspora_transfer",
+  "loan_disbursement",
+]);
+
+export const feeUserTierEnum = pgEnum("fee_user_tier", [
+  "all",
+  "bronze",
+  "silver",
+  "gold",
+  "platinum",
+]);
+
+export const feeConfigTable = pgTable("fee_config", {
+  id:            text("id").primaryKey(),
+  operationType: feeOperationTypeEnum("operation_type").notNull(),
+  minAmount:     numeric("min_amount", { precision: 20, scale: 4 }).notNull().default("0"),
+  maxAmount:     numeric("max_amount", { precision: 20, scale: 4 }),
+  feeRateBps:    integer("fee_rate_bps").notNull(),
+  feeMinAbs:     numeric("fee_min_abs", { precision: 20, scale: 4 }).notNull().default("0"),
+  feeMaxAbs:     numeric("fee_max_abs", { precision: 20, scale: 4 }),
+  userTier:      feeUserTierEnum("user_tier").notNull().default("all"),
+  active:        boolean("active").notNull().default(true),
+  createdAt:     timestamp("created_at").notNull().defaultNow(),
+});
+
+export type FeeConfigRow      = typeof feeConfigTable.$inferSelect;
+export type FeeOperationType  = typeof feeOperationTypeEnum.enumValues[number];
+export type FeeUserTier       = typeof feeUserTierEnum.enumValues[number];

@@ -10,7 +10,8 @@ export type AuditAction =
   | "reconciliation.run"
   | "reconciliation.fixed"
   | "admin.patch_tontines"
-  | "idempotency.replayed";
+  | "idempotency.replayed"
+  | "fee.applied";
 
 interface AuditEntry {
   action: AuditAction;

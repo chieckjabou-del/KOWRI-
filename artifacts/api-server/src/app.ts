@@ -2,6 +2,7 @@ import express, { type Express } from "express";
 import cors from "cors";
 import router from "./routes";
 import { seedDatabase, patchTontineMembers } from "./lib/seed";
+import { seedFeeConfig } from "./lib/feeEngine";
 import { globalSanitizer, validatePagination } from "./middleware/validate";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { stickyPrimaryRequest, stickyPrimaryResponse } from "./middleware/stickyPrimary";
@@ -58,6 +59,7 @@ seedDatabase()
   .then((result) => { if (result.patched) console.log("✅ Tontine patch applied:", result.message); })
   .then(() => paymentRouter.seedDefaultRoutes())
   .then(() => seedConnectors())
+  .then(() => seedFeeConfig())
   .catch((err) => console.error("Seed/patch error:", err));
 
 export default app;

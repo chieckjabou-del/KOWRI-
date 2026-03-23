@@ -9,6 +9,7 @@ import { recordMetric } from "./metrics";
 import { checkRateLimit, RateLimitExceededError } from "./rateLimiter";
 import { runFraudCheck } from "./fraudEngine";
 import { guard } from "./killSwitch";
+import { computeFee } from "./feeEngine";
 
 export async function getWalletBalance(walletId: string): Promise<number> {
   const [result] = await db
@@ -224,6 +225,13 @@ export async function processTransfer(params: {
   const { fromWalletId, toWalletId, amount, currency, description, reference, idempotencyKey, skipRateLimitCheck, skipFraudCheck, skipKycCheck } = params;
   const start = Date.now();
 
+  // ── INTERNAL TRANSFERS ARE ALWAYS FREE ────────────────────────────────────
+  // Fee engine is explicitly bypassed for wallet-to-wallet (P2P) transfers.
+  // This is a deliberate architectural invariant — not a "no rule found = 0"
+  // fallback. Any fee on internal transfers would be economically incorrect and
+  // must NEVER be introduced via fee_config rules.
+  // ──────────────────────────────────────────────────────────────────────────
+
   guard("outbound_transfers");   // throws KillSwitchError if switch is TRIGGERED or FORCED_OFF
 
   if (!skipKycCheck) {
@@ -339,6 +347,155 @@ export async function processTransfer(params: {
 
   recordMetric("transaction", Date.now() - start, "transfer");
   return finalTx;
+}
+
+// ── processWithdrawal (Cash-out) ──────────────────────────────────────────────
+// Moves money OUT of the platform. Fee engine is applied here.
+// Ledger entries (double-entry, balanced):
+//   DEBIT  user wallet     : full amount      (user pays)
+//   CREDIT platform_float  : netAmount        (funds exit the platform)
+//   CREDIT platform_fees   : feeAmount        (retained by KOWRI — never 0 entry)
+//
+// Note: if feeAmount === 0, the platform_fees credit entry is still written for
+// audit completeness, but with creditAmount "0" so the ledger remains balanced.
+
+export async function processWithdrawal(params: {
+  walletId:       string;
+  amount:         number;
+  currency:       string;
+  reference?:     string;
+  description?:   string;
+  userTier?:      string;
+  idempotencyKey?: string;
+}): Promise<{ transaction: typeof transactionsTable.$inferSelect; feeAmount: number; netAmount: number; rateBps: number }> {
+  const { walletId, amount, currency, description, idempotencyKey, userTier = "bronze" } = params;
+  const start = Date.now();
+
+  guard("outbound_transfers");
+
+  // Compute fee BEFORE the transaction — async DB read, non-blocking to hot path
+  const { feeAmount, netAmount, rateBps } = await computeFee("cashout", amount, userTier);
+
+  const txId = generateId();
+  const ref  = params.reference ?? generateReference();
+  const now  = new Date();
+
+  await db.transaction(async (tx) => {
+    const lockResult = await tx.execute(
+      sql`SELECT id FROM wallets WHERE id = ${walletId} FOR UPDATE`
+    );
+    if ((lockResult as any).rows?.length === 0) throw new Error("Wallet not found");
+
+    const [balResult] = await tx
+      .select({
+        balance: sql<number>`
+          COALESCE(SUM(CAST(${ledgerEntriesTable.creditAmount} AS NUMERIC)), 0) -
+          COALESCE(SUM(CAST(${ledgerEntriesTable.debitAmount} AS NUMERIC)), 0)
+        `,
+      })
+      .from(ledgerEntriesTable)
+      .where(sql`${ledgerEntriesTable.accountId} = ${walletId} AND ${ledgerEntriesTable.accountType} = 'wallet'`);
+
+    const availableBal = Number(balResult?.balance ?? 0);
+    if (availableBal < amount) throw new Error("Insufficient funds");
+
+    assertValidTransition("pending", "processing");
+
+    await tx.insert(transactionsTable).values({
+      id:             txId,
+      fromWalletId:   walletId,
+      amount:         String(amount),
+      currency,
+      type:           "withdrawal",
+      status:         "processing",
+      reference:      ref,
+      description:    description ?? "Cash-out",
+      idempotencyKey: idempotencyKey ?? null,
+    });
+
+    assertValidTransition("processing", "completed");
+
+    const ledgerStart = Date.now();
+
+    await tx.insert(ledgerEntriesTable).values([
+      // 1. DEBIT user wallet — full amount leaves the user
+      {
+        id:           generateId(),
+        transactionId: txId,
+        accountId:    walletId,
+        accountType:  "wallet",
+        debitAmount:  String(amount),
+        creditAmount: "0",
+        currency,
+        eventType:    "withdrawal",
+        description:  "Cash-out debit",
+        entryType:    "debit",
+        walletId,
+        reference:    ref,
+      },
+      // 2. CREDIT platform_float — net funds leaving the platform
+      {
+        id:           generateId(),
+        transactionId: txId,
+        accountId:    "platform_float",
+        accountType:  "platform",
+        debitAmount:  "0",
+        creditAmount: String(netAmount),
+        currency,
+        eventType:    "withdrawal",
+        description:  "Cash-out net credit (external)",
+        entryType:    "credit",
+        walletId:     null,
+        reference:    ref,
+      },
+      // 3. CREDIT platform_fees — KOWRI fee revenue (always written for audit)
+      {
+        id:           generateId(),
+        transactionId: txId,
+        accountId:    "platform_fees",
+        accountType:  "platform",
+        debitAmount:  "0",
+        creditAmount: String(feeAmount),
+        currency,
+        eventType:    "fee",
+        description:  `Cash-out fee @ ${rateBps}bps`,
+        entryType:    "credit",
+        walletId:     null,
+        reference:    ref,
+      },
+    ]);
+
+    recordMetric("ledger", Date.now() - ledgerStart);
+
+    await syncWalletBalance(walletId, tx as any);
+
+    await tx
+      .update(transactionsTable)
+      .set({ status: "completed", completedAt: now })
+      .where(eq(transactionsTable.id, txId));
+  });
+
+  const [finalTx] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, txId));
+
+  await Promise.all([
+    audit({
+      action:   "transaction.created",
+      entity:   "transaction",
+      entityId: txId,
+      metadata: { type: "withdrawal", amount, netAmount, feeAmount, rateBps, currency, walletId },
+    }),
+    audit({
+      action:   "fee.applied",
+      entity:   "transaction",
+      entityId: txId,
+      metadata: { feeAmount, rateBps, operationType: "cashout", userTier },
+    }),
+    eventBus.publish("transaction.created", { txId, type: "withdrawal", amount, netAmount, feeAmount, currency, walletId }),
+    eventBus.publish("wallet.balance.updated", { walletId, currency }),
+  ]);
+
+  recordMetric("transaction", Date.now() - start, "withdrawal");
+  return { transaction: finalTx, feeAmount, netAmount, rateBps };
 }
 
 export async function withDeadlockRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
