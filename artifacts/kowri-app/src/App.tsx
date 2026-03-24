@@ -17,6 +17,11 @@ import Merchant from "@/pages/Merchant";
 import Notifications from "@/pages/Notifications";
 import KYC from "@/pages/KYC";
 import AgentPage from "@/pages/Agent";
+import Invest from "@/pages/Invest";
+import InvestDetail from "@/pages/InvestDetail";
+import Insurance from "@/pages/Insurance";
+import Creator from "@/pages/Creator";
+import CreatorDetail from "@/pages/CreatorDetail";
 import NotFound from "@/pages/not-found";
 
 const queryClient = new QueryClient({
@@ -78,6 +83,21 @@ function AppRouter() {
       </Route>
       <Route path="/agent">
         {() => <ProtectedRoute component={AgentPage} />}
+      </Route>
+      <Route path="/invest/:id">
+        {(params) => <ProtectedRoute component={InvestDetail} params={params} />}
+      </Route>
+      <Route path="/invest">
+        {() => <ProtectedRoute component={Invest} />}
+      </Route>
+      <Route path="/insurance">
+        {() => <ProtectedRoute component={Insurance} />}
+      </Route>
+      <Route path="/creator/:id">
+        {(params) => <ProtectedRoute component={CreatorDetail} params={params} />}
+      </Route>
+      <Route path="/creator">
+        {() => <ProtectedRoute component={Creator} />}
       </Route>
       <Route path="/">
         {() => isAuthenticated ? <Redirect to="/dashboard" /> : <Redirect to="/login" />}

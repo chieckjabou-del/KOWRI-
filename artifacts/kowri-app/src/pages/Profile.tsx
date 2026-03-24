@@ -1,11 +1,15 @@
 import { useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useLocation } from "wouter";
-import { LogOut, User, Phone, MapPin, Shield, Camera, ChevronRight, MessageSquare, Ticket, X, CheckCircle } from "lucide-react";
+import {
+  LogOut, User, Phone, MapPin, Shield, Camera, ChevronRight,
+  MessageSquare, X, CheckCircle, ChevronDown, ChevronUp,
+  Star, Award, TrendingUp, ArrowUpRight, ArrowDownLeft, Loader2,
+} from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, formatXOF, relativeTime } from "@/lib/api";
 
 const KYC_LIMIT_LABELS: Record<number, string> = {
   0: "100 000 XOF / mois",
@@ -35,20 +39,158 @@ const TICKET_STATUS_COLORS: Record<string, string> = {
   CLOSED:      "#6B7280",
 };
 
+const REP_TIERS: Record<string, { label: string; ring: string; bg: string; color: string }> = {
+  NOUVEAU:  { label: "NOUVEAU",  ring: "#9CA3AF", bg: "#F3F4F6", color: "#4B5563" },
+  BRONZE:   { label: "BRONZE",   ring: "#D97706", bg: "#FEF3C7", color: "#92400E" },
+  SILVER:   { label: "ARGENT",   ring: "#3B82F6", bg: "#EFF6FF", color: "#1D4ED8" },
+  GOLD:     { label: "OR",       ring: "#F59E0B", bg: "#FFFBEB", color: "#B45309" },
+  PLATINUM: { label: "PLATINE",  ring: "#8B5CF6", bg: "#F5F3FF", color: "#6D28D9" },
+};
+
+const REP_FACTORS = [
+  { key: "tontineParticipation", label: "Fiabilité tontine",        max: 25 },
+  { key: "paymentHistory",       label: "Remboursements",            max: 20 },
+  { key: "transactionVolume",    label: "Volume transactions",       max: 30 },
+  { key: "networkScore",         label: "Engagement communauté",    max: 15 },
+  { key: "savingsRegularity",    label: "Discipline d'épargne",     max: 10 },
+];
+
+const TX_FILTERS = ["Tous", "send", "receive", "tontine", "credit"] as const;
+const TX_FILTER_LABELS: Record<string, string> = {
+  Tous: "Tous", send: "Envois", receive: "Reçus", tontine: "Tontines", credit: "Crédits",
+};
+
+const TX_PAGE_SIZE = 15;
+
+/* ─── Reputation ring ─────────────────────────────────────────────────────── */
+function RepRing({ score, tier }: { score: number; tier: string }) {
+  const t = REP_TIERS[tier] ?? REP_TIERS.NOUVEAU;
+  const s = Math.min(Math.max(Math.round(score), 0), 100);
+  const r = 52;
+  const circ = 2 * Math.PI * r;
+  const dash = ((s / 100) * circ).toFixed(1);
+  return (
+    <div className="flex flex-col items-center py-4">
+      <div className="relative w-36 h-36">
+        <svg width="144" height="144" viewBox="0 0 144 144" className="-rotate-90">
+          <circle cx="72" cy="72" r={r} fill="none" stroke="#F3F4F6" strokeWidth="12" />
+          <circle
+            cx="72" cy="72" r={r} fill="none"
+            stroke={t.ring} strokeWidth="12"
+            strokeLinecap="round"
+            strokeDasharray={`${dash} ${circ}`}
+            style={{ transition: "stroke-dasharray 0.6s ease" }}
+          />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-4xl font-black text-gray-900">{s}</span>
+          <span className="text-xs text-gray-500">/ 100</span>
+        </div>
+      </div>
+      <span
+        className="mt-2 px-4 py-1 rounded-full text-xs font-bold tracking-wider"
+        style={{ background: t.bg, color: t.color }}
+      >
+        {t.label}
+      </span>
+    </div>
+  );
+}
+
+/* ─── Factor bar ──────────────────────────────────────────────────────────── */
+function FactorBar({ label, value, max }: { label: string; value: number; max: number }) {
+  const pts  = Math.round(value * max);
+  const pct  = Math.min(Math.round(value * 100), 100);
+  return (
+    <div className="mb-3">
+      <div className="flex justify-between text-xs text-gray-600 mb-1">
+        <span>{label}</span>
+        <span className="font-semibold text-gray-900">{pts}/{max} pts</span>
+      </div>
+      <div className="h-2.5 rounded-full overflow-hidden" style={{ background: "#F3F4F6" }}>
+        <div
+          className="h-full rounded-full transition-all duration-500"
+          style={{ width: `${pct}%`, background: "#1A6B32" }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ─── Badge chip ──────────────────────────────────────────────────────────── */
+const BADGE_ICONS: Record<string, string> = {
+  FIRST_100_CLIENTS:    "🏅",
+  VOLUME_5M:            "💰",
+  VOLUME_20M:           "💎",
+  ZERO_ANOMALIES_30D:   "✅",
+  TOP_ZONE_AGENT:       "🏆",
+  TRUSTED_VETERAN:      "⭐",
+  TONTINE_CHAMPION:     "🎯",
+  FIRST_TONTINE:        "🤝",
+  RELIABLE_PAYER:       "💳",
+  EARLY_ADOPTER:        "🚀",
+  COMMUNITY_BUILDER:    "🌍",
+};
+
+function BadgeChip({ badge }: { badge: any }) {
+  const icon = BADGE_ICONS[badge.badge] ?? "🏅";
+  return (
+    <div className="flex flex-col items-center gap-1 px-3 py-2.5 rounded-2xl border border-gray-100 bg-white flex-shrink-0 min-w-[72px]">
+      <span className="text-2xl">{icon}</span>
+      <span className="text-[10px] font-medium text-gray-600 text-center leading-tight max-w-[64px]">
+        {badge.label ?? badge.badge.replace(/_/g, " ")}
+      </span>
+    </div>
+  );
+}
+
+/* ─── Transaction row ──────────────────────────────────────────────────────  */
+function TxRow({ tx }: { tx: any }) {
+  const isIn = tx.direction === "in" || tx.type === "receive" || tx.type === "tontine_receive";
+  const icon = isIn
+    ? <ArrowDownLeft size={16} style={{ color: "#16A34A" }} />
+    : <ArrowUpRight  size={16} style={{ color: "#DC2626" }} />;
+  const amtColor = isIn ? "#16A34A" : "#DC2626";
+  const prefix   = isIn ? "+" : "-";
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <div
+        className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0"
+        style={{ background: isIn ? "#F0FDF4" : "#FEF2F2" }}
+      >
+        {icon}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium text-gray-900 truncate">
+          {tx.description ?? tx.type ?? "Transaction"}
+        </p>
+        <p className="text-xs text-gray-400">{relativeTime(tx.createdAt)}</p>
+      </div>
+      <p className="text-sm font-bold flex-shrink-0" style={{ color: amtColor }}>
+        {prefix}{formatXOF(Math.abs(Number(tx.amount)))}
+      </p>
+    </div>
+  );
+}
+
+/* ─── Main component ──────────────────────────────────────────────────────── */
 export default function Profile() {
   const { user, logout, token } = useAuth();
-  const [, navigate] = useLocation();
-  const qc = useQueryClient();
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
-
-  // Support modal state
+  const [, navigate]   = useLocation();
+  const qc             = useQueryClient();
+  const fileRef        = useRef<HTMLInputElement>(null);
+  const [avatarPreview, setAvatarPreview]   = useState<string | null>(null);
   const [showSupportModal, setShowSupportModal] = useState(false);
-  const [ticketCategory, setTicketCategory] = useState("OTHER");
-  const [ticketTitle, setTicketTitle] = useState("");
-  const [ticketDesc, setTicketDesc] = useState("");
-  const [ticketCreated, setTicketCreated] = useState<string | null>(null);
+  const [ticketCategory, setTicketCategory]     = useState("OTHER");
+  const [ticketTitle, setTicketTitle]           = useState("");
+  const [ticketDesc, setTicketDesc]             = useState("");
+  const [ticketCreated, setTicketCreated]       = useState<string | null>(null);
+  const [showRepFactors, setShowRepFactors]     = useState(false);
+  const [txFilter, setTxFilter]                 = useState<string>("Tous");
+  const [txPage, setTxPage]                     = useState(1);
 
+  /* ── Queries ── */
   const { data: userData } = useQuery({
     queryKey: ["user", user?.id],
     queryFn: () => apiFetch<any>(`/users/${user?.id}`, token),
@@ -67,6 +209,45 @@ export default function Profile() {
     enabled: !!user?.id,
   });
 
+  const walletsQ = useQuery({
+    queryKey: ["wallets", user?.id],
+    queryFn: () => apiFetch<any>(`/wallets?userId=${user?.id}&limit=1`, token),
+    enabled: !!user?.id,
+    staleTime: 15_000,
+  });
+  const wallet = walletsQ.data?.wallets?.[0] ?? null;
+
+  const repQ = useQuery({
+    queryKey: ["reputation", user?.id],
+    queryFn: () => apiFetch<any>(`/community/reputation/${user?.id}`, token),
+    enabled: !!user?.id,
+    retry: false,
+    staleTime: 30_000,
+  });
+
+  const badgesQ = useQuery({
+    queryKey: ["reputation-badges", user?.id],
+    queryFn: () => apiFetch<any>(`/community/reputation/${user?.id}/badges`, token),
+    enabled: !!user?.id && !!repQ.data,
+    retry: false,
+    staleTime: 60_000,
+  });
+
+  const txQ = useQuery({
+    queryKey: ["transactions", wallet?.id, txFilter, txPage],
+    queryFn: () => {
+      const type  = txFilter !== "Tous" ? `&type=${txFilter}` : "";
+      return apiFetch<any>(
+        `/transactions?walletId=${wallet?.id}&limit=${TX_PAGE_SIZE}&page=${txPage}${type}`,
+        token,
+      );
+    },
+    enabled: !!wallet?.id,
+    staleTime: 15_000,
+    keepPreviousData: true,
+  });
+
+  /* ── Mutations ── */
   const createTicketMut = useMutation({
     mutationFn: (body: object) =>
       apiFetch<any>("/support/tickets", token, { method: "POST", body: JSON.stringify(body) }),
@@ -87,6 +268,15 @@ export default function Profile() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["user"] }),
   });
 
+  const computeRepMut = useMutation({
+    mutationFn: () =>
+      apiFetch<any>(`/community/reputation/${user?.id}/compute`, token, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["reputation", user?.id] });
+      qc.invalidateQueries({ queryKey: ["reputation-badges", user?.id] });
+    },
+  });
+
   async function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -104,16 +294,33 @@ export default function Profile() {
     navigate("/login");
   }
 
-  const kycLevel: number = userData?.kycLevel ?? 0;
-  const avatarUrl = avatarPreview ?? userData?.avatarUrl ?? null;
-  const latestKyc = kycData?.record;
+  const kycLevel   = userData?.kycLevel ?? 0;
+  const avatarUrl  = avatarPreview ?? userData?.avatarUrl ?? null;
+  const latestKyc  = kycData?.record;
+  const rep        = repQ.data;
+  const badges: any[] = badgesQ.data?.badges ?? [];
+  const txs: any[]    = txQ.data?.transactions ?? txQ.data?.entries ?? [];
+  const txTotal: number = txQ.data?.pagination?.total ?? txs.length;
+  const hasMoreTx  = txs.length >= TX_PAGE_SIZE;
+
+  /* ── Reputation tier by score ── */
+  function repTierFromScore(score: number): string {
+    if (score >= 80) return "PLATINUM";
+    if (score >= 60) return "GOLD";
+    if (score >= 40) return "SILVER";
+    if (score >= 20) return "BRONZE";
+    return "NOUVEAU";
+  }
+  const repScore = rep?.score ?? 0;
+  const repTier  = rep?.tier ?? repTierFromScore(repScore);
 
   return (
     <div className="min-h-screen pb-24" style={{ background: "#FAFAF8" }}>
       <TopBar title="Mon Profil" />
 
       <main className="px-4 pt-5 max-w-lg mx-auto space-y-4">
-        {/* Avatar card */}
+
+        {/* ─── Avatar card ─────────────────────────────── */}
         <div className="bg-white rounded-3xl p-6 shadow-sm border border-gray-100 flex flex-col items-center text-center">
           <div className="relative mb-3">
             {avatarUrl ? (
@@ -133,7 +340,6 @@ export default function Profile() {
             <button
               onClick={() => fileRef.current?.click()}
               className="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-white border-2 border-gray-200 flex items-center justify-center hover:bg-gray-50 shadow-sm"
-              title="Changer la photo"
             >
               <Camera size={13} className="text-gray-600" />
             </button>
@@ -142,19 +348,104 @@ export default function Profile() {
 
           <h1 className="text-xl font-bold text-gray-900">{user?.firstName} {user?.lastName}</h1>
           <p className="text-sm text-gray-500 mt-0.5">{user?.phone}</p>
-          <span
-            className="mt-2 text-xs px-3 py-1 rounded-full font-medium capitalize"
-            style={{ background: "#F0FDF4", color: "#16A34A" }}
-          >
+          <span className="mt-2 text-xs px-3 py-1 rounded-full font-medium capitalize" style={{ background: "#F0FDF4", color: "#16A34A" }}>
             {user?.status ?? "actif"}
           </span>
+          {avatarMut.isPending && <p className="text-xs text-gray-400 mt-2">Enregistrement…</p>}
+        </div>
 
-          {avatarMut.isPending && (
-            <p className="text-xs text-gray-400 mt-2">Enregistrement…</p>
+        {/* ─── Reputation score ─────────────────────── */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="px-4 pt-4 pb-1 border-b border-gray-50 flex items-center gap-2">
+            <Star size={14} style={{ color: "#F59E0B" }} />
+            <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Réputation</p>
+          </div>
+
+          {repQ.isLoading ? (
+            <div className="py-8 flex flex-col items-center animate-pulse gap-4">
+              <div className="w-36 h-36 rounded-full bg-gray-100" />
+              <div className="h-4 w-28 bg-gray-100 rounded" />
+            </div>
+          ) : !rep ? (
+            <div className="py-7 flex flex-col items-center px-6 text-center">
+              <div className="w-14 h-14 rounded-2xl mb-3 flex items-center justify-center" style={{ background: "#FEF3C7" }}>
+                <Star size={26} style={{ color: "#D97706" }} />
+              </div>
+              <p className="font-bold text-gray-900 text-sm mb-1">Pas encore de score</p>
+              <p className="text-xs text-gray-500 mb-4">Calculez votre réputation communautaire</p>
+              <button
+                onClick={() => computeRepMut.mutate()}
+                disabled={computeRepMut.isPending}
+                className="px-5 py-2.5 rounded-xl font-bold text-white text-sm flex items-center gap-2 disabled:opacity-70"
+                style={{ background: "#1A6B32", minHeight: 44 }}
+              >
+                {computeRepMut.isPending ? <Loader2 size={14} className="animate-spin" /> : null}
+                Calculer mon score
+              </button>
+            </div>
+          ) : (
+            <div className="px-4 pb-4">
+              <RepRing score={repScore} tier={repTier} />
+
+              {/* Collapsible factors */}
+              <button
+                onClick={() => setShowRepFactors(v => !v)}
+                className="w-full flex items-center justify-between text-sm font-semibold text-gray-700 py-1 mb-2"
+              >
+                <span>Détail du score</span>
+                {showRepFactors ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </button>
+
+              {showRepFactors && (
+                <div className="mb-3">
+                  {REP_FACTORS.map(f => (
+                    <FactorBar
+                      key={f.key}
+                      label={f.label}
+                      value={rep.factors?.[f.key] ?? rep[f.key] ?? 0}
+                      max={f.max}
+                    />
+                  ))}
+                </div>
+              )}
+
+              <button
+                onClick={() => computeRepMut.mutate()}
+                disabled={computeRepMut.isPending}
+                className="w-full py-2.5 rounded-xl font-semibold text-sm border border-gray-200 flex items-center justify-center gap-2 disabled:opacity-60"
+                style={{ color: "#1A6B32", minHeight: 44 }}
+              >
+                {computeRepMut.isPending ? <Loader2 size={14} className="animate-spin" /> : null}
+                Recalculer mon score
+              </button>
+            </div>
           )}
         </div>
 
-        {/* KYC status card */}
+        {/* ─── Badges ──────────────────────────────── */}
+        {(badges.length > 0 || badgesQ.data) && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="px-4 pt-4 pb-2 border-b border-gray-50 flex items-center gap-2">
+              <Award size={14} style={{ color: "#1A6B32" }} />
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                Badges {badges.length > 0 && `(${badges.length})`}
+              </p>
+            </div>
+            {badges.length === 0 ? (
+              <div className="px-4 py-5 text-center">
+                <p className="text-sm text-gray-400">Aucun badge encore — continuez à utiliser KOWRI !</p>
+              </div>
+            ) : (
+              <div className="px-4 py-3 flex gap-3 overflow-x-auto hide-scrollbar">
+                {badges.map((b: any, i: number) => (
+                  <BadgeChip key={b.badge ?? i} badge={b} />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ─── KYC ─────────────────────────────────── */}
         <button
           onClick={() => navigate("/kyc")}
           className="w-full bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden text-left"
@@ -184,15 +475,82 @@ export default function Profile() {
           )}
         </button>
 
-        {/* Info */}
+        {/* ─── Info ────────────────────────────────── */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <InfoRow icon={<User size={16} />} label="Nom complet" value={`${user?.firstName} ${user?.lastName}`} />
-          <InfoRow icon={<Phone size={16} />} label="Téléphone" value={user?.phone ?? "—"} />
-          <InfoRow icon={<MapPin size={16} />} label="Pays" value={user?.country ?? "—"} />
-          <InfoRow icon={<Shield size={16} />} label="Statut du compte" value={user?.status ?? "actif"} last />
+          <InfoRow icon={<User size={16} />}   label="Nom complet"     value={`${user?.firstName} ${user?.lastName}`} />
+          <InfoRow icon={<Phone size={16} />}   label="Téléphone"       value={user?.phone ?? "—"} />
+          <InfoRow icon={<MapPin size={16} />}  label="Pays"            value={user?.country ?? "—"} />
+          <InfoRow icon={<Shield size={16} />}  label="Statut du compte" value={user?.status ?? "actif"} last />
         </div>
 
-        {/* Security */}
+        {/* ─── Transaction history ─────────────────── */}
+        {wallet && (
+          <section>
+            <h2 className="font-bold text-gray-900 mb-3 text-base">Historique des transactions</h2>
+
+            {/* Filter tabs */}
+            <div className="flex gap-1.5 overflow-x-auto pb-2 mb-3 hide-scrollbar">
+              {TX_FILTERS.map(f => {
+                const active = txFilter === f;
+                return (
+                  <button
+                    key={f}
+                    onClick={() => { setTxFilter(f); setTxPage(1); }}
+                    className="flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-all"
+                    style={{
+                      background: active ? "#1A6B32" : "#F3F4F6",
+                      color: active ? "#fff" : "#6B7280",
+                    }}
+                  >
+                    {TX_FILTER_LABELS[f]}
+                  </button>
+                );
+              })}
+            </div>
+
+            {txQ.isLoading ? (
+              <div className="bg-white rounded-2xl border border-gray-100 divide-y divide-gray-50 overflow-hidden">
+                {[0, 1, 2, 4].map(i => (
+                  <div key={i} className="px-4 py-3 flex items-center gap-3 animate-pulse">
+                    <div className="w-9 h-9 rounded-full bg-gray-100 flex-shrink-0" />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-3 bg-gray-100 rounded w-2/3" />
+                      <div className="h-2.5 bg-gray-100 rounded w-1/3" />
+                    </div>
+                    <div className="h-3 bg-gray-100 rounded w-16" />
+                  </div>
+                ))}
+              </div>
+            ) : txs.length === 0 ? (
+              <div className="bg-white rounded-2xl p-6 text-center border border-gray-100">
+                <TrendingUp size={24} className="text-gray-300 mx-auto mb-2" />
+                <p className="text-sm text-gray-500">Aucune transaction trouvée</p>
+              </div>
+            ) : (
+              <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-sm">
+                <div className="divide-y divide-gray-50">
+                  {txs.map((tx: any) => <TxRow key={tx.id} tx={tx} />)}
+                </div>
+
+                {hasMoreTx && (
+                  <div className="border-t border-gray-50 p-3">
+                    <button
+                      onClick={() => setTxPage(p => p + 1)}
+                      disabled={txQ.isFetching}
+                      className="w-full py-2.5 rounded-xl text-sm font-semibold border border-gray-200 flex items-center justify-center gap-2 disabled:opacity-60"
+                      style={{ color: "#1A6B32", minHeight: 44 }}
+                    >
+                      {txQ.isFetching ? <Loader2 size={14} className="animate-spin" /> : null}
+                      Charger plus
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* ─── Security ────────────────────────────── */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           <button className="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-gray-50 transition-colors">
             <Shield size={18} className="text-gray-500" />
@@ -203,7 +561,7 @@ export default function Profile() {
           </button>
         </div>
 
-        {/* Support */}
+        {/* ─── Support ─────────────────────────────── */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="px-4 pt-4 pb-2 border-b border-gray-50">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Support</p>
@@ -220,7 +578,6 @@ export default function Profile() {
             <ChevronRight size={16} className="text-gray-400" />
           </button>
 
-          {/* My tickets */}
           {ticketsData?.tickets?.length > 0 && (
             <div className="px-4 py-3">
               <p className="text-xs font-medium text-gray-500 mb-2">Mes tickets récents</p>
@@ -234,8 +591,8 @@ export default function Profile() {
                     <span
                       className="text-xs font-semibold px-2 py-0.5 rounded-full"
                       style={{
-                        background: TICKET_STATUS_COLORS[t.status] + "20",
-                        color: TICKET_STATUS_COLORS[t.status],
+                        background: (TICKET_STATUS_COLORS[t.status] ?? "#6B7280") + "20",
+                        color: TICKET_STATUS_COLORS[t.status] ?? "#6B7280",
                       }}
                     >
                       {t.status}
@@ -247,7 +604,7 @@ export default function Profile() {
           )}
         </div>
 
-        {/* Logout */}
+        {/* ─── Logout ──────────────────────────────── */}
         <button
           onClick={handleLogout}
           className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl font-semibold text-sm border border-red-100 bg-white"
@@ -258,14 +615,16 @@ export default function Profile() {
         </button>
       </main>
 
-      {/* Support Modal */}
+      {/* ─── Support Modal ───────────────────────── */}
       {showSupportModal && (
         <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.5)" }}>
           <div className="w-full bg-white rounded-t-3xl px-4 pt-5 pb-8 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-bold text-gray-900">Signaler un problème</h2>
-              <button onClick={() => { setShowSupportModal(false); setTicketCreated(null); }}
-                className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center">
+              <button
+                onClick={() => { setShowSupportModal(false); setTicketCreated(null); }}
+                className="w-9 h-9 rounded-full bg-gray-100 flex items-center justify-center"
+              >
                 <X size={16} className="text-gray-600" />
               </button>
             </div>

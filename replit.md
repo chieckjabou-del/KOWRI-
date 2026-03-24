@@ -4,7 +4,7 @@
 
 KOWRI is a production-grade neobank and community finance super-app for African markets — "PayPal + Stripe + Tontine + Community Credit for Africa" — built as a pnpm workspace monorepo using TypeScript (Express + PostgreSQL + Drizzle ORM).
 
-**Current Phase: Phase 7 COMPLETE + Agent Liquidity System LIVE**
+**Current Phase: Phase 7 COMPLETE + Agent Liquidity System + Mobile Pages V2 LIVE**
 
 All 7 phases validated:
 - Phase 1–2: 61/61 tests — core ledger, wallets, sagas, idempotency
