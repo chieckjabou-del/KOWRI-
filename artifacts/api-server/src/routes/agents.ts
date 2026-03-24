@@ -9,6 +9,10 @@ import {
   liquidityAlertsTable,
   liquidityTransfersTable,
   agentCommissionsTable,
+  agentAnomaliesTable,
+  cashReconciliationsTable,
+  withdrawalApprovalsTable,
+  agentAchievementsTable,
   walletsTable,
   usersTable,
 }                        from "@workspace/db";
@@ -21,6 +25,13 @@ import {
   suggestRebalance,
   updateMonthlyVolume,
   runLiquidityMonitor,
+  updateAgentTrustScore,
+  createAnomaly,
+  createWithdrawalApproval,
+  checkLargeWithdrawalApproval,
+  submitReconciliation,
+  createPendingReconciliation,
+  checkAchievements,
 }                        from "../lib/liquidityEngine";
 
 const router = Router();
@@ -269,6 +280,9 @@ router.get("/:id/liquidity", async (req, res, next) => {
       maxCashBalance:   Number(wallet?.maxCashBalance    ?? 0),
       monthlyVolume:    Number(agent.monthlyVolume  ?? 0),
       commissionTier:   agent.commissionTier ?? 1,
+      trustScore:       agent.trustScore     ?? 100,
+      trustLevel:       agent.trustLevel     ?? "TRUSTED",
+      anomalyCount:     agent.anomalyCount   ?? 0,
       activeAlerts:     alerts,
       suggestions:      liquidity.suggestions,
       nearestSuperAgent,
@@ -410,6 +424,152 @@ router.post("/liquidity/rebalance", async (req, res, next) => {
   try {
     await runLiquidityMonitor();
     res.json({ ok: true, message: "Zone rebalance analysis complete — alerts created where needed" });
+  } catch (err) { next(err); }
+});
+
+// ── BLOCK 1: Trust Score + Withdrawal Approval ────────────────────────────────
+
+// POST /agents/:id/anomalies — record a new anomaly
+router.post("/:id/anomalies", async (req, res, next) => {
+  try {
+    const { type, severity, description, evidence } = req.body as {
+      type:        "CASH_MISMATCH" | "RAPID_WITHDRAWALS" | "LARGE_ROUND_AMOUNTS" | "CLIENT_COMPLAINT" | "RECONCILIATION_FAIL" | "COLLUSION_PATTERN";
+      severity:    "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+      description: string;
+      evidence?:   Record<string, unknown>;
+    };
+    if (!type || !severity || !description) {
+      return res.status(400).json({ error: "type, severity, description required" });
+    }
+    const anomalyId = await createAnomaly(req.params.id, type, severity, description, evidence);
+    res.status(201).json({ anomalyId, trustUpdated: true });
+  } catch (err) { next(err); }
+});
+
+// GET /agents/:id/anomalies — list agent anomalies
+router.get("/:id/anomalies", async (req, res, next) => {
+  try {
+    const anomalies = await db
+      .select()
+      .from(agentAnomaliesTable)
+      .where(eq(agentAnomaliesTable.agentId, req.params.id))
+      .orderBy(desc(agentAnomaliesTable.createdAt));
+    res.json({ anomalies, count: anomalies.length });
+  } catch (err) { next(err); }
+});
+
+// POST /agents/:id/withdrawal-approval — generate approval code for large withdrawal
+router.post("/:id/withdrawal-approval", async (req, res, next) => {
+  try {
+    const { transactionId, supervisorPin } = req.body as { transactionId: string; supervisorPin?: string };
+    if (!transactionId) return res.status(400).json({ error: "transactionId required" });
+
+    const agent = await db.select({ trustLevel: agentsTable.trustLevel })
+      .from(agentsTable).where(eq(agentsTable.id, req.params.id)).limit(1).then(r => r[0]);
+    if (!agent) return res.status(404).json({ error: "Agent not found" });
+    if (agent.trustLevel === "BLOCKED") {
+      return res.status(403).json({ error: "Agent bloqué — approbation refusée" });
+    }
+
+    const result = await createWithdrawalApproval(req.params.id, transactionId, supervisorPin ? "supervisor" : undefined);
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
+// POST /agents/:id/withdrawal-approval/validate — check a code before executing withdrawal
+router.post("/:id/withdrawal-approval/validate", async (req, res, next) => {
+  try {
+    const { transactionId, approvalCode } = req.body as { transactionId: string; approvalCode: string };
+    if (!transactionId || !approvalCode) {
+      return res.status(400).json({ error: "transactionId and approvalCode required" });
+    }
+    const result = await checkLargeWithdrawalApproval(req.params.id, transactionId, approvalCode);
+    if (!result.approved) return res.status(403).json({ error: result.reason });
+    res.json({ approved: true });
+  } catch (err) { next(err); }
+});
+
+// PATCH /agents/:id/trust-score/refresh — recompute trust score
+router.patch("/:id/trust-score/refresh", async (req, res, next) => {
+  try {
+    await updateAgentTrustScore(req.params.id);
+    const agent = await db
+      .select({ trustScore: agentsTable.trustScore, trustLevel: agentsTable.trustLevel })
+      .from(agentsTable).where(eq(agentsTable.id, req.params.id)).limit(1).then(r => r[0]);
+    res.json({ trustScore: agent?.trustScore, trustLevel: agent?.trustLevel });
+  } catch (err) { next(err); }
+});
+
+// ── BLOCK 2: Cash Reconciliation ──────────────────────────────────────────────
+
+// GET /agents/:id/reconciliations
+router.get("/:id/reconciliations", async (req, res, next) => {
+  try {
+    const limit  = Number(req.query["limit"]  ?? 30);
+    const offset = Number(req.query["offset"] ?? 0);
+    const records = await db
+      .select()
+      .from(cashReconciliationsTable)
+      .where(eq(cashReconciliationsTable.agentId, req.params.id))
+      .orderBy(desc(cashReconciliationsTable.createdAt))
+      .limit(limit).offset(offset);
+    res.json({ reconciliations: records, count: records.length });
+  } catch (err) { next(err); }
+});
+
+// POST /agents/:id/reconcile
+router.post("/:id/reconcile", async (req, res, next) => {
+  try {
+    const { date, declaredCash, agentNote, photoProof } = req.body as {
+      date:         string;
+      declaredCash: number;
+      agentNote?:   string;
+      photoProof?:  string;
+    };
+    if (!date || declaredCash == null) {
+      return res.status(400).json({ error: "date and declaredCash required" });
+    }
+    const result = await submitReconciliation(req.params.id, date, declaredCash, agentNote, photoProof);
+    res.json({ ok: true, ...result });
+  } catch (err) { next(err); }
+});
+
+// PATCH /agents/:id/reconciliations/:date/dispute
+router.patch("/:id/reconciliations/:date/dispute", async (req, res, next) => {
+  try {
+    const { agentNote } = req.body as { agentNote?: string };
+    const updated = await db
+      .update(cashReconciliationsTable)
+      .set({ status: "DISPUTED", agentNote: agentNote ?? null })
+      .where(and(
+        eq(cashReconciliationsTable.agentId, req.params.id),
+        eq(cashReconciliationsTable.date, req.params.date),
+      ))
+      .returning();
+    if (!updated.length) return res.status(404).json({ error: "Reconciliation not found" });
+    res.json({ ok: true, reconciliation: updated[0] });
+  } catch (err) { next(err); }
+});
+
+// ── BLOCK 4: Gamification ─────────────────────────────────────────────────────
+
+// GET /agents/:id/achievements
+router.get("/:id/achievements", async (req, res, next) => {
+  try {
+    const achievements = await db
+      .select()
+      .from(agentAchievementsTable)
+      .where(eq(agentAchievementsTable.agentId, req.params.id))
+      .orderBy(desc(agentAchievementsTable.earnedAt));
+    res.json({ achievements, count: achievements.length });
+  } catch (err) { next(err); }
+});
+
+// POST /agents/:id/achievements/check — manually trigger achievement check
+router.post("/:id/achievements/check", async (req, res, next) => {
+  try {
+    const awarded = await checkAchievements(req.params.id);
+    res.json({ awarded, newBadges: awarded.length });
   } catch (err) { next(err); }
 });
 

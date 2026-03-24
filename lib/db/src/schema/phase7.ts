@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, integer, numeric, timestamp, jsonb, index, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, boolean, integer, numeric, timestamp, date, jsonb, index, pgEnum } from "drizzle-orm/pg-core";
 
 export const savingsPlansTable = pgTable("savings_plans", {
   id:                text("id").primaryKey(),
@@ -421,6 +421,7 @@ export const schedulerJobsTable = pgTable("scheduler_jobs", {
 
 export const agentTypeEnum    = pgEnum("agent_type",       ["AGENT", "SUPER_AGENT", "MASTER"]);
 export const agentStatusEnum  = pgEnum("agent_status",     ["ACTIVE", "SUSPENDED", "BLOCKED"]);
+export const trustLevelEnum   = pgEnum("trust_level",      ["TRUSTED", "WATCH", "FLAGGED", "BLOCKED"]);
 export const liquidityTypeEnum   = pgEnum("liquidity_type",   ["CASH", "FLOAT", "REBALANCE"]);
 export const liquidityStatusEnum = pgEnum("liquidity_status", ["PENDING", "COMPLETED", "FAILED"]);
 export const alertTypeEnum    = pgEnum("alert_type",       ["LOW_CASH", "LOW_FLOAT", "ZONE_TENSION", "SURPLUS"]);
@@ -434,15 +435,22 @@ export const agentsTable = pgTable("agents", {
   phone:          text("phone").notNull(),
   zone:           text("zone").notNull(),
   status:         agentStatusEnum("status").default("ACTIVE"),
-  parentAgentId:  text("parent_agent_id"),
-  monthlyVolume:  numeric("monthly_volume", { precision: 20, scale: 4 }).default("0"),
-  commissionTier: integer("commission_tier").default(1),
-  createdAt:      timestamp("created_at").defaultNow(),
+  parentAgentId:           text("parent_agent_id"),
+  monthlyVolume:           numeric("monthly_volume",            { precision: 20, scale: 4 }).default("0"),
+  commissionTier:          integer("commission_tier").default(1),
+  trustScore:              integer("trust_score").default(100),
+  trustLevel:              trustLevelEnum("trust_level").default("TRUSTED"),
+  anomalyCount:            integer("anomaly_count").default(0),
+  cautionDeposit:          numeric("caution_deposit",           { precision: 20, scale: 4 }).default("0"),
+  dailyCashLimit:          numeric("daily_cash_limit",          { precision: 20, scale: 4 }),
+  dailyWithdrawalLimit:    numeric("daily_withdrawal_limit",    { precision: 20, scale: 4 }),
+  createdAt:               timestamp("created_at").defaultNow(),
 }, (t) => [
   index("agent_user_idx").on(t.userId),
   index("agent_zone_idx").on(t.zone),
   index("agent_status_idx").on(t.status),
   index("agent_type_idx").on(t.type),
+  index("agent_trust_idx").on(t.trustLevel),
 ]);
 
 export const agentWalletsTable = pgTable("agent_wallets", {
@@ -513,4 +521,127 @@ export const agentCommissionsTable = pgTable("agent_commissions", {
   index("agcom_tx_idx").on(t.transactionId),
   index("agcom_status_idx").on(t.status),
   index("agcom_optype_idx").on(t.operationType),
+]);
+
+// ── Agent Anomalies (Block 1) ─────────────────────────────────────────────────
+
+export const anomalyTypeEnum     = pgEnum("anomaly_type",     ["CASH_MISMATCH", "RAPID_WITHDRAWALS", "LARGE_ROUND_AMOUNTS", "CLIENT_COMPLAINT", "RECONCILIATION_FAIL", "COLLUSION_PATTERN"]);
+export const anomalySeverityEnum = pgEnum("anomaly_severity", ["LOW", "MEDIUM", "HIGH", "CRITICAL"]);
+
+export const agentAnomaliesTable = pgTable("agent_anomalies", {
+  id:          text("id").primaryKey(),
+  agentId:     text("agent_id").notNull(),
+  type:        anomalyTypeEnum("type").notNull(),
+  severity:    anomalySeverityEnum("severity").notNull(),
+  description: text("description").notNull(),
+  evidence:    jsonb("evidence"),
+  resolved:    boolean("resolved").default(false),
+  resolvedAt:  timestamp("resolved_at"),
+  createdAt:   timestamp("created_at").defaultNow(),
+}, (t) => [
+  index("aganom_agent_idx").on(t.agentId),
+  index("aganom_type_idx").on(t.type),
+  index("aganom_severity_idx").on(t.severity),
+  index("aganom_resolved_idx").on(t.resolved),
+]);
+
+// ── Withdrawal Approvals (Block 1) ────────────────────────────────────────────
+
+export const withdrawalApprovalsTable = pgTable("withdrawal_approvals", {
+  id:            text("id").primaryKey(),
+  transactionId: text("transaction_id").notNull(),
+  agentId:       text("agent_id").notNull(),
+  approvedBy:    text("approved_by"),
+  approvalCode:  text("approval_code").notNull(),
+  expiresAt:     timestamp("expires_at").notNull(),
+  usedAt:        timestamp("used_at"),
+  createdAt:     timestamp("created_at").defaultNow(),
+}, (t) => [
+  index("wdapproval_agent_idx").on(t.agentId),
+  index("wdapproval_tx_idx").on(t.transactionId),
+]);
+
+// ── Cash Reconciliations (Block 2) ────────────────────────────────────────────
+
+export const reconStatusEnum = pgEnum("recon_status", ["PENDING", "MATCHED", "MISMATCH", "DISPUTED"]);
+
+export const cashReconciliationsTable = pgTable("cash_reconciliations", {
+  id:                   text("id").primaryKey(),
+  agentId:              text("agent_id").notNull(),
+  date:                 date("date").notNull(),
+  systemExpectedCash:   numeric("system_expected_cash",  { precision: 20, scale: 4 }),
+  agentDeclaredCash:    numeric("agent_declared_cash",   { precision: 20, scale: 4 }),
+  delta:                numeric("delta",                 { precision: 20, scale: 4 }),
+  status:               reconStatusEnum("status").default("PENDING"),
+  agentNote:            text("agent_note"),
+  photoProof:           text("photo_proof"),
+  resolvedBy:           text("resolved_by"),
+  resolvedAt:           timestamp("resolved_at"),
+  createdAt:            timestamp("created_at").defaultNow(),
+}, (t) => [
+  index("recon_agent_idx").on(t.agentId),
+  index("recon_date_idx").on(t.date),
+  index("recon_status_idx").on(t.status),
+]);
+
+// ── Support Tickets (Block 3) ─────────────────────────────────────────────────
+
+export const ticketCategoryEnum = pgEnum("ticket_category", ["TRANSACTION_ISSUE", "ACCOUNT_LOCKED", "WRONG_AMOUNT", "AGENT_COMPLAINT", "APP_BUG", "OTHER"]);
+export const ticketPriorityEnum = pgEnum("ticket_priority", ["LOW", "MEDIUM", "HIGH", "URGENT"]);
+export const ticketStatusEnum   = pgEnum("ticket_status",   ["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]);
+
+export const supportTicketsTable = pgTable("support_tickets", {
+  id:                   text("id").primaryKey(),
+  ticketNumber:         text("ticket_number").notNull().unique(),
+  userId:               text("user_id").notNull(),
+  agentId:              text("agent_id"),
+  category:             ticketCategoryEnum("category").notNull(),
+  priority:             ticketPriorityEnum("priority").notNull().default("LOW"),
+  title:                text("title").notNull(),
+  description:          text("description").notNull(),
+  status:               ticketStatusEnum("status").notNull().default("OPEN"),
+  assignedTo:           text("assigned_to"),
+  linkedTransactionId:  text("linked_transaction_id"),
+  resolution:           text("resolution"),
+  resolvedAt:           timestamp("resolved_at"),
+  createdAt:            timestamp("created_at").defaultNow(),
+  updatedAt:            timestamp("updated_at").defaultNow(),
+}, (t) => [
+  index("ticket_user_idx").on(t.userId),
+  index("ticket_agent_idx").on(t.agentId),
+  index("ticket_status_idx").on(t.status),
+  index("ticket_priority_idx").on(t.priority),
+  index("ticket_category_idx").on(t.category),
+]);
+
+// ── Agent Achievements (Block 4) ──────────────────────────────────────────────
+
+export const badgeEnum = pgEnum("agent_badge", ["FIRST_100_CLIENTS", "VOLUME_5M", "VOLUME_20M", "ZERO_ANOMALIES_30D", "TOP_ZONE_AGENT", "TRUSTED_VETERAN", "TONTINE_CHAMPION"]);
+
+export const agentAchievementsTable = pgTable("agent_achievements", {
+  id:        text("id").primaryKey(),
+  agentId:   text("agent_id").notNull(),
+  badge:     badgeEnum("badge").notNull(),
+  earnedAt:  timestamp("earned_at").defaultNow(),
+  notified:  boolean("notified").default(false),
+}, (t) => [
+  index("achievement_agent_idx").on(t.agentId),
+  index("achievement_badge_idx").on(t.badge),
+]);
+
+// ── Agent Rankings (Block 4) ──────────────────────────────────────────────────
+
+export const agentRankingsTable = pgTable("agent_rankings", {
+  id:           text("id").primaryKey(),
+  agentId:      text("agent_id").notNull(),
+  zone:         text("zone").notNull(),
+  period:       text("period").notNull(),
+  volumeRank:   integer("volume_rank"),
+  trustRank:    integer("trust_rank"),
+  overallScore: numeric("overall_score", { precision: 5, scale: 2 }),
+  updatedAt:    timestamp("updated_at").defaultNow(),
+}, (t) => [
+  index("ranking_agent_idx").on(t.agentId),
+  index("ranking_zone_idx").on(t.zone),
+  index("ranking_period_idx").on(t.period),
 ]);

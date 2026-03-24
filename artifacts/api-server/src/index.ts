@@ -7,6 +7,7 @@ import { rehydrateAutopilotState }                        from "./lib/autopilotS
 import { reconcileAllWallets }                            from "./lib/walletService";
 import { logIncident }                                    from "./lib/incidentStore";
 import { getPendingJobs, runContributionCycle, runPayoutCycle, distributeToTargets, runHybridCycle, recoverStuckPayouts } from "./lib/tontineScheduler";
+import { runDailyReconciliation, runMonthlyAchievements } from "./lib/liquidityEngine";
 import { db }                                             from "@workspace/db";
 import { tontinePositionListingsTable, schedulerJobsTable } from "@workspace/db";
 import { eq, and, lt, isNotNull }                         from "drizzle-orm";
@@ -23,6 +24,32 @@ const port = Number(rawPort);
 
 if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
+}
+
+function startAgentScheduler() {
+  // ── Daily reconciliation at 20:00 ─────────────────────────────────────────
+  setInterval(async () => {
+    const now = new Date();
+    if (now.getHours() === 20 && now.getMinutes() < 1) {
+      try {
+        await runDailyReconciliation();
+      } catch (err: any) {
+        logIncident({ type: "agent_scheduler", action: "daily_recon", result: err?.message ?? "unknown" });
+      }
+    }
+  }, 60_000); // poll every minute
+
+  // ── Monthly achievement check — first day of each month at 08:00 ──────────
+  setInterval(async () => {
+    const now = new Date();
+    if (now.getDate() === 1 && now.getHours() === 8 && now.getMinutes() < 1) {
+      try {
+        await runMonthlyAchievements();
+      } catch (err: any) {
+        logIncident({ type: "agent_scheduler", action: "monthly_achievements", result: err?.message ?? "unknown" });
+      }
+    }
+  }, 60_000);
 }
 
 function startTontineScheduler() {
@@ -93,6 +120,7 @@ app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
   startOutboxWorker();
   startTontineScheduler();
+  startAgentScheduler();
   // Hydrate kill switch cache from DB before starting autopilot so the first
   // cycle sees operator-set state rather than the in-memory defaults.
   initKillSwitches()

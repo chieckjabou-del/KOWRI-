@@ -1,8 +1,9 @@
-import { Bell } from "lucide-react";
+import { Bell, WifiOff } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
 
 interface TopBarProps {
   title?: string;
@@ -13,6 +14,26 @@ interface TopBarProps {
 export function TopBar({ title, showBack, onBack }: TopBarProps) {
   const { user, token } = useAuth();
   const [, setLocation] = useLocation();
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [justReconnected, setJustReconnected] = useState(false);
+
+  useEffect(() => {
+    function handleOnline() {
+      setIsOnline(true);
+      setJustReconnected(true);
+      setTimeout(() => setJustReconnected(false), 3000);
+    }
+    function handleOffline() {
+      setIsOnline(false);
+      setJustReconnected(false);
+    }
+    window.addEventListener("online",  handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online",  handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   const { data } = useQuery({
     queryKey: ["notifications", "badge"],
@@ -25,8 +46,27 @@ export function TopBar({ title, showBack, onBack }: TopBarProps) {
   const unread = data ?? 0;
 
   return (
+    <div className="sticky top-0 z-40">
+      {/* Offline / reconnecting banner */}
+      {!isOnline && (
+        <div
+          className="flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-white"
+          style={{ background: "#374151" }}
+        >
+          <WifiOff size={13} />
+          Mode hors ligne — les actions seront synchronisées au retour
+        </div>
+      )}
+      {isOnline && justReconnected && (
+        <div
+          className="flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-white"
+          style={{ background: "#1A6B32" }}
+        >
+          Synchronisation en cours…
+        </div>
+      )}
     <header
-      className="sticky top-0 z-40 bg-white border-b border-gray-100 flex items-center justify-between px-4"
+      className="bg-white border-b border-gray-100 flex items-center justify-between px-4"
       style={{ height: 56 }}
     >
       <div className="flex items-center gap-3">
@@ -76,5 +116,6 @@ export function TopBar({ title, showBack, onBack }: TopBarProps) {
         )}
       </div>
     </header>
+    </div>
   );
 }
