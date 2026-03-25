@@ -20,6 +20,12 @@ import {
   Ticket,
   UserCog,
   ChevronLeft,
+  Code2,
+  Key,
+  Activity,
+  FileText,
+  FlaskConical,
+  Webhook,
 } from "lucide-react";
 import {
   Sidebar,
@@ -50,6 +56,15 @@ const navItems = [
   { title: "Merchants", url: "/merchants", icon: Store },
   { title: "Compliance", url: "/compliance", icon: ShieldCheck },
   { title: "Ledger", url: "/ledger", icon: BookOpen },
+];
+
+const devNavItems = [
+  { title: "Dashboard",      url: "/developer/dashboard", icon: LayoutDashboard, exact: true },
+  { title: "Clés API",       url: "/developer/keys",      icon: Key },
+  { title: "Usage",          url: "/developer/usage",     icon: Activity },
+  { title: "Documentation",  url: "/developer/docs",      icon: FileText },
+  { title: "Sandbox",        url: "/developer/sandbox",   icon: FlaskConical },
+  { title: "Webhooks",       url: "/developer/webhooks",  icon: Webhook },
 ];
 
 const adminNavItems = [
@@ -108,11 +123,11 @@ function AppSidebar({ location }: { location: string }) {
           </SidebarGroupContent>
         </SidebarGroup>
         <SidebarGroup className="mt-4 pt-4 border-t border-border/40">
-          <SidebarGroupLabel className="text-xs text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">Administration</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-xs text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">Portails</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu className="gap-1">
               <SidebarMenuItem>
-                <SidebarMenuButton asChild tooltip="Admin">
+                <SidebarMenuButton asChild tooltip="Admin Panel">
                   <Link href="/admin"
                     className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 ${
                       location.startsWith("/admin")
@@ -121,6 +136,68 @@ function AppSidebar({ location }: { location: string }) {
                     }`}>
                     <UserCog className={`w-5 h-5 ${location.startsWith("/admin") ? "text-primary" : ""}`} />
                     <span>Admin Panel</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip="Developer Portal">
+                  <Link href="/developer"
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-200 ${
+                      location.startsWith("/developer")
+                        ? "bg-primary/10 text-primary font-medium"
+                        : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground"
+                    }`}>
+                    <Code2 className={`w-5 h-5 ${location.startsWith("/developer") ? "text-primary" : ""}`} />
+                    <span>Developer Portal</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+      <SidebarFooter className="p-4 border-t border-border/50">
+        <Button variant="ghost" className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-xl px-3">
+          <LogOut className="w-5 h-5 mr-3" />
+          Sign Out
+        </Button>
+      </SidebarFooter>
+    </Sidebar>
+  );
+}
+
+function DeveloperSidebar({ location }: { location: string }) {
+  return (
+    <Sidebar className="border-r border-border/50 bg-background/50 backdrop-blur-xl">
+      <SidebarHeader className="h-16 px-6 flex items-center border-b border-border/50 gap-3">
+        <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shrink-0">
+          <Code2 className="w-4 h-4 text-primary-foreground" />
+        </div>
+        <div>
+          <div className="text-primary font-bold text-sm leading-tight">KOWRI Dev</div>
+          <div className="text-xs text-muted-foreground">API Platform</div>
+        </div>
+      </SidebarHeader>
+      <SidebarContent className="px-4 py-4">
+        <SidebarGroup>
+          <SidebarGroupLabel className="text-xs text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">Développeur</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu className="gap-1">
+              {devNavItems.map((item) => (
+                <NavItem key={item.title} item={item} location={location} />
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup className="mt-4 pt-4 border-t border-border/40">
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild tooltip="Retour au dashboard">
+                  <Link href="/"
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-muted-foreground hover:bg-secondary/50 hover:text-foreground transition-all duration-200">
+                    <ChevronLeft className="w-5 h-5" />
+                    <span>Retour au Dashboard</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -190,6 +267,7 @@ function AdminSidebar({ location }: { location: string }) {
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const isAdmin = location.startsWith("/admin");
+  const isDeveloper = location.startsWith("/developer");
 
   useEffect(() => {
     document.documentElement.classList.add("dark");
@@ -211,7 +289,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
              }}
         />
 
-        {isAdmin ? <AdminSidebar location={location} /> : <AppSidebar location={location} />}
+        {isAdmin ? <AdminSidebar location={location} /> : isDeveloper ? <DeveloperSidebar location={location} /> : <AppSidebar location={location} />}
 
         <div className="flex flex-col flex-1 relative z-10 w-full min-w-0">
           <header className="h-16 flex items-center justify-between px-8 border-b border-border/50 bg-background/80 backdrop-blur-xl">
@@ -221,10 +299,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
                   Admin
                 </div>
               )}
+              {isDeveloper && (
+                <div className="px-2.5 py-0.5 rounded-lg bg-violet-500/10 border border-violet-500/20 text-violet-400 text-xs font-bold tracking-widest uppercase">
+                  Dev
+                </div>
+              )}
               <div className="flex items-center w-full max-w-md relative">
                 <Search className="w-4 h-4 text-muted-foreground absolute left-3" />
                 <Input
-                  placeholder={isAdmin ? "Rechercher dans l'admin..." : "Search transactions, users, or wallets..."}
+                  placeholder={isAdmin ? "Rechercher dans l'admin..." : isDeveloper ? "Rechercher dans la documentation..." : "Search transactions, users, or wallets..."}
                   className="pl-9 bg-secondary/30 border-transparent focus-visible:border-primary/50 focus-visible:ring-primary/20 rounded-xl h-10"
                 />
               </div>

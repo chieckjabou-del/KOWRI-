@@ -15,8 +15,6 @@ import {
 import { Loader2, Plus, Trash2, Webhook, CheckCircle2, XCircle, Copy, Check, RefreshCw } from "lucide-react";
 import { getDevSession, devApiFetch } from "@/lib/devAuth";
 import { useToast } from "@/hooks/use-toast";
-import { randomBytes } from "crypto";
-
 interface WebhookRow {
   id: string; url: string; eventType: string; active: boolean; createdAt: string;
 }

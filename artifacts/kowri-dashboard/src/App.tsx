@@ -17,6 +17,14 @@ import Compliance from "./pages/compliance";
 import Ledger from "./pages/ledger";
 import WarRoom from "./pages/war-room";
 
+// Developer portal pages
+import Developer from "./pages/Developer";
+import DeveloperDashboard from "./pages/DeveloperDashboard";
+import DeveloperUsage from "./pages/DeveloperUsage";
+import DeveloperDocs from "./pages/DeveloperDocs";
+import DeveloperSandbox from "./pages/DeveloperSandbox";
+import DeveloperWebhooks from "./pages/DeveloperWebhooks";
+
 // Admin pages
 import Admin from "./pages/Admin";
 import AdminKYC from "./pages/AdminKYC";
@@ -51,6 +59,15 @@ function Router() {
       <Route path="/merchants" component={Merchants} />
       <Route path="/compliance" component={Compliance} />
       <Route path="/ledger" component={Ledger} />
+
+      {/* Developer portal routes */}
+      <Route path="/developer" component={Developer} />
+      <Route path="/developer/dashboard" component={DeveloperDashboard} />
+      <Route path="/developer/keys" component={DeveloperDashboard} />
+      <Route path="/developer/usage" component={DeveloperUsage} />
+      <Route path="/developer/docs" component={DeveloperDocs} />
+      <Route path="/developer/sandbox" component={DeveloperSandbox} />
+      <Route path="/developer/webhooks" component={DeveloperWebhooks} />
 
       {/* Admin routes */}
       <Route path="/admin" component={Admin} />
