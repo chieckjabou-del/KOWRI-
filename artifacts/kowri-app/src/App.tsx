@@ -108,10 +108,16 @@ function PublicPage({ Page }: { Page: React.ComponentType }) {
 function AppRouter() {
   const { isAuthenticated, isHydrating } = useAuth();
 
-  if (isHydrating) return <LoadingScreen message="Démarrage de KOWRI…" />;
+  if (isHydrating) {
+    return (
+      <div id="kowri-root">
+        <LoadingScreen message="Démarrage de KOWRI…" />
+      </div>
+    );
+  }
 
   return (
-    <div>
+    <div id="kowri-root">
       <AuthGate />
       <Switch>
         {/* Public routes — each with its own isolated Suspense */}
