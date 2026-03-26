@@ -116,18 +116,14 @@ function AppRouter() {
   const { isAuthenticated, isHydrating } = useAuth();
   console.log("[AppRouter] render, isHydrating:", isHydrating);
 
-  if (isHydrating) {
-    return (
-      <div id="kowri-root">
-        <LoadingScreen message="Démarrage de KOWRI…" />
-      </div>
-    );
-  }
-
   return (
     <div id="kowri-root">
-      <AuthGate />
-      <Switch>
+      {isHydrating ? (
+        <LoadingScreen message="Démarrage de KOWRI…" />
+      ) : (
+        <>
+          <AuthGate />
+          <Switch>
         {/* Public routes — each with its own isolated Suspense */}
         <Route path="/login">
           {() => <PublicPage Page={Login} />}
@@ -204,7 +200,9 @@ function AppRouter() {
         <Route>
           {() => <PublicPage Page={NotFound} />}
         </Route>
-      </Switch>
+          </Switch>
+        </>
+      )}
     </div>
   );
 }

@@ -69,43 +69,55 @@ router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", async (req, res, next) => {
   try {
-    const { phone, email, firstName, lastName, country, pin } = req.body;
+    console.log("REGISTER INPUT:", { phone: req.body?.phone, firstName: req.body?.firstName, hasPin: !!req.body?.pin });
+
+    const { phone, email, firstName, lastName, country, pin } = req.body ?? {};
+
     if (!phone || !firstName || !pin) {
       return res.status(400).json({ error: "Bad request", message: "Téléphone, prénom et PIN sont requis" });
     }
 
-    const id = generateId();
-    const pinHash = createHash("sha256").update(pin).digest("hex");
+    const id       = generateId();
+    const pinHash  = createHash("sha256").update(String(pin)).digest("hex");
 
+    // DB schema: last_name and country are NOT NULL — use empty string when not provided
     const [user] = await db.insert(usersTable).values({
       id,
-      phone,
-      email: email || null,
-      firstName,
-      lastName: lastName || null,
-      country: country || null,
+      phone:     String(phone).replace(/\s/g, ""),
+      email:     email    ? String(email)   : null,
+      firstName: String(firstName).trim(),
+      lastName:  lastName ? String(lastName).trim() : "",
+      country:   country  ? String(country) : "",
       pinHash,
-      status: "pending_kyc",
+      status:   "pending_kyc",
       kycLevel: 0,
     }).returning();
 
+    // Auto-create wallet for new user (walletsTable already imported at top)
+    await db.insert(walletsTable).values({
+      id:     generateId(),
+      userId: user.id,
+    }).onConflictDoNothing();
+
+    console.log("REGISTER OK:", user.id);
+
     res.status(201).json({
-      id: user.id,
-      phone: user.phone,
-      email: user.email,
+      id:        user.id,
+      phone:     user.phone,
+      email:     user.email,
       firstName: user.firstName,
-      lastName: user.lastName,
-      status: user.status,
-      kycLevel: user.kycLevel,
-      country: user.country,
+      lastName:  user.lastName,
+      status:    user.status,
+      kycLevel:  user.kycLevel,
+      country:   user.country,
       createdAt: user.createdAt,
     });
   } catch (err: any) {
+    console.error("REGISTER ERROR:", err?.message, err?.code, err?.detail);
     if (err?.code === "23505") {
-      res.status(409).json({ error: true, message: "Phone number already registered" });
-      return;
+      return res.status(409).json({ error: true, message: "Ce numéro est déjà enregistré" });
     }
     next(err);
   }
