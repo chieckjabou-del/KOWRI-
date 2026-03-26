@@ -3,7 +3,14 @@ const API_BASE = "/api";
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
+    this.name = "ApiError";
   }
+}
+
+let _unauthorizedHandler: (() => void) | null = null;
+
+export function setUnauthorizedHandler(cb: () => void): void {
+  _unauthorizedHandler = cb;
 }
 
 export async function apiFetch<T = unknown>(
@@ -17,27 +24,46 @@ export async function apiFetch<T = unknown>(
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  } catch (networkErr: any) {
+    throw new ApiError(0, "Connexion impossible. Vérifiez votre réseau.");
+  }
 
   if (res.status === 401) {
     let msg = "Session expirée. Reconnectez-vous.";
-    try { const j = await res.json(); msg = j.message || j.error || msg; } catch { /* keep default */ }
+    try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
+    console.log("[AUTH] 401 intercepted →", path, "| firing unauthorizedHandler");
+    _unauthorizedHandler?.();
     throw new ApiError(401, msg);
   }
+
   if (!res.ok) {
     let msg = `Erreur ${res.status}`;
     try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
     throw new ApiError(res.status, msg);
   }
+
   return res.json();
+}
+
+export async function apiFetchSafe<T = unknown>(
+  path: string,
+  token: string | null,
+  options: RequestInit = {}
+): Promise<T | null> {
+  try {
+    return await apiFetch<T>(path, token, options);
+  } catch {
+    return null;
+  }
 }
 
 export function formatXOF(amount: number | string): string {
   const n = typeof amount === "string" ? parseFloat(amount) : amount;
   if (isNaN(n)) return "— XOF";
-  return (
-    n.toLocaleString("fr-FR", { maximumFractionDigits: 0 }) + " XOF"
-  );
+  return n.toLocaleString("fr-FR", { maximumFractionDigits: 0 }) + " XOF";
 }
 
 export function relativeTime(dateStr: string): string {

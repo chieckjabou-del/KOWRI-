@@ -9,6 +9,23 @@ import { createSession, requireAuth } from "../lib/productAuth";
 
 const router = Router();
 
+router.get("/me", async (req, res) => {
+  const auth = await requireAuth(req.headers.authorization);
+  if (!auth) return res.status(401).json({ error: "Session invalide ou expirée" });
+  try {
+    const users = await db.select({
+      id: usersTable.id, phone: usersTable.phone,
+      firstName: usersTable.firstName, lastName: usersTable.lastName,
+      status: usersTable.status, country: usersTable.country,
+      email: usersTable.email,
+    }).from(usersTable).where(eq(usersTable.id, auth.userId)).limit(1);
+    if (!users[0]) return res.status(404).json({ error: "Utilisateur introuvable" });
+    res.json({ user: users[0], sessionType: auth.type });
+  } catch (err) {
+    res.status(500).json({ error: "Erreur serveur" });
+  }
+});
+
 router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
