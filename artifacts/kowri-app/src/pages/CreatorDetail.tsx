@@ -165,34 +165,28 @@ export default function CreatorDetail({ params }: { params?: { id?: string } }) 
   const pools: any[] = poolsQ.data?.pools ?? poolsQ.data ?? [];
   const isCreator = community?.creatorId === user?.id;
 
-  if (communityQ.isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "#FAFAF8" }}>
-        <Loader2 size={28} className="animate-spin" style={{ color: "#1A6B32" }} />
-      </div>
-    );
-  }
-
-  if (!community) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-6" style={{ background: "#FAFAF8" }}>
-        <Users size={40} className="text-gray-300" />
-        <p className="text-gray-500 text-sm">Communauté introuvable</p>
-        <button
-          onClick={() => navigate("/creator")}
-          className="px-5 py-2.5 rounded-xl font-bold text-white text-sm"
-          style={{ background: "#1A6B32" }}
-        >
-          Retour
-        </button>
-      </div>
-    );
-  }
-
-  const creatorFeeRate = Number(community.creatorFeeRate ?? 0.05);
+  const creatorFeeRate = Number(community?.creatorFeeRate ?? 0.05);
 
   return (
     <div className="min-h-screen pb-10" style={{ background: "#FAFAF8" }}>
+      {communityQ.isLoading ? (
+        <div className="flex flex-col items-center justify-center min-h-screen">
+          <Loader2 size={28} className="animate-spin" style={{ color: "#1A6B32" }} />
+        </div>
+      ) : !community ? (
+        <div className="flex flex-col items-center justify-center min-h-screen gap-4 px-6">
+          <Users size={40} className="text-gray-300" />
+          <p className="text-gray-500 text-sm">Communauté introuvable</p>
+          <button
+            onClick={() => navigate("/creator")}
+            className="px-5 py-2.5 rounded-xl font-bold text-white text-sm"
+            style={{ background: "#1A6B32" }}
+          >
+            Retour
+          </button>
+        </div>
+      ) : (
+        <>
       {/* Header */}
       <div className="sticky top-0 z-10 bg-white border-b border-gray-100">
         <div className="flex items-center gap-3 px-4 py-3 max-w-lg mx-auto">
@@ -296,6 +290,8 @@ export default function CreatorDetail({ params }: { params?: { id?: string } }) 
           creatorFeeRate={creatorFeeRate}
           onClose={() => setShowEarnings(false)}
         />
+      )}
+        </>
       )}
     </div>
   );

@@ -262,24 +262,23 @@ export default function AgentPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["agent-liquidity", agent?.id] }),
   });
 
-  // ── Loading state ──────────────────────────────────────────────────────────
-  if (agentQ.isLoading) {
-    return (
-      <div className="min-h-screen bg-[#FAFAF8] flex flex-col">
-        <TopBar title="Espace Agent" />
+  const liq  = liqQ.data;
+  const comm = commQ.data;
+
+  // Tier progress towards next tier
+  const tierVolume   = liq?.monthlyVolume ?? 0;
+  const tierTarget   = liq?.commissionTier === 1 ? 5_000_000 : 20_000_000;
+  const tierProgress = liq?.commissionTier === 3 ? 100 : Math.min(100, Math.round((tierVolume / tierTarget) * 100));
+
+  return (
+    <div className="min-h-screen bg-[#FAFAF8] flex flex-col pb-24">
+      <TopBar title="Espace Agent" />
+
+      {agentQ.isLoading ? (
         <div className="flex-1 flex items-center justify-center">
           <Loader2 size={32} className="animate-spin text-[#1A6B32]" />
         </div>
-        <BottomNav />
-      </div>
-    );
-  }
-
-  // ── No agent account ───────────────────────────────────────────────────────
-  if (!agent) {
-    return (
-      <div className="min-h-screen bg-[#FAFAF8] flex flex-col">
-        <TopBar title="Espace Agent" />
+      ) : !agent ? (
         <div className="flex-1 flex flex-col items-center justify-center px-6 text-center gap-6">
           <div className="w-20 h-20 rounded-full bg-gray-100 flex items-center justify-center">
             <User size={36} className="text-gray-400" />
@@ -297,27 +296,12 @@ export default function AgentPage() {
             Retour au tableau de bord
           </button>
         </div>
-        <BottomNav />
-      </div>
-    );
-  }
+      ) : (
+        <>
+          {showCash  && <CashModal  agentId={agent.id} token={token} onClose={() => setShowCash(false)} />}
+          {showFloat && <FloatModal agentId={agent.id} token={token} nearestSuperAgent={liq?.nearestSuperAgent ?? null} onClose={() => setShowFloat(false)} />}
 
-  const liq  = liqQ.data;
-  const comm = commQ.data;
-
-  // Tier progress towards next tier
-  const tierVolume   = liq?.monthlyVolume ?? 0;
-  const tierTarget   = liq?.commissionTier === 1 ? 5_000_000 : 20_000_000;
-  const tierProgress = liq?.commissionTier === 3 ? 100 : Math.min(100, Math.round((tierVolume / tierTarget) * 100));
-
-  return (
-    <div className="min-h-screen bg-[#FAFAF8] flex flex-col pb-24">
-      <TopBar title="Espace Agent" />
-
-      {showCash  && <CashModal  agentId={agent.id} token={token} onClose={() => setShowCash(false)} />}
-      {showFloat && <FloatModal agentId={agent.id} token={token} nearestSuperAgent={liq?.nearestSuperAgent ?? null} onClose={() => setShowFloat(false)} />}
-
-      <div className="px-4 pt-4 space-y-4">
+          <div className="px-4 pt-4 space-y-4">
 
         {/* ── Header: Agent Name + Type ── */}
         <div className="bg-[#1A6B32] rounded-2xl px-5 py-5 text-white">
@@ -513,7 +497,9 @@ export default function AgentPage() {
           </div>
         )}
 
-      </div>
+          </div>
+        </>
+      )}
       <BottomNav />
     </div>
   );

@@ -65,40 +65,38 @@ export default function Send() {
     setStep("confirm");
   }
 
-  if (step === "success") {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center pb-20 px-6" style={{ background: "#FAFAF8" }}>
-        <div
-          className="w-20 h-20 rounded-full flex items-center justify-center mb-6"
-          style={{ background: "#F0FDF4" }}
-        >
-          <CheckCircle2 size={40} style={{ color: "#1A6B32" }} />
-        </div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Envoi réussi !</h2>
-        <p className="text-gray-500 text-center text-sm mb-2">
-          {formatXOF(amountNum)} envoyés à <strong>{recipientPhone}</strong>
-        </p>
-        {txId && <p className="text-xs text-gray-400 mb-8">Réf: {txId}</p>}
-        <button
-          onClick={() => { setStep("form"); setAmount(""); setRecipientPhone(""); setDescription(""); }}
-          className="w-full max-w-xs py-4 rounded-2xl font-bold text-white text-base"
-          style={{ background: "#1A6B32" }}
-        >
-          Nouveau transfert
-        </button>
-        <button
-          onClick={() => navigate("/dashboard")}
-          className="mt-3 w-full max-w-xs py-4 rounded-2xl font-semibold text-gray-700 text-base border border-gray-200 bg-white"
-        >
-          Retour à l'accueil
-        </button>
-        <BottomNav />
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen pb-20" style={{ background: "#FAFAF8" }}>
+    <div className="min-h-screen" style={{ background: "#FAFAF8" }}>
+      {step === "success" ? (
+        <div className="flex flex-col items-center justify-center min-h-screen pb-20 px-6">
+          <div
+            className="w-20 h-20 rounded-full flex items-center justify-center mb-6"
+            style={{ background: "#F0FDF4" }}
+          >
+            <CheckCircle2 size={40} style={{ color: "#1A6B32" }} />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Envoi réussi !</h2>
+          <p className="text-gray-500 text-center text-sm mb-2">
+            {formatXOF(amountNum)} envoyés à <strong>{recipientPhone}</strong>
+          </p>
+          {txId && <p className="text-xs text-gray-400 mb-8">Réf: {txId}</p>}
+          <button
+            onClick={() => { setStep("form"); setAmount(""); setRecipientPhone(""); setDescription(""); }}
+            className="w-full max-w-xs py-4 rounded-2xl font-bold text-white text-base"
+            style={{ background: "#1A6B32" }}
+          >
+            Nouveau transfert
+          </button>
+          <button
+            onClick={() => navigate("/dashboard")}
+            className="mt-3 w-full max-w-xs py-4 rounded-2xl font-semibold text-gray-700 text-base border border-gray-200 bg-white"
+          >
+            Retour à l'accueil
+          </button>
+          <BottomNav />
+        </div>
+      ) : (
+        <div className="pb-20">
       <TopBar title="Envoyer" showBack onBack={() => step === "confirm" ? setStep("form") : navigate("/dashboard")} />
 
       <main className="px-4 pt-5 max-w-lg mx-auto">
@@ -215,7 +213,9 @@ export default function Send() {
         )}
       </main>
 
-      <BottomNav />
+          <BottomNav />
+        </div>
+      )}
     </div>
   );
 }

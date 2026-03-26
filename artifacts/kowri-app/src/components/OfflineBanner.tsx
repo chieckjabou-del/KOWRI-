@@ -16,12 +16,10 @@ export function OfflineBanner() {
     };
   }, [setOnline]);
 
-  if (isOnline) return null;
-
   return (
     <div
       className="fixed top-0 left-0 right-0 z-[9999] flex items-center justify-center gap-2 py-2 px-4 text-white text-xs font-semibold"
-      style={{ background: "#DC2626" }}
+      style={{ background: "#DC2626", display: isOnline ? "none" : "flex" }}
     >
       <WifiOff size={13} />
       Mode hors ligne — les données affichées sont en cache

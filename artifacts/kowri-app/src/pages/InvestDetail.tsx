@@ -71,38 +71,32 @@ export default function InvestDetail({ params }: { params?: { id?: string } }) {
   const nav = Number(pool?.nav ?? 1);
   const sc = STATUS_COLORS[pool?.status] ?? STATUS_COLORS.closed;
 
-  if (poolQ.isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: "#FAFAF8" }}>
-        <Loader2 size={28} className="animate-spin" style={{ color: "#1A6B32" }} />
-      </div>
-    );
-  }
-
-  if (!pool) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-6" style={{ background: "#FAFAF8" }}>
-        <BarChart3 size={40} className="text-gray-300" />
-        <p className="text-gray-500 text-sm text-center">Pool introuvable</p>
-        <button
-          onClick={() => navigate("/invest")}
-          className="px-5 py-2.5 rounded-xl font-bold text-white text-sm"
-          style={{ background: "#1A6B32" }}
-        >
-          Retour
-        </button>
-      </div>
-    );
-  }
-
   const invested    = myPosition ? Number(myPosition.investedAmount) : 0;
   const shares      = myPosition ? Number(myPosition.shares) : 0;
   const currentVal  = shares * nav;
   const gain        = currentVal - invested;
-  const progress    = pool.goalAmount > 0 ? Math.min((pool.currentAmount / pool.goalAmount) * 100, 100) : 0;
+  const progress    = (pool?.goalAmount ?? 0) > 0 ? Math.min(((pool?.currentAmount ?? 0) / (pool?.goalAmount ?? 1)) * 100, 100) : 0;
 
   return (
     <div className="min-h-screen pb-10" style={{ background: "#FAFAF8" }}>
+      {poolQ.isLoading ? (
+        <div className="flex flex-col items-center justify-center min-h-screen">
+          <Loader2 size={28} className="animate-spin" style={{ color: "#1A6B32" }} />
+        </div>
+      ) : !pool ? (
+        <div className="flex flex-col items-center justify-center min-h-screen gap-4 px-6">
+          <BarChart3 size={40} className="text-gray-300" />
+          <p className="text-gray-500 text-sm text-center">Pool introuvable</p>
+          <button
+            onClick={() => navigate("/invest")}
+            className="px-5 py-2.5 rounded-xl font-bold text-white text-sm"
+            style={{ background: "#1A6B32" }}
+          >
+            Retour
+          </button>
+        </div>
+      ) : (
+        <>
       {/* Custom header */}
       <div className="sticky top-0 z-10 bg-white border-b border-gray-100">
         <div className="flex items-center gap-3 px-4 py-3 max-w-lg mx-auto">
@@ -237,6 +231,8 @@ export default function InvestDetail({ params }: { params?: { id?: string } }) {
           </section>
         )}
       </main>
+        </>
+      )}
     </div>
   );
 }

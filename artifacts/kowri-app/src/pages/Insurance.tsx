@@ -481,10 +481,10 @@ function MyClaimsSection({
   });
 
   const claims = allClaimsQ.data ?? [];
-  if (!claims.length && !allClaimsQ.isLoading) return null;
+  const hidden = !claims.length && !allClaimsQ.isLoading;
 
   return (
-    <section>
+    <section style={{ display: hidden ? "none" : undefined }}>
       <h2 className="font-bold text-gray-900 mb-3 text-base">Mes sinistres</h2>
       {allClaimsQ.isLoading ? (
         <div className="space-y-2">

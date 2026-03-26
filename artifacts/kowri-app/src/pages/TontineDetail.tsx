@@ -322,30 +322,10 @@ export default function TontineDetail({ params }: Props) {
   });
 
   // ── Loading ────────────────────────────────────────────────────────────────
-  if (tontineQ.isLoading) {
-    return (
-      <div className="min-h-screen pb-20" style={{ background: "#FAFAF8" }}>
-        <TopBar showBack onBack={() => navigate("/tontines")} />
-        <div className="flex items-center justify-center pt-20">
-          <Loader2 size={32} className="animate-spin text-gray-300" />
-        </div>
-      </div>
-    );
-  }
-
-  if (!tontine) {
-    return (
-      <div className="min-h-screen pb-20" style={{ background: "#FAFAF8" }}>
-        <TopBar showBack onBack={() => navigate("/tontines")} title="Tontine introuvable" />
-        <div className="px-4 pt-10 text-center text-gray-500">Tontine introuvable</div>
-      </div>
-    );
-  }
-
-  const statusMeta = STATUS_META[tontine.status] ?? STATUS_META["pending"];
-  const currentRound = tontine.currentRound ?? 0;
-  const totalRounds  = tontine.totalRounds  ?? tontine.maxMembers ?? 1;
-  const nextDate     = tontine.nextPayoutDate
+  const statusMeta = STATUS_META[tontine?.status ?? "pending"] ?? STATUS_META["pending"];
+  const currentRound = tontine?.currentRound ?? 0;
+  const totalRounds  = tontine?.totalRounds  ?? tontine?.maxMembers ?? 1;
+  const nextDate     = tontine?.nextPayoutDate
     ? new Date(tontine.nextPayoutDate).toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "long" })
     : null;
 
@@ -356,7 +336,19 @@ export default function TontineDetail({ params }: Props) {
 
   return (
     <div className="min-h-screen pb-20" style={{ background: "#FAFAF8" }}>
-      <TopBar showBack onBack={() => navigate("/tontines")} />
+      <TopBar
+        showBack
+        onBack={() => navigate("/tontines")}
+        title={!tontineQ.isLoading && !tontine ? "Tontine introuvable" : undefined}
+      />
+      {tontineQ.isLoading ? (
+        <div className="flex items-center justify-center pt-20">
+          <Loader2 size={32} className="animate-spin text-gray-300" />
+        </div>
+      ) : !tontine ? (
+        <div className="px-4 pt-10 text-center text-gray-500">Tontine introuvable</div>
+      ) : (
+        <>
 
       {/* ── Header ──────────────────────────────────────────────────────── */}
       <div className="px-4 pt-4 pb-3 max-w-lg mx-auto">
@@ -743,6 +735,8 @@ export default function TontineDetail({ params }: Props) {
 
       {showSell && user && <SellModal tontineId={id} userId={user.id} onClose={() => setShowSell(false)} />}
       {showBid  && user && <BidModal  tontineId={id} userId={user.id} onClose={() => setShowBid(false)} />}
+        </>
+      )}
     </div>
   );
 }
