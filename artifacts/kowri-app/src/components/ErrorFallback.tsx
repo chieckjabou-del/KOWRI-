@@ -103,25 +103,12 @@ export function LoadingScreen({ message = "Chargement…" }: { message?: string 
           <span className="text-white text-xl font-black">K</span>
         </div>
         <div className="flex gap-1.5 mt-2">
-          {[0, 1, 2].map((i) => (
-            <div
-              key={i}
-              className="w-2 h-2 rounded-full"
-              style={{
-                background: "#1A6B32",
-                animation: `bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
-              }}
-            />
-          ))}
+          <div className="w-2 h-2 rounded-full animate-bounce" style={{ background: "#1A6B32", animationDelay: "0ms" }} />
+          <div className="w-2 h-2 rounded-full animate-bounce" style={{ background: "#1A6B32", animationDelay: "150ms" }} />
+          <div className="w-2 h-2 rounded-full animate-bounce" style={{ background: "#1A6B32", animationDelay: "300ms" }} />
         </div>
         <p className="text-sm text-gray-500 mt-1">{message}</p>
       </div>
-      <style>{`
-        @keyframes bounce {
-          0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-          40% { transform: scale(1); opacity: 1; }
-        }
-      `}</style>
     </div>
   );
 }
