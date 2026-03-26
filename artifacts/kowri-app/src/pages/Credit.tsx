@@ -258,7 +258,7 @@ export default function Credit() {
     enabled: !!user?.id,
     staleTime: 15_000,
   });
-  const activeLoans = loansQ.data?.loans ?? [];
+  const activeLoans: any[] = Array.isArray(loansQ.data?.loans) ? loansQ.data.loans : [];
   const hasActiveLoan = activeLoans.length > 0;
 
   /* Mutations */

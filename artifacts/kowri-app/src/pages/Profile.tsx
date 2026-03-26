@@ -244,7 +244,7 @@ export default function Profile() {
     },
     enabled: !!wallet?.id,
     staleTime: 15_000,
-    keepPreviousData: true,
+    placeholderData: (prev: any) => prev,
   });
 
   /* ── Mutations ── */
@@ -299,8 +299,10 @@ export default function Profile() {
   const latestKyc  = kycData?.record;
   const rep        = repQ.data;
   const badges: any[] = badgesQ.data?.badges ?? [];
-  const txs: any[]    = txQ.data?.transactions ?? txQ.data?.entries ?? [];
-  const txTotal: number = txQ.data?.pagination?.total ?? txs.length;
+  const txData: any    = txQ.data ?? {};
+  const txs: any[]    = Array.isArray(txData.transactions) ? txData.transactions
+                       : Array.isArray(txData.entries) ? txData.entries : [];
+  const txTotal: number = txData.pagination?.total ?? txs.length;
   const hasMoreTx  = txs.length >= TX_PAGE_SIZE;
 
   /* ── Reputation tier by score ── */

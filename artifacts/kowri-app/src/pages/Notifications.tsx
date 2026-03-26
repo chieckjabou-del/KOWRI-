@@ -1,9 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Bell, CheckCheck, ArrowLeft, Banknote, CreditCard, Users, Info } from "lucide-react";
+import { Bell, CheckCheck, Banknote, CreditCard, Users, Info, AlertCircle } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
+import { BottomNav } from "@/components/BottomNav";
 
 interface Notification {
   id: string;
@@ -49,7 +50,7 @@ export default function Notifications() {
   const [, setLocation] = useLocation();
   const qc = useQueryClient();
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["notifications"],
     queryFn: () => apiFetch<{ notifications: Notification[]; unreadCount: number }>("/notifications", token),
     refetchInterval: 30000,
@@ -67,11 +68,11 @@ export default function Notifications() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
   });
 
-  const notifications: Notification[] = data?.notifications ?? [];
+  const notifications: Notification[] = Array.isArray(data?.notifications) ? data!.notifications : [];
   const unread = data?.unreadCount ?? 0;
 
   return (
-    <div className="min-h-screen flex flex-col" style={{ background: "#FAFAF8" }}>
+    <div className="min-h-screen flex flex-col pb-20" style={{ background: "#FAFAF8" }}>
       <TopBar title="Notifications" showBack onBack={() => setLocation("/dashboard")} />
 
       <div className="flex items-center justify-between px-4 py-3">
@@ -91,11 +92,24 @@ export default function Notifications() {
         )}
       </div>
 
-      <div className="flex-1 px-4 pb-24 space-y-2">
+      <div className="flex-1 px-4 pb-6 space-y-2">
         {isLoading ? (
           Array.from({ length: 5 }).map((_, i) => (
             <div key={i} className="h-20 bg-white rounded-xl animate-pulse border border-gray-100" />
           ))
+        ) : isError ? (
+          <div className="flex flex-col items-center justify-center py-16 text-center">
+            <AlertCircle size={32} className="mx-auto mb-3" style={{ color: "#DC2626" }} />
+            <p className="text-sm font-medium text-gray-700 mb-1">Impossible de charger</p>
+            <p className="text-xs text-gray-400 mb-4">{(error as any)?.message ?? "Erreur réseau"}</p>
+            <button
+              onClick={() => refetch()}
+              className="px-4 py-2 rounded-xl text-sm font-semibold text-white"
+              style={{ background: "#1A6B32" }}
+            >
+              Réessayer
+            </button>
+          </div>
         ) : notifications.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mb-4">
@@ -115,7 +129,6 @@ export default function Notifications() {
               <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${iconBg(n.type)}`}>
                 <NotifIcon type={n.type} />
               </div>
-
               <div className="flex-1 min-w-0">
                 <div className="flex items-start justify-between gap-2">
                   <span className={`text-sm font-semibold leading-tight ${n.read ? "text-gray-600" : "text-gray-900"}`}>
@@ -129,7 +142,6 @@ export default function Notifications() {
                   {n.message}
                 </p>
               </div>
-
               {!n.read && (
                 <div className="w-2 h-2 rounded-full flex-shrink-0 mt-1.5" style={{ background: "#1A6B32" }} />
               )}
@@ -137,6 +149,8 @@ export default function Notifications() {
           ))
         )}
       </div>
+
+      <BottomNav />
     </div>
   );
 }

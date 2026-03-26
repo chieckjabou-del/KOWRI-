@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, X, Loader2, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { Plus, X, Loader2, ChevronDown, ChevronUp, AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 import { apiFetch, formatXOF, generateIdempotencyKey } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
@@ -227,7 +227,7 @@ export default function Savings() {
     enabled: !!user?.id,
     staleTime: 20_000,
   });
-  const plans = plansQ.data?.plans ?? [];
+  const plans: any[] = Array.isArray(plansQ.data?.plans) ? plansQ.data.plans : [];
 
   /* Rate */
   const rateQ = useQuery({
@@ -319,7 +319,15 @@ export default function Savings() {
         <section>
           {plansQ.isLoading ? (
             <div className="space-y-3">
-              {[0,1].map(i => <div key={i} className="h-36 bg-white rounded-2xl animate-pulse border border-gray-100" />)}
+              {[0, 1].map(i => <div key={i} className="h-36 bg-white rounded-2xl animate-pulse border border-gray-100" />)}
+            </div>
+          ) : plansQ.isError ? (
+            <div className="bg-white rounded-2xl p-6 text-center border border-red-100 shadow-sm">
+              <AlertTriangle size={24} className="mx-auto mb-2" style={{ color: "#DC2626" }} />
+              <p className="text-sm text-gray-700 mb-3">{(plansQ.error as any)?.message ?? "Erreur de chargement"}</p>
+              <button onClick={() => plansQ.refetch()} className="px-4 py-2 rounded-xl text-sm font-semibold text-white" style={{ background: "#1A6B32" }}>
+                Réessayer
+              </button>
             </div>
           ) : plans.length === 0 ? (
             <div className="bg-white rounded-2xl p-8 text-center shadow-sm border border-gray-100">
@@ -337,22 +345,22 @@ export default function Savings() {
                 Créer mon premier plan
               </button>
             </div>
-          ) : null}
-
-          <div className="space-y-3">
-            {plans.map((plan: any) => (
-              <PlanCard
-                key={plan.id}
-                plan={plan}
-                walletId={wallet?.id ?? ""}
-                onAction={() => {
-                  qc.invalidateQueries({ queryKey: ["savings-plans", user?.id] });
-                  qc.invalidateQueries({ queryKey: ["savings-summary", user?.id] });
-                  qc.invalidateQueries({ queryKey: ["wallets", user?.id] });
-                }}
-              />
-            ))}
-          </div>
+          ) : (
+            <div className="space-y-3">
+              {plans.map((plan: any) => (
+                <PlanCard
+                  key={plan.id}
+                  plan={plan}
+                  walletId={wallet?.id ?? ""}
+                  onAction={() => {
+                    qc.invalidateQueries({ queryKey: ["savings-plans", user?.id] });
+                    qc.invalidateQueries({ queryKey: ["savings-summary", user?.id] });
+                    qc.invalidateQueries({ queryKey: ["wallets", user?.id] });
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </section>
       </main>
 

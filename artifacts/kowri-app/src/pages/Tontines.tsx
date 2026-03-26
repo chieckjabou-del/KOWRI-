@@ -8,8 +8,6 @@ import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { TYPE_META, STATUS_META, FREQ_LABELS } from "@/lib/tontineTypes";
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
-
 function friendlyName(name: string, type?: string): string {
   const raw = (name ?? "").trim();
   if (!raw || /^\d+$/.test(raw)) {
@@ -35,7 +33,8 @@ function ProgressRing({ current, total }: { current: number; total: number }) {
   const size = 48;
   const r    = 18;
   const circ = 2 * Math.PI * r;
-  const pct  = total > 0 ? Math.min(1, current / total) : 0;
+  const safeTotal = Math.max(total, 1);
+  const pct  = Math.min(1, current / safeTotal);
   return (
     <div className="relative flex-shrink-0">
       <svg width={size} height={size} className="-rotate-90">
@@ -44,13 +43,30 @@ function ProgressRing({ current, total }: { current: number; total: number }) {
           strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)} strokeLinecap="round" />
       </svg>
       <span className="absolute inset-0 flex items-center justify-center text-[10px] font-bold text-gray-700">
-        {current}/{total}
+        {current}/{safeTotal}
       </span>
     </div>
   );
 }
 
-// ── Tab: Mes Tontines ─────────────────────────────────────────────────────────
+function ErrorCard({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div className="bg-white rounded-2xl p-6 text-center border border-red-100 shadow-sm">
+      <AlertCircle size={28} className="mx-auto mb-3" style={{ color: "#DC2626" }} />
+      <p className="text-sm font-medium text-gray-700 mb-1">Impossible de charger</p>
+      <p className="text-xs text-gray-400 mb-4">{message}</p>
+      {onRetry && (
+        <button
+          onClick={onRetry}
+          className="px-4 py-2 rounded-xl text-sm font-semibold text-white"
+          style={{ background: "#1A6B32" }}
+        >
+          Réessayer
+        </button>
+      )}
+    </div>
+  );
+}
 
 function MesTontines() {
   const { token, user } = useAuth();
@@ -61,7 +77,10 @@ function MesTontines() {
     enabled:  !!user?.id,
     staleTime: 20_000,
   });
-  const tontines = tontinesQ.data?.tontines ?? [];
+
+  const tontines: any[] = Array.isArray(tontinesQ.data?.tontines)
+    ? tontinesQ.data.tontines
+    : [];
 
   if (tontinesQ.isLoading) {
     return (
@@ -70,6 +89,15 @@ function MesTontines() {
           <div key={i} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 animate-pulse h-28" />
         ))}
       </div>
+    );
+  }
+
+  if (tontinesQ.isError) {
+    return (
+      <ErrorCard
+        message={(tontinesQ.error as any)?.message ?? "Erreur de chargement"}
+        onRetry={() => tontinesQ.refetch()}
+      />
     );
   }
 
@@ -93,8 +121,10 @@ function MesTontines() {
   return (
     <div className="space-y-3">
       {tontines.map((t: any) => {
-        const status = STATUS_META[t.status] ?? STATUS_META["pending"];
-        const nextDate = t.nextPayoutDate ? new Date(t.nextPayoutDate).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }) : null;
+        const status   = STATUS_META[t.status] ?? STATUS_META["pending"];
+        const nextDate = t.nextPayoutDate
+          ? new Date(t.nextPayoutDate).toLocaleDateString("fr-FR", { day: "numeric", month: "short" })
+          : null;
         return (
           <Link key={t.id} href={`/tontines/${t.id}`}>
             <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 active:bg-gray-50 cursor-pointer">
@@ -129,8 +159,6 @@ function MesTontines() {
   );
 }
 
-// ── Tab: Découvrir ────────────────────────────────────────────────────────────
-
 const DISCOVER_FILTERS = [
   { value: "",           label: "Tous"          },
   { value: "classic",    label: "Classique"     },
@@ -153,7 +181,8 @@ function Decouvrir() {
     queryFn:  () => apiFetch<any>("/tontines/public", token),
     staleTime: 30_000,
   });
-  const allTontines: any[] = publicQ.data?.tontines ?? [];
+
+  const allTontines: any[] = Array.isArray(publicQ.data?.tontines) ? publicQ.data.tontines : [];
   const filtered = filter ? allTontines.filter((t: any) => t.tontineType === filter) : allTontines;
 
   const joinMut = useMutation({
@@ -175,11 +204,10 @@ function Decouvrir() {
 
   return (
     <div>
-      {/* Filter pills */}
       <div className="flex gap-2 overflow-x-auto pb-3 -mx-4 px-4" style={{ scrollbarWidth: "none" }}>
         {DISCOVER_FILTERS.map(f => (
           <button
-            key={f.value}
+            key={f.value || "__all__"}
             onClick={() => setFilter(f.value)}
             className="flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all"
             style={{
@@ -204,44 +232,47 @@ function Decouvrir() {
         <div className="space-y-3">
           {[0, 1, 2].map(i => <div key={i} className="bg-white rounded-2xl h-24 animate-pulse border border-gray-100" />)}
         </div>
+      ) : publicQ.isError ? (
+        <ErrorCard
+          message={(publicQ.error as any)?.message ?? "Erreur de chargement"}
+          onRetry={() => publicQ.refetch()}
+        />
       ) : filtered.length === 0 ? (
         <div className="text-center py-10">
           <Globe size={32} className="mx-auto mb-3 text-gray-300" />
           <p className="text-gray-500 text-sm">Aucune tontine publique disponible</p>
         </div>
-      ) : null}
-
-      <div className="space-y-3">
-        {filtered.map((t: any) => (
-          <div key={t.id} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-            <div className="flex items-start justify-between gap-2 mb-3">
-              <div>
-                <TypeBadge type={t.tontineType ?? "classic"} />
-                <h3 className="font-semibold text-gray-900 mt-1 text-sm leading-tight">{friendlyName(t.name, t.tontineType)}</h3>
+      ) : (
+        <div className="space-y-3">
+          {filtered.map((t: any) => (
+            <div key={t.id} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+              <div className="flex items-start justify-between gap-2 mb-3">
+                <div>
+                  <TypeBadge type={t.tontineType ?? "classic"} />
+                  <h3 className="font-semibold text-gray-900 mt-1 text-sm leading-tight">{friendlyName(t.name, t.tontineType)}</h3>
+                </div>
+                <button
+                  onClick={() => joinMut.mutate(t.id)}
+                  disabled={joining === t.id}
+                  className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1 transition-opacity disabled:opacity-60"
+                  style={{ background: "#1A6B32", minHeight: 36 }}
+                >
+                  {joining === t.id ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+                  Rejoindre
+                </button>
               </div>
-              <button
-                onClick={() => joinMut.mutate(t.id)}
-                disabled={joining === t.id}
-                className="flex-shrink-0 px-3 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1 transition-opacity disabled:opacity-60"
-                style={{ background: "#1A6B32", minHeight: 36 }}
-              >
-                {joining === t.id ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-                Rejoindre
-              </button>
+              <div className="flex items-center gap-4 text-xs text-gray-500">
+                <span className="flex items-center gap-1"><Users size={11} /> {t.memberCount ?? 0}/{t.maxMembers}</span>
+                <span className="font-medium" style={{ color: "#1A6B32" }}>{formatXOF(t.contributionAmount)}</span>
+                <span>{FREQ_LABELS[t.frequency] ?? t.frequency}</span>
+              </div>
             </div>
-            <div className="flex items-center gap-4 text-xs text-gray-500">
-              <span className="flex items-center gap-1"><Users size={11} /> {t.memberCount ?? 0}/{t.maxMembers}</span>
-              <span className="font-medium" style={{ color: "#1A6B32" }}>{formatXOF(t.contributionAmount)}</span>
-              <span>{FREQ_LABELS[t.frequency] ?? t.frequency}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
-
-// ── Tab: Marché ───────────────────────────────────────────────────────────────
 
 function Marche() {
   const { token, user } = useAuth();
@@ -254,7 +285,8 @@ function Marche() {
     queryFn:  () => apiFetch<any>("/community/tontines/positions", token),
     staleTime: 20_000,
   });
-  const listings: any[] = listingsQ.data?.listings ?? [];
+
+  const listings: any[] = Array.isArray(listingsQ.data?.listings) ? listingsQ.data.listings : [];
 
   const buyMut = useMutation({
     mutationFn: async (listingId: string) => {
@@ -286,50 +318,53 @@ function Marche() {
         <div className="space-y-3">
           {[0, 1, 2].map(i => <div key={i} className="bg-white rounded-2xl h-20 animate-pulse border border-gray-100" />)}
         </div>
+      ) : listingsQ.isError ? (
+        <ErrorCard
+          message={(listingsQ.error as any)?.message ?? "Erreur de chargement"}
+          onRetry={() => listingsQ.refetch()}
+        />
       ) : listings.length === 0 ? (
         <div className="text-center py-10">
           <ShoppingCart size={32} className="mx-auto mb-3 text-gray-300" />
           <p className="text-gray-500 text-sm">Aucune position disponible sur le marché</p>
         </div>
-      ) : null}
-
-      <div className="space-y-3">
-        {listings.map((l: any) => (
-          <div key={l.id} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <Tag size={12} className="text-gray-400" />
-                  <span className="text-sm font-semibold text-gray-900 truncate">{l.tontineName ?? "Tontine"}</span>
+      ) : (
+        <div className="space-y-3">
+          {listings.map((l: any) => (
+            <div key={l.id} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Tag size={12} className="text-gray-400" />
+                    <span className="text-sm font-semibold text-gray-900 truncate">{l.tontineName ?? "Tontine"}</span>
+                  </div>
+                  <p className="text-xs text-gray-500">Position #{l.payoutOrder}</p>
+                  <p className="text-sm font-bold mt-1" style={{ color: "#1A6B32" }}>{formatXOF(l.askPrice)}</p>
                 </div>
-                <p className="text-xs text-gray-500">Position #{l.payoutOrder}</p>
-                <p className="text-sm font-bold mt-1" style={{ color: "#1A6B32" }}>{formatXOF(l.askPrice)}</p>
+                <button
+                  onClick={() => buyMut.mutate(l.id)}
+                  disabled={buying === l.id}
+                  className="flex-shrink-0 px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 disabled:opacity-60"
+                  style={{ background: "#1A6B32", minHeight: 36 }}
+                >
+                  {buying === l.id ? <Loader2 size={12} className="animate-spin" /> : <ShoppingCart size={12} />}
+                  Acheter
+                </button>
               </div>
-              <button
-                onClick={() => buyMut.mutate(l.id)}
-                disabled={buying === l.id}
-                className="flex-shrink-0 px-4 py-2 rounded-xl text-xs font-bold text-white flex items-center gap-1.5 disabled:opacity-60"
-                style={{ background: "#1A6B32", minHeight: 36 }}
-              >
-                {buying === l.id ? <Loader2 size={12} className="animate-spin" /> : <ShoppingCart size={12} />}
-                Acheter
-              </button>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
-
 type TabId = "mes" | "decouvrir" | "marche";
 
-const TABS: { id: TabId; label: string; Icon: React.ElementType }[] = [
-  { id: "mes",       label: "Mes Tontines", Icon: Users       },
-  { id: "decouvrir", label: "Découvrir",    Icon: Globe       },
-  { id: "marche",    label: "Marché",       Icon: ShoppingCart },
+const TABS: { id: TabId; label: string }[] = [
+  { id: "mes",       label: "Mes Tontines" },
+  { id: "decouvrir", label: "Découvrir"    },
+  { id: "marche",    label: "Marché"       },
 ];
 
 export default function Tontines() {
@@ -339,7 +374,6 @@ export default function Tontines() {
     <div className="min-h-screen pb-20" style={{ background: "#FAFAF8" }}>
       <TopBar title="Tontines" />
 
-      {/* Tab bar */}
       <div className="sticky top-14 z-30 bg-white border-b border-gray-100 px-4">
         <div className="flex gap-1 max-w-lg mx-auto">
           {TABS.map(({ id, label }) => (
@@ -351,7 +385,10 @@ export default function Tontines() {
             >
               {label}
               {tab === id && (
-                <span className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full" style={{ background: "#1A6B32" }} />
+                <span
+                  className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full"
+                  style={{ background: "#1A6B32" }}
+                />
               )}
             </button>
           ))}
@@ -359,36 +396,39 @@ export default function Tontines() {
       </div>
 
       <main className="px-4 pt-5 pb-4 max-w-lg mx-auto">
-        {tab === "mes" && (
-          <>
-            <div className="flex items-center justify-between mb-4">
-              <h1 className="text-xl font-bold text-gray-900">Mes Tontines</h1>
-              <Link href="/tontines/create">
-                <button
-                  className="flex items-center gap-2 px-3 py-2 rounded-xl font-semibold text-white text-sm"
-                  style={{ background: "#1A6B32", minHeight: 40 }}
-                >
-                  <Plus size={15} /> Créer
-                </button>
-              </Link>
+        {/* Each tab is a single div with stable key — prevents insertBefore crash */}
+        <div key={`tab-${tab}`}>
+          {tab === "mes" && (
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <h1 className="text-xl font-bold text-gray-900">Mes Tontines</h1>
+                <Link href="/tontines/create">
+                  <button
+                    className="flex items-center gap-2 px-3 py-2 rounded-xl font-semibold text-white text-sm"
+                    style={{ background: "#1A6B32", minHeight: 40 }}
+                  >
+                    <Plus size={15} /> Créer
+                  </button>
+                </Link>
+              </div>
+              <MesTontines />
             </div>
-            <MesTontines />
-          </>
-        )}
+          )}
 
-        {tab === "decouvrir" && (
-          <>
-            <h1 className="text-xl font-bold text-gray-900 mb-4">Découvrir</h1>
-            <Decouvrir />
-          </>
-        )}
+          {tab === "decouvrir" && (
+            <div>
+              <h1 className="text-xl font-bold text-gray-900 mb-4">Découvrir</h1>
+              <Decouvrir />
+            </div>
+          )}
 
-        {tab === "marche" && (
-          <>
-            <h1 className="text-xl font-bold text-gray-900 mb-4">Marché Secondaire</h1>
-            <Marche />
-          </>
-        )}
+          {tab === "marche" && (
+            <div>
+              <h1 className="text-xl font-bold text-gray-900 mb-4">Marché Secondaire</h1>
+              <Marche />
+            </div>
+          )}
+        </div>
       </main>
 
       <BottomNav />
