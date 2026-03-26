@@ -307,6 +307,8 @@ export default function Diaspora() {
           </div>
         </Link>
 
+        <div key={`tab-${tab}`}>
+
         {/* ─── TAB: ENVOYER ─────────────────────────────────────────── */}
         {tab === "send" && (
           <>
@@ -777,8 +779,7 @@ export default function Diaspora() {
                   <Plus size={15} /> Programmer un virement
                 </button>
               </div>
-            ) : null}
-
+            ) : (
             <div className="space-y-3">
               {recurring.map((r: any) => {
                 const bene = beneficiaries.find(b => b.id === r.beneficiaryId);
@@ -825,8 +826,11 @@ export default function Diaspora() {
                 );
               })}
             </div>
+            )}
           </>
         )}
+
+        </div>
       </main>
 
       <BottomNav />
