@@ -37,60 +37,59 @@ export function BottomNav() {
   const isMoreActive = MORE_ACTIVE_PREFIXES.some(p => location.startsWith(p));
 
   return (
-    <>
-      {showMore && (
-        <div
-          className="fixed inset-0 z-40"
-          style={{ background: "rgba(0,0,0,0.35)" }}
-          onClick={() => setShowMore(false)}
-        />
-      )}
+    <div>
+      <div
+        className="fixed inset-0 z-40"
+        style={{ background: "rgba(0,0,0,0.35)", display: showMore ? "block" : "none" }}
+        onClick={() => setShowMore(false)}
+      />
 
-      {showMore && (
-        <div
-          className="fixed left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-gray-100 max-w-lg mx-auto"
-          style={{ bottom: "calc(56px + env(safe-area-inset-bottom))" }}
-        >
-          <div className="flex items-center justify-between px-5 pt-4 pb-3">
-            <p className="font-bold text-gray-900 text-sm">Autres services</p>
-            <button
-              onClick={() => setShowMore(false)}
-              className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center"
-            >
-              <X size={14} className="text-gray-600" />
-            </button>
-          </div>
-          <div className="px-4 pb-5 grid grid-cols-4 gap-2">
-            {MORE_ITEMS.map(({ href, label, Icon, color }) => {
-              const active = location.startsWith(href);
-              return (
-                <Link key={href} href={href} onClick={() => setShowMore(false)}>
-                  <div
-                    className="flex flex-col items-center gap-1.5 py-3 rounded-2xl border transition-all cursor-pointer"
-                    style={{
-                      background:   active ? `${color}15` : "#F9FAFB",
-                      borderColor:  active ? color : "#F3F4F6",
-                    }}
-                  >
-                    <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center"
-                      style={{ background: active ? `${color}25` : "#FFFFFF" }}
-                    >
-                      <Icon size={18} style={{ color: active ? color : "#6B7280" }} strokeWidth={active ? 2.5 : 1.8} />
-                    </div>
-                    <span
-                      className="text-[10px] font-semibold text-center leading-tight"
-                      style={{ color: active ? color : "#6B7280" }}
-                    >
-                      {label}
-                    </span>
-                  </div>
-                </Link>
-              );
-            })}
-          </div>
+      <div
+        className="fixed left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl border-t border-gray-100 max-w-lg mx-auto"
+        style={{
+          bottom: "calc(56px + env(safe-area-inset-bottom))",
+          display: showMore ? "block" : "none",
+        }}
+      >
+        <div className="flex items-center justify-between px-5 pt-4 pb-3">
+          <p className="font-bold text-gray-900 text-sm">Autres services</p>
+          <button
+            onClick={() => setShowMore(false)}
+            className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center"
+          >
+            <X size={14} className="text-gray-600" />
+          </button>
         </div>
-      )}
+        <div className="px-4 pb-5 grid grid-cols-4 gap-2">
+          {MORE_ITEMS.map(({ href, label, Icon, color }) => {
+            const active = location.startsWith(href);
+            return (
+              <Link key={href} href={href} onClick={() => setShowMore(false)}>
+                <div
+                  className="flex flex-col items-center gap-1.5 py-3 rounded-2xl border transition-all cursor-pointer"
+                  style={{
+                    background:   active ? `${color}15` : "#F9FAFB",
+                    borderColor:  active ? color : "#F3F4F6",
+                  }}
+                >
+                  <div
+                    className="w-10 h-10 rounded-xl flex items-center justify-center"
+                    style={{ background: active ? `${color}25` : "#FFFFFF" }}
+                  >
+                    <Icon size={18} style={{ color: active ? color : "#6B7280" }} strokeWidth={active ? 2.5 : 1.8} />
+                  </div>
+                  <span
+                    className="text-[10px] font-semibold text-center leading-tight"
+                    style={{ color: active ? color : "#6B7280" }}
+                  >
+                    {label}
+                  </span>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
 
       <nav
         className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-100"
@@ -122,6 +121,6 @@ export function BottomNav() {
           </button>
         </div>
       </nav>
-    </>
+    </div>
   );
 }

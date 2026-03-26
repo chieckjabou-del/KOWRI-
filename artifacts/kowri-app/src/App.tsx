@@ -95,6 +95,15 @@ function AuthGate() {
   return null;
 }
 
+/* ─── Suspense wrapper for public pages ─────────────────────────── */
+function PublicPage({ Page }: { Page: React.ComponentType }) {
+  return (
+    <Suspense fallback={<PageSkeleton />}>
+      <Page />
+    </Suspense>
+  );
+}
+
 /* ─── Router ────────────────────────────────────────────────────── */
 function AppRouter() {
   const { isAuthenticated, isHydrating } = useAuth();
@@ -102,82 +111,87 @@ function AppRouter() {
   if (isHydrating) return <LoadingScreen message="Démarrage de KOWRI…" />;
 
   return (
-    <>
+    <div>
       <AuthGate />
-      <Suspense fallback={<PageSkeleton />}>
-        <Switch>
-          {/* Public routes */}
-          <Route path="/login"    component={Login} />
-          <Route path="/register" component={Register} />
+      <Switch>
+        {/* Public routes — each with its own isolated Suspense */}
+        <Route path="/login">
+          {() => <PublicPage Page={Login} />}
+        </Route>
+        <Route path="/register">
+          {() => <PublicPage Page={Register} />}
+        </Route>
 
-          {/* Protected routes */}
-          <Route path="/dashboard">
-            {() => <ProtectedRoute component={Dashboard} />}
-          </Route>
-          <Route path="/tontines/create">
-            {() => <ProtectedRoute component={TontineCreate} />}
-          </Route>
-          <Route path="/tontines/:id">
-            {(params) => <ProtectedRoute component={TontineDetail} params={params} />}
-          </Route>
-          <Route path="/tontines">
-            {() => <ProtectedRoute component={Tontines} />}
-          </Route>
-          <Route path="/send">
-            {() => <ProtectedRoute component={Send} />}
-          </Route>
-          <Route path="/profile">
-            {() => <ProtectedRoute component={Profile} />}
-          </Route>
-          <Route path="/credit">
-            {() => <ProtectedRoute component={Credit} />}
-          </Route>
-          <Route path="/savings">
-            {() => <ProtectedRoute component={Savings} />}
-          </Route>
-          <Route path="/diaspora">
-            {() => <ProtectedRoute component={Diaspora} />}
-          </Route>
-          <Route path="/merchant">
-            {() => <ProtectedRoute component={Merchant} />}
-          </Route>
-          <Route path="/notifications">
-            {() => <ProtectedRoute component={Notifications} />}
-          </Route>
-          <Route path="/kyc">
-            {() => <ProtectedRoute component={KYC} />}
-          </Route>
-          <Route path="/agent">
-            {() => <ProtectedRoute component={AgentPage} />}
-          </Route>
-          <Route path="/invest/:id">
-            {(params) => <ProtectedRoute component={InvestDetail} params={params} />}
-          </Route>
-          <Route path="/invest">
-            {() => <ProtectedRoute component={Invest} />}
-          </Route>
-          <Route path="/insurance">
-            {() => <ProtectedRoute component={Insurance} />}
-          </Route>
-          <Route path="/creator/:id">
-            {(params) => <ProtectedRoute component={CreatorDetail} params={params} />}
-          </Route>
-          <Route path="/creator">
-            {() => <ProtectedRoute component={Creator} />}
-          </Route>
-          <Route path="/support">
-            {() => <ProtectedRoute component={Support} />}
-          </Route>
+        {/* Protected routes — Suspense lives inside ProtectedRoute */}
+        <Route path="/dashboard">
+          {() => <ProtectedRoute component={Dashboard} />}
+        </Route>
+        <Route path="/tontines/create">
+          {() => <ProtectedRoute component={TontineCreate} />}
+        </Route>
+        <Route path="/tontines/:id">
+          {(params) => <ProtectedRoute component={TontineDetail} params={params} />}
+        </Route>
+        <Route path="/tontines">
+          {() => <ProtectedRoute component={Tontines} />}
+        </Route>
+        <Route path="/send">
+          {() => <ProtectedRoute component={Send} />}
+        </Route>
+        <Route path="/profile">
+          {() => <ProtectedRoute component={Profile} />}
+        </Route>
+        <Route path="/credit">
+          {() => <ProtectedRoute component={Credit} />}
+        </Route>
+        <Route path="/savings">
+          {() => <ProtectedRoute component={Savings} />}
+        </Route>
+        <Route path="/diaspora">
+          {() => <ProtectedRoute component={Diaspora} />}
+        </Route>
+        <Route path="/merchant">
+          {() => <ProtectedRoute component={Merchant} />}
+        </Route>
+        <Route path="/notifications">
+          {() => <ProtectedRoute component={Notifications} />}
+        </Route>
+        <Route path="/kyc">
+          {() => <ProtectedRoute component={KYC} />}
+        </Route>
+        <Route path="/agent">
+          {() => <ProtectedRoute component={AgentPage} />}
+        </Route>
+        <Route path="/invest/:id">
+          {(params) => <ProtectedRoute component={InvestDetail} params={params} />}
+        </Route>
+        <Route path="/invest">
+          {() => <ProtectedRoute component={Invest} />}
+        </Route>
+        <Route path="/insurance">
+          {() => <ProtectedRoute component={Insurance} />}
+        </Route>
+        <Route path="/creator/:id">
+          {(params) => <ProtectedRoute component={CreatorDetail} params={params} />}
+        </Route>
+        <Route path="/creator">
+          {() => <ProtectedRoute component={Creator} />}
+        </Route>
+        <Route path="/support">
+          {() => <ProtectedRoute component={Support} />}
+        </Route>
 
-          {/* Root redirect */}
-          <Route path="/">
-            {() => isAuthenticated ? <Redirect to="/dashboard" /> : <Redirect to="/login" />}
-          </Route>
+        {/* Root redirect */}
+        <Route path="/">
+          {() => isAuthenticated ? <Redirect to="/dashboard" /> : <Redirect to="/login" />}
+        </Route>
 
-          <Route component={NotFound} />
-        </Switch>
-      </Suspense>
-    </>
+        {/* 404 */}
+        <Route>
+          {() => <PublicPage Page={NotFound} />}
+        </Route>
+      </Switch>
+    </div>
   );
 }
 
