@@ -65,14 +65,20 @@ const queryClient = new QueryClient({
 /* ─── Protected route ───────────────────────────────────────────── */
 function ProtectedRoute({ component: Component, params }: { component: React.ComponentType<any>; params?: any }) {
   const { isAuthenticated, isHydrating } = useAuth();
-  if (isHydrating) return <LoadingScreen message="Vérification de la session…" />;
-  if (!isAuthenticated) return <Redirect to="/login" />;
   return (
-    <ErrorBoundary>
-      <Suspense fallback={<PageSkeleton />}>
-        <Component params={params} />
-      </Suspense>
-    </ErrorBoundary>
+    <div id="kowri-protected">
+      {isHydrating ? (
+        <LoadingScreen message="Vérification de la session…" />
+      ) : !isAuthenticated ? (
+        <Redirect to="/login" />
+      ) : (
+        <ErrorBoundary>
+          <Suspense fallback={<PageSkeleton />}>
+            <Component params={params} />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+    </div>
   );
 }
 

@@ -243,14 +243,12 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* Smart insights */}
-        {insights.length > 0 ? (
-          <section className="space-y-2">
-            {insights.slice(0, 2).map((ins, i) => (
-              <InsightCard key={i} {...ins} />
-            ))}
-          </section>
-        ) : null}
+        {/* Smart insights — always rendered (CSS hidden when empty) to avoid insertBefore */}
+        <section className="space-y-2" style={{ display: insights.length > 0 ? undefined : "none" }}>
+          {insights.slice(0, 2).map((ins, i) => (
+            <InsightCard key={i} {...ins} />
+          ))}
+        </section>
 
         {/* Tontines horizontal strip */}
         <section>
