@@ -82,6 +82,7 @@ const DURATIONS = [
 const INPUT_CLS = "w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 text-sm focus:outline-none focus:border-[#1A6B32] transition-colors";
 
 export default function Dashboard() {
+  console.log("[Dashboard] render");
   const { token, user } = useAuth();
   const qc = useQueryClient();
 

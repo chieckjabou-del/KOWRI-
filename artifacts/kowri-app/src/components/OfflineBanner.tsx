@@ -5,6 +5,8 @@ import { WifiOff } from "lucide-react";
 export function OfflineBanner() {
   const { isOnline, setOnline } = useOfflineStore();
 
+  console.log("[OfflineBanner] render, isOnline:", isOnline);
+
   useEffect(() => {
     const on  = () => setOnline(true);
     const off = () => setOnline(false);
