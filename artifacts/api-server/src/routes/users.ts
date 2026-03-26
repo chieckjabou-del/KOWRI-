@@ -72,8 +72,8 @@ router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req
 router.post("/", async (req, res) => {
   try {
     const { phone, email, firstName, lastName, country, pin } = req.body;
-    if (!phone || !firstName || !lastName || !country || !pin) {
-      return res.status(400).json({ error: "Bad request", message: "Missing required fields" });
+    if (!phone || !firstName || !pin) {
+      return res.status(400).json({ error: "Bad request", message: "Téléphone, prénom et PIN sont requis" });
     }
 
     const id = generateId();
@@ -84,8 +84,8 @@ router.post("/", async (req, res) => {
       phone,
       email: email || null,
       firstName,
-      lastName,
-      country,
+      lastName: lastName || null,
+      country: country || null,
       pinHash,
       status: "pending_kyc",
       kycLevel: 0,

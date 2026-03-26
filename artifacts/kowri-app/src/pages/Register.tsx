@@ -88,9 +88,15 @@ export default function Register() {
     }
   }
 
-  if (done) {
-    return (
-      <div className="min-h-screen flex items-center justify-center px-6" style={{ background: "#FAFAF8" }}>
+  return (
+    <div className="min-h-screen flex flex-col" style={{ background: "#FAFAF8" }}>
+
+      {/* ── Success overlay (stable root, no early return) ── */}
+      <div
+        style={{ display: done ? "flex" : "none" }}
+        className="absolute inset-0 z-50 flex items-center justify-center px-6"
+        aria-hidden={!done}
+      >
         <div className="text-center">
           <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-5" style={{ background: "#F0FDF4" }}>
             <CheckCircle2 size={40} style={{ color: "#1A6B32" }} />
@@ -99,12 +105,8 @@ export default function Register() {
           <p className="text-gray-500">Connexion en cours…</p>
         </div>
       </div>
-    );
-  }
 
-  return (
-    <div className="min-h-screen flex flex-col" style={{ background: "#FAFAF8" }}>
-      {/* Header */}
+      {/* ── Header ── */}
       <div className="px-4 pt-12 pb-4 max-w-lg mx-auto w-full">
         <div className="flex items-center gap-3 mb-6">
           {step > 0 ? (
@@ -131,7 +133,7 @@ export default function Register() {
           </div>
         </div>
 
-        {/* Top branding */}
+        {/* Branding */}
         <div className="flex items-center justify-center gap-3 mb-8">
           <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl text-white" style={{ background: "#1A6B32" }}>
             K
@@ -140,7 +142,7 @@ export default function Register() {
         </div>
       </div>
 
-      {/* Form */}
+      {/* ── Form ── */}
       <div className="flex-1 px-4 max-w-lg mx-auto w-full">
         <div className="mb-6">
           <h1 className="text-2xl font-bold text-gray-900 mb-1">
@@ -224,11 +226,17 @@ export default function Register() {
             </>
           )}
 
-          {error ? (
-            <div className="px-4 py-3 rounded-xl text-sm font-medium" style={{ background: "#FEF2F2", color: "#DC2626" }}>
-              {error}
-            </div>
-          ) : null}
+          {/* Error — always rendered, shown via visibility */}
+          <div
+            className="px-4 py-3 rounded-xl text-sm font-medium"
+            style={{
+              background: "#FEF2F2",
+              color: "#DC2626",
+              display: error ? "block" : "none",
+            }}
+          >
+            {error || " "}
+          </div>
 
           <button
             onClick={handleNext}
