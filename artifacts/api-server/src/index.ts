@@ -118,6 +118,13 @@ function startTontineScheduler() {
 
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
+
+  // Self-ping every 4 minutes to prevent Replit sleep
+  setInterval(async () => {
+    try {
+      await fetch(`http://localhost:${port}/health`);
+    } catch {}
+  }, 4 * 60 * 1000);
   startOutboxWorker();
   startTontineScheduler();
   startAgentScheduler();
