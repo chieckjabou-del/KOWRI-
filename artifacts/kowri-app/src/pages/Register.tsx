@@ -156,21 +156,23 @@ export default function Register() {
         </div>
 
         <div className="space-y-4">
-          {step === 0 && (
-            <input
-              type="tel"
-              value={phone}
-              onChange={e => setPhone(e.target.value)}
-              placeholder="+2250700000000"
-              inputMode="tel"
-              autoFocus
-              className={INPUT_CLS}
-              onKeyDown={e => { if (e.key === "Enter") handleNext(); }}
-            />
-          )}
-
-          {step === 1 && (
-            <>
+          {/* Single slot — always renders exactly ONE element regardless of step.
+              Three parallel && would change the child count when step changes → insertBefore crash. */}
+          {step === 0 ? (
+            <div key="step-0">
+              <input
+                type="tel"
+                value={phone}
+                onChange={e => setPhone(e.target.value)}
+                placeholder="+2250700000000"
+                inputMode="tel"
+                autoFocus
+                className={INPUT_CLS}
+                onKeyDown={e => { if (e.key === "Enter") handleNext(); }}
+              />
+            </div>
+          ) : step === 1 ? (
+            <div key="step-1" className="space-y-4">
               <div className="relative">
                 <input
                   type={showPin ? "text" : "password"}
@@ -202,11 +204,9 @@ export default function Register() {
                 style={{ letterSpacing: "0.5em", fontSize: 22 }}
                 onKeyDown={e => { if (e.key === "Enter") handleNext(); }}
               />
-            </>
-          )}
-
-          {step === 2 && (
-            <>
+            </div>
+          ) : (
+            <div key="step-2" className="space-y-4">
               <input
                 type="text"
                 value={firstName}
@@ -223,10 +223,10 @@ export default function Register() {
                 className={INPUT_CLS}
                 onKeyDown={e => { if (e.key === "Enter") handleNext(); }}
               />
-            </>
+            </div>
           )}
 
-          {/* Error — always rendered, shown via visibility */}
+          {/* Error — always rendered, shown via display:none/block */}
           <div
             className="px-4 py-3 rounded-xl text-sm font-medium"
             style={{
