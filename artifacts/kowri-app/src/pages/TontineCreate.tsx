@@ -172,7 +172,7 @@ export default function TontineCreate() {
         </div>
       </div>
 
-      <main className="px-4 pt-5 max-w-lg mx-auto">
+      <main key={`tc-step-${step}`} className="px-4 pt-5 max-w-lg mx-auto">
         {error && (
           <div className="mb-4 px-4 py-3 rounded-xl text-sm flex items-center gap-2 text-red-700 bg-red-50">
             <AlertCircle size={15} /> {error}
@@ -268,9 +268,9 @@ export default function TontineCreate() {
               Config {TYPE_META[type]?.icon} {TYPE_META[type]?.label}
             </h2>
             <p className="text-sm text-gray-500 mb-5">Paramètres spécifiques à ce type</p>
-            <div className="space-y-4">
+            <div key={type} className="space-y-4">
 
-              {type === "project" && (<>
+              {type === "project" && (<div className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">Nom du vendeur / fournisseur</label>
                   <input type="text" value={typeConfig.vendorName ?? ""}
@@ -309,7 +309,7 @@ export default function TontineCreate() {
                     ))}
                   </div>
                 </div>
-              </>)}
+              </div>)}
 
               {type === "yield" && (
                 <div>

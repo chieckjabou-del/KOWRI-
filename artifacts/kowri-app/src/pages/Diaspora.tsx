@@ -460,22 +460,21 @@ export default function Diaspora() {
                             <p className="text-xs text-gray-400 mt-1">Disponible: {formatXOF(available)}</p>
                           </div>
 
-                          {/* Live quote */}
-                          {quoteLoading && (
+                          {/* Live quote — single ternary slot prevents insertBefore */}
+                          {quoteLoading ? (
                             <div className="flex items-center gap-2 text-xs text-gray-500">
                               <Loader2 size={12} className="animate-spin" /> Calcul du taux...
                             </div>
-                          )}
-                          {quote && !quoteLoading && (
+                          ) : quote ? (
                             <div className="rounded-xl p-3 space-y-2 border border-gray-100" style={{ background: "#F9FAFB" }}>
                               <QuoteRow label="Frais fixes" value={formatXOF(quote.fee)} />
                               <QuoteRow label="Ils reçoivent" value={`${(quote.sendAmount - quote.fee).toFixed(2)} ${quote.toCurrency}`} bold green />
                               <QuoteRow label="Total débité" value={formatXOF(quote.totalDebit)} bold />
-                              {quote.estimatedMins && (
+                              {quote.estimatedMins ? (
                                 <QuoteRow label="Délai estimé" value={`~${quote.estimatedMins} min`} />
-                              )}
+                              ) : null}
                             </div>
-                          )}
+                          ) : null}
 
                           <button
                             onClick={() => setTransferStep("confirm")}

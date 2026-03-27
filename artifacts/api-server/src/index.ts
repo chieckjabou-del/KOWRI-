@@ -12,6 +12,13 @@ import { db }                                             from "@workspace/db";
 import { tontinePositionListingsTable, schedulerJobsTable } from "@workspace/db";
 import { eq, and, lt, isNotNull }                         from "drizzle-orm";
 
+process.on("uncaughtException", (err) => {
+  console.error("[FATAL] uncaughtException:", err?.message ?? err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] unhandledRejection:", reason);
+});
+
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {

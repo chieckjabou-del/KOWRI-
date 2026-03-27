@@ -555,74 +555,74 @@ export default function TontineDetail({ params }: Props) {
               </div>
             ))}
 
-            {/* Yield summary */}
-            {tType === "yield" && yieldQ.data && (
-              <div className="rounded-xl p-3 space-y-1.5" style={{ background: "#FFF7ED", border: "1px solid #FED7AA" }}>
-                <p className="text-xs font-bold text-orange-800 flex items-center gap-1"><TrendingUp size={12} /> Résumé rendement</p>
-                {[
-                  { label: "Taux rendement", value: `${tontine.yieldRate ?? 0}% / an` },
-                  { label: "Pool de rendement", value: formatXOF(tontine.yieldPoolBalance ?? 0) },
-                  { label: "Yield dû (moi)", value: formatXOF(myMembership?.yieldOwed ?? 0) },
-                  { label: "Yield payé (moi)", value: formatXOF(myMembership?.yieldPaid ?? 0) },
-                ].map(({ label, value }) => (
-                  <div key={label} className="flex justify-between text-xs">
-                    <span className="text-orange-700">{label}</span>
-                    <span className="font-semibold text-orange-900">{value}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Growth projection */}
-            {tType === "growth" && growthQ.data && (
-              <div className="rounded-xl p-3" style={{ background: "#F7FEE7", border: "1px solid #D9F99D" }}>
-                <p className="text-xs font-bold text-lime-800 flex items-center gap-1 mb-2"><TrendingUp size={12} /> Projection de croissance</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {(growthQ.data.projection ?? []).slice(0, 4).map((p: any) => (
-                    <div key={p.cycle} className="bg-white rounded-lg p-2 text-center">
-                      <p className="text-xs text-gray-500">Cycle {p.cycle}</p>
-                      <p className="text-sm font-bold text-lime-800">{formatXOF(p.amount)}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Hybrid summary */}
-            {tType === "hybrid" && hybridQ.data && (
-              <div className="rounded-xl p-3" style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
-                <p className="text-xs font-bold text-green-800 flex items-center gap-1 mb-2"><Zap size={12} /> Répartition Hybride</p>
-                <div className="space-y-1.5">
+            {/* Type-specific summary — single slot ternary to keep stable child count */}
+            {tType === "yield" ? (
+              yieldQ.data ? (
+                <div className="rounded-xl p-3 space-y-1.5" style={{ background: "#FFF7ED", border: "1px solid #FED7AA" }}>
+                  <p className="text-xs font-bold text-orange-800 flex items-center gap-1"><TrendingUp size={12} /> Résumé rendement</p>
                   {[
-                    { label: "Rotation classique", pct: hybridQ.data.hybridConfig?.rotation_pct ?? 0,   color: "#1A6B32" },
-                    { label: "Investissement",     pct: hybridQ.data.hybridConfig?.investment_pct ?? 0, color: "#2563EB" },
-                    { label: "Réserve solidarité", pct: hybridQ.data.hybridConfig?.solidarity_pct ?? 0, color: "#7C3AED" },
-                    { label: "Bonus rendement",    pct: hybridQ.data.hybridConfig?.yield_pct ?? 0,      color: "#EA580C" },
-                  ].map(({ label, pct, color }) => (
-                    <div key={label}>
-                      <div className="flex justify-between text-xs mb-0.5">
-                        <span className="text-gray-600">{label}</span>
-                        <span className="font-semibold" style={{ color }}>{pct}%</span>
-                      </div>
-                      <div className="w-full bg-gray-100 rounded-full h-1.5">
-                        <div className="h-1.5 rounded-full" style={{ background: color, width: `${pct}%` }} />
-                      </div>
+                    { label: "Taux rendement", value: `${tontine.yieldRate ?? 0}% / an` },
+                    { label: "Pool de rendement", value: formatXOF(tontine.yieldPoolBalance ?? 0) },
+                    { label: "Yield dû (moi)", value: formatXOF(myMembership?.yieldOwed ?? 0) },
+                    { label: "Yield payé (moi)", value: formatXOF(myMembership?.yieldPaid ?? 0) },
+                  ].map(({ label, value }) => (
+                    <div key={label} className="flex justify-between text-xs">
+                      <span className="text-orange-700">{label}</span>
+                      <span className="font-semibold text-orange-900">{value}</span>
                     </div>
                   ))}
                 </div>
-                {hybridQ.data.solidarityReserveBalance > 0 && (
-                  <div className="mt-2 pt-2 border-t border-green-100">
-                    <div className="flex items-center gap-1 text-xs text-purple-700">
-                      <Shield size={11} />
-                      Réserve solidarité : <span className="font-bold">{formatXOF(hybridQ.data.solidarityReserveBalance)}</span>
-                    </div>
+              ) : null
+            ) : tType === "growth" ? (
+              growthQ.data ? (
+                <div className="rounded-xl p-3" style={{ background: "#F7FEE7", border: "1px solid #D9F99D" }}>
+                  <p className="text-xs font-bold text-lime-800 flex items-center gap-1 mb-2"><TrendingUp size={12} /> Projection de croissance</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(growthQ.data.projection ?? []).slice(0, 4).map((p: any) => (
+                      <div key={p.cycle} className="bg-white rounded-lg p-2 text-center">
+                        <p className="text-xs text-gray-500">Cycle {p.cycle}</p>
+                        <p className="text-sm font-bold text-lime-800">{formatXOF(p.amount)}</p>
+                      </div>
+                    ))}
                   </div>
-                )}
-              </div>
-            )}
+                </div>
+              ) : null
+            ) : tType === "hybrid" ? (
+              hybridQ.data ? (
+                <div className="rounded-xl p-3" style={{ background: "#F0FDF4", border: "1px solid #BBF7D0" }}>
+                  <p className="text-xs font-bold text-green-800 flex items-center gap-1 mb-2"><Zap size={12} /> Répartition Hybride</p>
+                  <div className="space-y-1.5">
+                    {[
+                      { label: "Rotation classique", pct: hybridQ.data.hybridConfig?.rotation_pct ?? 0,   color: "#1A6B32" },
+                      { label: "Investissement",     pct: hybridQ.data.hybridConfig?.investment_pct ?? 0, color: "#2563EB" },
+                      { label: "Réserve solidarité", pct: hybridQ.data.hybridConfig?.solidarity_pct ?? 0, color: "#7C3AED" },
+                      { label: "Bonus rendement",    pct: hybridQ.data.hybridConfig?.yield_pct ?? 0,      color: "#EA580C" },
+                    ].map(({ label, pct, color }) => (
+                      <div key={label}>
+                        <div className="flex justify-between text-xs mb-0.5">
+                          <span className="text-gray-600">{label}</span>
+                          <span className="font-semibold" style={{ color }}>{pct}%</span>
+                        </div>
+                        <div className="w-full bg-gray-100 rounded-full h-1.5">
+                          <div className="h-1.5 rounded-full" style={{ background: color, width: `${pct}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {hybridQ.data.solidarityReserveBalance > 0 ? (
+                    <div className="mt-2 pt-2 border-t border-green-100">
+                      <div className="flex items-center gap-1 text-xs text-purple-700">
+                        <Shield size={11} />
+                        Réserve solidarité : <span className="font-bold">{formatXOF(hybridQ.data.solidarityReserveBalance)}</span>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null
+            ) : null}
 
-            {/* Strategy targets */}
-            {tontine.strategyMode && strategyQ.data && (
+            {/* Strategy targets — independent of tType, separate slot */}
+            {tontine.strategyMode && strategyQ.data ? (
               <div className="rounded-xl p-3" style={{ background: "#F0FDFA", border: "1px solid #99F6E4" }}>
                 <p className="text-xs font-bold text-teal-800 mb-2">Cibles Stratégiques</p>
                 {(strategyQ.data.targets ?? []).map((t: any) => (
@@ -635,7 +635,7 @@ export default function TontineDetail({ params }: Props) {
                   </div>
                 ))}
               </div>
-            )}
+            ) : null}
           </div>
         </SectionCard>
 

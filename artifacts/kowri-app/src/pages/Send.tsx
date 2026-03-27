@@ -114,8 +114,9 @@ export default function Send() {
           </div>
         )}
 
-        {step === "form" && (
-          <form onSubmit={handleFormSubmit} className="space-y-4">
+        {/* Single slot — step "form" and "confirm" as ternary to keep stable child count */}
+        {step === "form" ? (
+          <form key="send-form" onSubmit={handleFormSubmit} className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Téléphone du destinataire</label>
               <input
@@ -157,7 +158,7 @@ export default function Send() {
               />
             </div>
 
-            {amountNum > 0 && (
+            {amountNum > 0 ? (
               <div className="rounded-2xl p-4 space-y-2 border border-gray-100 bg-white">
                 <div className="flex justify-between text-sm text-gray-500">
                   <span>Montant</span><span className="text-gray-900 font-medium">{formatXOF(amountNum)}</span>
@@ -169,7 +170,7 @@ export default function Send() {
                   <span>Total</span><span>{formatXOF(total)}</span>
                 </div>
               </div>
-            )}
+            ) : null}
 
             <button
               type="submit"
@@ -179,10 +180,8 @@ export default function Send() {
               Continuer
             </button>
           </form>
-        )}
-
-        {step === "confirm" && (
-          <div className="space-y-5">
+        ) : step === "confirm" ? (
+          <div key="send-confirm" className="space-y-5">
             <div className="text-center py-4">
               <p className="text-4xl font-black text-gray-900 mb-1">{formatXOF(amountNum)}</p>
               <p className="text-gray-500 text-sm">vers <strong>{recipientPhone}</strong></p>
@@ -193,7 +192,7 @@ export default function Send() {
               <Row label="Montant" value={formatXOF(amountNum)} />
               <Row label="Frais" value={formatXOF(fee)} />
               <Row label="Total débité" value={formatXOF(total)} bold />
-              {description && <Row label="Motif" value={description} />}
+              {description ? <Row label="Motif" value={description} /> : null}
             </div>
 
             <p className="text-xs text-center text-gray-400">
@@ -210,7 +209,7 @@ export default function Send() {
               Confirmer et envoyer
             </button>
           </div>
-        )}
+        ) : null}
       </main>
 
           <BottomNav />

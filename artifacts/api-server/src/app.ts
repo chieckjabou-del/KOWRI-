@@ -25,6 +25,10 @@ app.get("/health", (req, res) => {
   res.json({ service: "kowri-backend", status: "running" });
 });
 
+app.get("/api/health", (req, res) => {
+  res.json({ service: "kowri-backend", status: "running" });
+});
+
 app.get("/api/debug-build", async (req, res) => {
   const fs   = await import("fs");
   const path = await import("path");
