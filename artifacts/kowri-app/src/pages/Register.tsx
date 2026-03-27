@@ -59,7 +59,7 @@ export default function Register() {
           phone:     phone.replace(/\s/g, ""),
           pin,
           firstName: firstName.trim(),
-          lastName:  lastName.trim() || undefined,
+          lastName:  lastName.trim() || "",
         }),
       });
 
@@ -91,10 +91,17 @@ export default function Register() {
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#FAFAF8" }}>
 
-      {/* ── Success overlay (stable root, no early return) ── */}
+      {/* ── Success overlay: always in DOM, shown via opacity/pointer-events ── */}
       <div
-        style={{ display: done ? "flex" : "none" }}
-        className="absolute inset-0 z-50 flex items-center justify-center px-6"
+        style={{
+          position: "fixed", inset: 0, zIndex: 50,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          padding: "0 24px",
+          background: "#FAFAF8",
+          opacity: done ? 1 : 0,
+          pointerEvents: done ? "auto" : "none",
+          transition: "opacity 0.3s",
+        }}
         aria-hidden={!done}
       >
         <div className="text-center">
@@ -109,17 +116,27 @@ export default function Register() {
       {/* ── Header ── */}
       <div className="px-4 pt-12 pb-4 max-w-lg mx-auto w-full">
         <div className="flex items-center gap-3 mb-6">
-          {step > 0 ? (
-            <button onClick={() => { setStep(s => s - 1); setError(""); }} className="p-2 rounded-full hover:bg-gray-100">
+
+          {/* Both back-button and login-link ALWAYS in DOM — no type-change insertBefore */}
+          <button
+            onClick={() => { setStep(s => s - 1); setError(""); }}
+            className="p-2 rounded-full hover:bg-gray-100"
+            style={{ display: step > 0 ? "flex" : "none" }}
+            aria-hidden={step === 0}
+            tabIndex={step > 0 ? 0 : -1}
+          >
+            <ChevronLeft size={22} className="text-gray-700" />
+          </button>
+          <Link href="/login" style={{ display: step === 0 ? "contents" : "none" }}>
+            <button
+              className="p-2 rounded-full hover:bg-gray-100"
+              aria-hidden={step > 0}
+              tabIndex={step === 0 ? 0 : -1}
+            >
               <ChevronLeft size={22} className="text-gray-700" />
             </button>
-          ) : (
-            <Link href="/login">
-              <button className="p-2 rounded-full hover:bg-gray-100">
-                <ChevronLeft size={22} className="text-gray-700" />
-              </button>
-            </Link>
-          )}
+          </Link>
+
           <div className="flex-1">
             <div className="flex gap-1.5">
               {STEPS.map((_, i) => (
@@ -149,82 +166,87 @@ export default function Register() {
             {step === 0 ? "Créer un compte" : step === 1 ? "Choisissez votre PIN" : "Comment vous appelez-vous ?"}
           </h1>
           <p className="text-gray-500 text-sm">
-            {step === 0 ? "Entrez votre numéro de téléphone mobile"
-              : step === 1 ? "Un code à 4 chiffres pour sécuriser votre compte"
+            {step === 0
+              ? "Entrez votre numéro de téléphone mobile"
+              : step === 1
+              ? "Un code à 4 chiffres pour sécuriser votre compte"
               : "Votre prénom et nom (optionnel)"}
           </p>
         </div>
 
         <div className="space-y-4">
-          {/* Single slot — always renders exactly ONE element regardless of step.
-              Three parallel && would change the child count when step changes → insertBefore crash. */}
-          {step === 0 ? (
-            <div key="step-0">
+
+          {/* ─── Step 0: Phone ─── Always rendered, hidden via display:none */}
+          <div style={{ display: step === 0 ? "block" : "none" }} aria-hidden={step !== 0}>
+            <input
+              type="tel"
+              value={phone}
+              onChange={e => setPhone(e.target.value)}
+              placeholder="+2250700000000"
+              inputMode="tel"
+              tabIndex={step === 0 ? 0 : -1}
+              className={INPUT_CLS}
+              onKeyDown={e => { if (e.key === "Enter" && step === 0) handleNext(); }}
+            />
+          </div>
+
+          {/* ─── Step 1: PIN ─── Always rendered, hidden via display:none */}
+          <div style={{ display: step === 1 ? "block" : "none" }} aria-hidden={step !== 1} className="space-y-4">
+            <div className="relative">
               <input
-                type="tel"
-                value={phone}
-                onChange={e => setPhone(e.target.value)}
-                placeholder="+2250700000000"
-                inputMode="tel"
-                autoFocus
-                className={INPUT_CLS}
-                onKeyDown={e => { if (e.key === "Enter") handleNext(); }}
-              />
-            </div>
-          ) : step === 1 ? (
-            <div key="step-1" className="space-y-4">
-              <div className="relative">
-                <input
-                  type={showPin ? "text" : "password"}
-                  value={pin}
-                  onChange={e => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                  placeholder="••••"
-                  inputMode="numeric"
-                  maxLength={4}
-                  autoFocus
-                  className={INPUT_CLS}
-                  style={{ letterSpacing: "0.5em", fontSize: 22 }}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPin(v => !v)}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                >
-                  {showPin ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
-              </div>
-              <input
-                type="password"
-                value={pin2}
-                onChange={e => setPin2(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="Confirmer le PIN"
+                type={showPin ? "text" : "password"}
+                value={pin}
+                onChange={e => setPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="••••"
                 inputMode="numeric"
                 maxLength={4}
+                tabIndex={step === 1 ? 0 : -1}
                 className={INPUT_CLS}
                 style={{ letterSpacing: "0.5em", fontSize: 22 }}
-                onKeyDown={e => { if (e.key === "Enter") handleNext(); }}
               />
+              <button
+                type="button"
+                onClick={() => setShowPin(v => !v)}
+                tabIndex={step === 1 ? 0 : -1}
+                className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+              >
+                {showPin ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
-          ) : (
-            <div key="step-2" className="space-y-4">
-              <input
-                type="text"
-                value={firstName}
-                onChange={e => setFirstName(e.target.value)}
-                placeholder="Prénom"
-                autoFocus
-                className={INPUT_CLS}
-              />
-              <input
-                type="text"
-                value={lastName}
-                onChange={e => setLastName(e.target.value)}
-                placeholder="Nom de famille (optionnel)"
-                className={INPUT_CLS}
-                onKeyDown={e => { if (e.key === "Enter") handleNext(); }}
-              />
-            </div>
-          )}
+            <input
+              type="password"
+              value={pin2}
+              onChange={e => setPin2(e.target.value.replace(/\D/g, "").slice(0, 4))}
+              placeholder="Confirmer le PIN"
+              inputMode="numeric"
+              maxLength={4}
+              tabIndex={step === 1 ? 0 : -1}
+              className={INPUT_CLS}
+              style={{ letterSpacing: "0.5em", fontSize: 22 }}
+              onKeyDown={e => { if (e.key === "Enter" && step === 1) handleNext(); }}
+            />
+          </div>
+
+          {/* ─── Step 2: Name ─── Always rendered, hidden via display:none */}
+          <div style={{ display: step === 2 ? "block" : "none" }} aria-hidden={step !== 2} className="space-y-4">
+            <input
+              type="text"
+              value={firstName}
+              onChange={e => setFirstName(e.target.value)}
+              placeholder="Prénom"
+              tabIndex={step === 2 ? 0 : -1}
+              className={INPUT_CLS}
+            />
+            <input
+              type="text"
+              value={lastName}
+              onChange={e => setLastName(e.target.value)}
+              placeholder="Nom de famille (optionnel)"
+              tabIndex={step === 2 ? 0 : -1}
+              className={INPUT_CLS}
+              onKeyDown={e => { if (e.key === "Enter" && step === 2) handleNext(); }}
+            />
+          </div>
 
           {/* Error — always rendered, shown via display:none/block */}
           <div
