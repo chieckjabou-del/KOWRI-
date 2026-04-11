@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { initSentry, captureException } from "@/lib/sentry";
 
 const DOM_RECOVERY_ERROR_PATTERNS = [
   "Failed to execute 'insertBefore' on 'Node'",
@@ -18,17 +19,30 @@ function installDomRecoveryGuards() {
   const recover = () => {
     if (hasAttemptedDomRecovery) return;
     hasAttemptedDomRecovery = true;
+    captureException(new Error("DOM reconciliation recovery triggered"), {
+      tags: { source: "dom-recovery-guard" },
+    });
     window.setTimeout(() => window.location.reload(), 50);
   };
 
   window.addEventListener("error", (event) => {
     const message = event.error?.message ?? event.message ?? "";
+    if (event.error) {
+      captureException(event.error, {
+        tags: { source: "window.error" },
+      });
+    }
     if (typeof message === "string" && shouldAttemptDomRecovery(message)) {
       recover();
     }
   });
 
   window.addEventListener("unhandledrejection", (event) => {
+    if (event.reason) {
+      captureException(event.reason, {
+        tags: { source: "window.unhandledrejection" },
+      });
+    }
     const reasonMessage =
       typeof event.reason === "string"
         ? event.reason
@@ -39,6 +53,7 @@ function installDomRecoveryGuards() {
   });
 }
 
+initSentry();
 installDomRecoveryGuards();
 
 function mount() {
