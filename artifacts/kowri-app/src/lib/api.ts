@@ -44,26 +44,64 @@ function logFallback(path: string, reason: string): void {
   if (USE_API_LOGS) console.error("FALLBACK USED", path, reason);
 }
 
-async function readErrorMessage(res: Response, fallback: string): Promise<string> {
-  const contentType = res.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
+function extractErrorMessage(status: number, payload: unknown, fallback: string): string {
+  if (payload && typeof payload === "object") {
+    const p = payload as Record<string, unknown>;
+    const message = p.message;
+    const error = p.error;
+    if (typeof message === "string" && message.trim()) return message;
+    if (typeof error === "string" && error.trim()) return error;
+  }
+  return fallback || `Erreur ${status}`;
+}
+
+async function safeFetchJson<T>(
+  path: string,
+  options: RequestInit,
+  onUnauthorized: () => void,
+): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, options);
+  } catch {
+    throw new ApiError(0, "Connexion impossible. Vérifiez votre réseau.");
+  }
+
+  const rawText = await res.text().catch(() => "");
+  const trimmed = rawText.trim();
+  const looksLikeHtml =
+    trimmed.startsWith("<") ||
+    trimmed.includes("<!DOCTYPE") ||
+    trimmed.includes("<html");
+
+  // Anti-HTML guard: backend/proxy returned HTML instead of JSON payload.
+  if (looksLikeHtml) {
+    throw new ApiError(
+      res.ok ? 503 : res.status,
+      "API returned HTML instead of JSON",
+    );
+  }
+
+  let parsed: unknown = null;
+  if (trimmed.length > 0) {
     try {
-      const j = await res.json();
-      return j.message || j.error || fallback;
+      parsed = JSON.parse(trimmed);
     } catch {
-      return fallback;
+      throw new ApiError(503, "Réponse serveur invalide.");
     }
   }
 
-  try {
-    const text = await res.text();
-    if (text.includes("<!DOCTYPE") || text.includes("<html")) {
-      return "Service temporairement indisponible. Réessayez dans un instant.";
-    }
-    return text?.trim() || fallback;
-  } catch {
-    return fallback;
+  if (res.status === 401) {
+    onUnauthorized();
+    throw new ApiError(401, extractErrorMessage(401, parsed, "Session expirée. Reconnectez-vous."));
   }
+
+  if (!res.ok) {
+    throw new ApiError(res.status, extractErrorMessage(res.status, parsed, `Erreur ${res.status}`));
+  }
+
+  logRealOk(path);
+  return parsed as T;
 }
 
 export async function apiFetch<T = unknown>(
@@ -96,39 +134,11 @@ export async function apiFetch<T = unknown>(
   }
 
   async function runRealRequest(): Promise<T> {
-    let res: Response;
     try {
-      res = await fetch(`${API_BASE}${path}`, { ...options, headers });
-    } catch {
-      throw new ApiError(0, "Connexion impossible. Vérifiez votre réseau.");
-    }
-
-    if (res.status === 401) {
-      const msg = await readErrorMessage(res, "Session expirée. Reconnectez-vous.");
-      _unauthorizedHandler?.();
-      throw new ApiError(401, msg);
-    }
-
-    if (!res.ok) {
-      const msg = await readErrorMessage(res, `Erreur ${res.status}`);
-      throw new ApiError(res.status, msg);
-    }
-
-    const contentType = res.headers.get("content-type") ?? "";
-    if (!contentType.includes("application/json")) {
-      const text = await res.text().catch(() => "");
-      if (text.includes("<!DOCTYPE") || text.includes("<html")) {
-        throw new ApiError(503, "Service temporairement indisponible. Réessayez dans un instant.");
-      }
-      throw new ApiError(503, "Réponse serveur invalide.");
-    }
-
-    try {
-      const data = await res.json();
-      logRealOk(path);
-      return data as T;
-    } catch {
-      throw new ApiError(503, "Réponse serveur invalide.");
+      return await safeFetchJson<T>(path, { ...options, headers }, () => _unauthorizedHandler?.());
+    } catch (err) {
+      if (USE_API_LOGS) console.error("API ERROR:", err);
+      throw err;
     }
   }
 
