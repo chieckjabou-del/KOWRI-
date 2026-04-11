@@ -4,7 +4,7 @@ import { eventBus } from "../lib/eventBus";
 import { db } from "@workspace/db";
 import { productNotificationsTable, walletsTable, auditLogsTable, usersTable } from "@workspace/db";
 import { generateId } from "../lib/id";
-import { eq, lt, gt, and } from "drizzle-orm";
+import { eq, lt, gt, and, isNull } from "drizzle-orm";
 import { audit } from "../lib/auditLogger";
 
 // ── helpers ────────────────────────────────────────────────────────────────────

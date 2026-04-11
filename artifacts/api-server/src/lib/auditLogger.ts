@@ -7,11 +7,13 @@ export type AuditAction =
   | "transaction.state_changed"
   | "ledger.entry_written"
   | "wallet.balance_synced"
+  | "wallet_dormant"
   | "reconciliation.run"
   | "reconciliation.fixed"
   | "admin.patch_tontines"
   | "idempotency.replayed"
-  | "fee.applied";
+  | "fee.applied"
+  | "tontine.goal.vendor_claim_expired";
 
 interface AuditEntry {
   action: AuditAction;
