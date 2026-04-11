@@ -13,6 +13,28 @@ export function setUnauthorizedHandler(cb: () => void): void {
   _unauthorizedHandler = cb;
 }
 
+async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    try {
+      const j = await res.json();
+      return j.message || j.error || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  try {
+    const text = await res.text();
+    if (text.includes("<!DOCTYPE") || text.includes("<html")) {
+      return "Service temporairement indisponible. Réessayez dans un instant.";
+    }
+    return text?.trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 export async function apiFetch<T = unknown>(
   path: string,
   token: string | null,
@@ -32,19 +54,30 @@ export async function apiFetch<T = unknown>(
   }
 
   if (res.status === 401) {
-    let msg = "Session expirée. Reconnectez-vous.";
-    try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
+    const msg = await readErrorMessage(res, "Session expirée. Reconnectez-vous.");
     _unauthorizedHandler?.();
     throw new ApiError(401, msg);
   }
 
   if (!res.ok) {
-    let msg = `Erreur ${res.status}`;
-    try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
+    const msg = await readErrorMessage(res, `Erreur ${res.status}`);
     throw new ApiError(res.status, msg);
   }
 
-  return res.json();
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const text = await res.text().catch(() => "");
+    if (text.includes("<!DOCTYPE") || text.includes("<html")) {
+      throw new ApiError(503, "Service temporairement indisponible. Réessayez dans un instant.");
+    }
+    throw new ApiError(503, "Réponse serveur invalide.");
+  }
+
+  try {
+    return await res.json();
+  } catch {
+    throw new ApiError(503, "Réponse serveur invalide.");
+  }
 }
 
 export async function apiFetchSafe<T = unknown>(

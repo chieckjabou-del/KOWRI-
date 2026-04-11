@@ -4,6 +4,10 @@
   "outputDirectory": "dist",
   "routes": [
     {
+      "src": "/api/(.*)",
+      "status": 404
+    },
+    {
       "handle": "filesystem"
     },
     {
