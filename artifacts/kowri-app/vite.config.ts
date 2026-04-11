@@ -12,8 +12,8 @@ if (rawPort && (Number.isNaN(port) || port <= 0)) {
 }
 
 // BASE_PATH controls asset URL prefixes in the production bundle.
-// Default to /app/ so builds work without the env var (e.g. CI / Replit deploy).
-const basePath = process.env.BASE_PATH ?? "/app/";
+// Default to root (/) for standalone deployments like Vercel.
+const basePath = process.env.BASE_PATH ?? "/";
 
 export default defineConfig({
   base: basePath,
@@ -45,7 +45,7 @@ export default defineConfig({
   root: path.resolve(import.meta.dirname),
   build: {
     sourcemap: false,
-    outDir: path.resolve(import.meta.dirname, "dist/public"),
+    outDir: path.resolve(import.meta.dirname, "dist"),
     emptyOutDir: true,
   },
   server: {
