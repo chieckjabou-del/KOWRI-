@@ -1,4 +1,4 @@
-import { pgTable, text, numeric, timestamp, integer, pgEnum, boolean, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, text, numeric, timestamp, integer, pgEnum, boolean, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -73,6 +73,7 @@ export const tontineMembersTable = pgTable("tontine_members", {
   index("tontine_members_tontine_idx").on(t.tontineId),
   index("tontine_members_user_idx").on(t.userId),
   index("tontine_members_payout_idx").on(t.payoutOrder),
+  uniqueIndex("tontine_members_tontine_user_uniq").on(t.tontineId, t.userId),
 ]);
 
 export const tontineCycleStatusEnum = pgEnum("tontine_cycle_status", [
@@ -119,6 +120,7 @@ export const tontineCyclesTable = pgTable("tontine_cycles", {
   index("toncycle_tontine_idx").on(t.tontineId),
   index("toncycle_round_idx").on(t.roundNumber),
   index("toncycle_status_idx").on(t.status),
+  uniqueIndex("toncycle_tontine_round_uniq").on(t.tontineId, t.roundNumber),
 ]);
 
 export const tontinePaymentsTable = pgTable("tontine_payments", {
@@ -147,7 +149,7 @@ export const tontinePaymentsTable = pgTable("tontine_payments", {
   index("tonpay_status_idx").on(t.status),
   index("tonpay_idempotency_idx").on(t.idempotencyKey),
   index("tonpay_tontine_round_member_idx").on(t.tontineId, t.roundNumber, t.memberId),
-  index("tonpay_cycle_member_idx").on(t.cycleId, t.memberId),
+  uniqueIndex("tonpay_cycle_member_uniq").on(t.cycleId, t.memberId),
 ]);
 
 export const tontinePayoutsTable = pgTable("tontine_payouts", {
@@ -170,6 +172,7 @@ export const tontinePayoutsTable = pgTable("tontine_payouts", {
   index("tonpayout_user_idx").on(t.userId),
   index("tonpayout_status_idx").on(t.status),
   index("tonpayout_cycle_member_idx").on(t.cycleId, t.memberId),
+  uniqueIndex("tonpayout_cycle_unique").on(t.cycleId),
 ]);
 
 export const tontinePenaltiesTable = pgTable("tontine_penalties", {

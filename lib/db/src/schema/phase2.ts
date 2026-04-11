@@ -1,4 +1,4 @@
-import { pgTable, text, jsonb, timestamp, smallint, integer, index } from "drizzle-orm/pg-core";
+import { pgTable, text, jsonb, timestamp, smallint, integer, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -10,6 +10,7 @@ export const idempotencyKeysTable = pgTable("idempotency_keys", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
   index("idem_key_idx").on(t.key),
+  uniqueIndex("idem_key_endpoint_unique_idx").on(t.key, t.endpoint),
   index("idem_created_idx").on(t.createdAt),
 ]);
 

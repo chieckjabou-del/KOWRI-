@@ -11,6 +11,7 @@ import {
 } from "../lib/productWallet";
 import { processTransfer, processDeposit } from "../lib/walletService";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import { hashPin, isValidPin, normalizePhone, verifyPin } from "../lib/password";
 
 const router = Router();
 
@@ -18,8 +19,11 @@ router.post("/login", async (req, res) => {
   const { phone, pin } = req.body;
   if (!phone || !pin) return res.status(400).json({ error: "phone and pin required" });
   try {
-    const users = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
-    if (!users[0]) return res.status(401).json({ error: "User not found" });
+    const normalizedPhone = normalizePhone(phone);
+    const users = await db.select().from(usersTable).where(eq(usersTable.phone, normalizedPhone)).limit(1);
+    if (!users[0]) return res.status(401).json({ error: "Invalid credentials" });
+    const pinOk = await verifyPin(String(pin), users[0].pinHash);
+    if (!pinOk) return res.status(401).json({ error: "Invalid credentials" });
     const session = await createSession(users[0].id, "wallet", { ttlHours: 24 });
     return res.json({
       token:     session.token,
@@ -44,13 +48,18 @@ router.post("/create", async (req, res) => {
     return res.status(400).json({ error: "firstName, lastName, phone required" });
   }
   try {
-    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
+    const normalizedPhone = normalizePhone(phone);
+    if (!isValidPin(String(pin))) {
+      return res.status(400).json({ error: "PIN must contain exactly 4 digits" });
+    }
+    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.phone, normalizedPhone)).limit(1);
     if (existing[0]) return res.status(409).json({ error: "Phone already registered" });
     const userId   = generateId("usr");
     const walletId = generateId("wal");
+    const pinHash = await hashPin(String(pin));
     await db.insert(usersTable).values({
-      id: userId, phone, firstName, lastName,
-      country, pinHash: pin, status: "pending_kyc",
+      id: userId, phone: normalizedPhone, firstName, lastName,
+      country, pinHash, status: "pending_kyc",
     });
     await db.insert(walletsTable).values({
       id: walletId, userId, currency, walletType: "personal",

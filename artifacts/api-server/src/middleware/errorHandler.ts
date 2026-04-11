@@ -12,7 +12,7 @@ export class AppError extends Error {
 }
 
 export function notFoundHandler(req: Request, res: Response): void {
-  res.status(404).json({ error: true, message: `Route ${req.method} ${req.path} not found` });
+  res.status(404).json({ error: true, message: `Route ${req.method} ${req.originalUrl} not found` });
 }
 
 export function errorHandler(
@@ -42,17 +42,6 @@ export function errorHandler(
 
   if (err instanceof Error) {
     const msg = err.message;
-
-    if (msg.includes("not found") || msg.includes("No results")) {
-      res.status(404).json({ error: true, message: msg });
-      return;
-    }
-
-    if (msg.includes("invalid input") || msg.includes("violates") || msg.includes("invalid_text_representation")) {
-      res.status(400).json({ error: true, message: "Invalid request parameters" });
-      return;
-    }
-
     console.error("[ERROR]", msg, isDev ? err.stack : "");
     res.status(500).json({ error: true, message: "An unexpected error occurred" });
     return;

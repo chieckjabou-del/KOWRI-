@@ -1,4 +1,7 @@
-const API_BASE = "/api";
+const API_PREFIX = "/api";
+const RAW_BACKEND_BASE = ((import.meta as any).env?.VITE_BACKEND_API_BASE ?? "").trim();
+const BACKEND_API_BASE = RAW_BACKEND_BASE.replace(/\/$/, "");
+const USE_API_LOGS = ((import.meta as any).env?.VITE_API_LOGS ?? "false") === "true";
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -13,12 +16,37 @@ export function setUnauthorizedHandler(cb: () => void): void {
   _unauthorizedHandler = cb;
 }
 
+function normalizeApiPath(path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return p.startsWith(API_PREFIX) ? p : `${API_PREFIX}${p}`;
+}
+
+function buildApiUrl(path: string): string {
+  const normalized = normalizeApiPath(path);
+  if (!BACKEND_API_BASE) return normalized;
+  return `${BACKEND_API_BASE}${normalized}`;
+}
+
+function parseJsonText(text: string): any {
+  if (!text.trim()) return null;
+  return JSON.parse(text);
+}
+
+function extractErrorMessage(parsed: any, fallback: string): string {
+  if (!parsed || typeof parsed !== "object") return fallback;
+  if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
+  if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error;
+  return fallback;
+}
+
 export async function apiFetch<T = unknown>(
   path: string,
   token: string | null,
   options: RequestInit = {}
 ): Promise<T> {
+  const url = buildApiUrl(path);
   const headers: Record<string, string> = {
+    "Accept": "application/json",
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
   };
@@ -26,26 +54,56 @@ export async function apiFetch<T = unknown>(
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  } catch (networkErr: any) {
+    res = await fetch(url, { ...options, headers });
+  } catch {
     throw new ApiError(0, "Connexion impossible. Vérifiez votre réseau.");
   }
 
+  const contentType = res.headers.get("content-type") ?? "";
+  const rawText = await res.text().catch(() => "");
+  const trimmed = rawText.trim();
+  const looksLikeHtml =
+    trimmed.startsWith("<") ||
+    trimmed.includes("<!DOCTYPE") ||
+    trimmed.includes("<html");
+
+  if (looksLikeHtml) {
+    throw new ApiError(res.ok ? 503 : res.status, "Réponse API invalide (HTML reçu au lieu de JSON)");
+  }
+
+  let parsed: any = null;
+  try {
+    parsed = parseJsonText(rawText);
+  } catch {
+    if (!res.ok) {
+      throw new ApiError(res.status, `Erreur ${res.status}`);
+    }
+    throw new ApiError(502, "Réponse API invalide (JSON attendu)");
+  }
+
   if (res.status === 401) {
-    let msg = "Session expirée. Reconnectez-vous.";
-    try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
-    console.log("[AUTH] 401 intercepted →", path, "| firing unauthorizedHandler");
+    const msg = extractErrorMessage(parsed, "Session expirée. Reconnectez-vous.");
     _unauthorizedHandler?.();
     throw new ApiError(401, msg);
   }
 
   if (!res.ok) {
-    let msg = `Erreur ${res.status}`;
-    try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
+    const msg = extractErrorMessage(parsed, `Erreur ${res.status}`);
     throw new ApiError(res.status, msg);
   }
 
-  return res.json();
+  if (!trimmed) {
+    return null as T;
+  }
+  if (!contentType.includes("application/json") && typeof parsed === "string") {
+    throw new ApiError(502, "Réponse API invalide (JSON attendu)");
+  }
+
+  if (USE_API_LOGS) {
+    console.info("[API]", options.method ?? "GET", normalizeApiPath(path), "ok");
+  }
+
+  return parsed as T;
 }
 
 export async function apiFetchSafe<T = unknown>(

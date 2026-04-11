@@ -68,14 +68,14 @@ export function WalletCard({
 
       <div className="grid grid-cols-4 gap-2">
         <Link href="/send">
-          <button
-            className="flex flex-col items-center gap-1.5 bg-white/15 hover:bg-white/25 rounded-2xl py-3 w-full transition-colors disabled:opacity-40"
-            disabled={isFrozen}
-            style={{ minHeight: 64 }}
+          <div
+            className="flex flex-col items-center gap-1.5 bg-white/15 hover:bg-white/25 rounded-2xl py-3 w-full transition-colors"
+            style={{ minHeight: 64, opacity: isFrozen ? 0.4 : 1, pointerEvents: isFrozen ? "none" : "auto" }}
+            aria-disabled={isFrozen}
           >
             <Send size={17} />
             <span className="text-xs font-semibold">Envoyer</span>
-          </button>
+          </div>
         </Link>
 
         <button

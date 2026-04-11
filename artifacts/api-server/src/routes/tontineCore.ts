@@ -22,6 +22,7 @@ router.use(async (req, res, next) => {
   if (!auth) {
     return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
+  (req as any).auth = auth;
   return next();
 });
 

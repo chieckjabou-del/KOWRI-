@@ -1,6 +1,8 @@
 import {
   createContext, useContext, useState, useEffect, useCallback, ReactNode,
 } from "react";
+import { apiFetch } from "@/lib/api";
+import { initOfflineQueue } from "@/lib/offlineQueue";
 
 export interface AuthUser {
   id: string;
@@ -34,7 +36,15 @@ function readStoredSession(): AuthState {
     const raw = localStorage.getItem(LS_KEY) || sessionStorage.getItem(SS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed?.token && parsed?.user) return parsed;
+      const user = parsed?.user;
+      if (
+        typeof parsed?.token === "string" &&
+        user &&
+        typeof user.id === "string" &&
+        typeof user.phone === "string"
+      ) {
+        return { token: parsed.token, user: user as AuthUser };
+      }
     }
   } catch {}
   return { token: null, user: null };
@@ -55,14 +65,7 @@ function writeSession(state: AuthState): void {
 
 async function validateToken(token: string): Promise<AuthUser | null> {
   try {
-    const res = await fetch("/api/users/me", {
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
+    const data = await apiFetch<{ user?: AuthUser }>("/users/me", token);
     return data.user ?? null;
   } catch {
     return null;
@@ -74,23 +77,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isHydrating, setIsHydrating] = useState(true);
 
   useEffect(() => {
+    initOfflineQueue(() => {
+      try {
+        const state = readStoredSession();
+        return state.token;
+      } catch {
+        return null;
+      }
+    });
+  }, []);
+
+  useEffect(() => {
     const stored = readStoredSession();
-    console.log("[AUTH] Rehydrating session…", { hasToken: !!stored.token });
 
     if (!stored.token) {
-      console.log("[AUTH] No stored token → unauthenticated");
       setIsHydrating(false);
       return;
     }
 
     validateToken(stored.token).then((freshUser) => {
       if (freshUser) {
-        console.log("[AUTH] Token valid → restoring session", freshUser.id);
         const nextState = { token: stored.token, user: freshUser };
         setAuth(nextState);
         writeSession(nextState);
       } else {
-        console.log("[AUTH] Token invalid/expired → clearing session");
         writeSession({ token: null, user: null });
         setAuth({ token: null, user: null });
       }
@@ -99,31 +109,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback((token: string, user: AuthUser) => {
-    console.log("[AUTH] Login →", user.id);
     const next = { token, user };
     setAuth(next);
     writeSession(next);
   }, []);
 
   const logout = useCallback(() => {
-    console.log("[AUTH] Logout");
     writeSession({ token: null, user: null });
     setAuth({ token: null, user: null });
   }, []);
 
   const clearAuth = useCallback(() => {
-    console.log("[AUTH] clearAuth (401 intercept)");
     writeSession({ token: null, user: null });
     setAuth({ token: null, user: null });
   }, []);
-
-  useEffect(() => {
-    console.log("[AUTH STATE]", {
-      token: auth.token ? auth.token.slice(0, 8) + "…" : null,
-      user: auth.user?.id ?? null,
-      isHydrating,
-    });
-  }, [auth, isHydrating]);
 
   return (
     <AuthContext.Provider

@@ -81,7 +81,9 @@ export function checkIdempotency(req: Request, res: Response, next: NextFunction
             key,
             endpoint,
             responseBody: body as any,
-          }).onConflictDoNothing();
+          }).onConflictDoNothing({
+            target: [idempotencyKeysTable.key, idempotencyKeysTable.endpoint],
+          });
         } catch (err) {
           console.error("[Idempotency] Failed to store response:", err);
         } finally {

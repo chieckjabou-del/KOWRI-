@@ -1,9 +1,9 @@
 import { Router } from "express";
-import { createHash } from "crypto";
 import { db } from "@workspace/db";
 import { usersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { createSession } from "../lib/productAuth";
+import { normalizePhone, isValidPin, verifyPin } from "../lib/password";
 
 const router = Router();
 
@@ -13,15 +13,19 @@ router.post("/login", async (req, res) => {
   if (!phone || !pin) {
     return res.status(400).json({ error: true, message: "phone and pin required" });
   }
+  if (!isValidPin(String(pin))) {
+    return res.status(400).json({ error: true, message: "PIN must contain exactly 4 digits" });
+  }
 
   try {
-    const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
+    const normalizedPhone = normalizePhone(String(phone));
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, normalizedPhone)).limit(1);
     if (!user) {
       return res.status(401).json({ error: true, message: "Invalid credentials" });
     }
 
-    const pinHash = createHash("sha256").update(String(pin)).digest("hex");
-    if ((user as any).pinHash !== pinHash) {
+    const validPin = await verifyPin(String(pin), String((user as any).pinHash ?? ""));
+    if (!validPin) {
       return res.status(401).json({ error: true, message: "Invalid credentials" });
     }
 

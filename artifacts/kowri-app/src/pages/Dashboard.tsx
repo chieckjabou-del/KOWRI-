@@ -82,7 +82,6 @@ const DURATIONS = [
 const INPUT_CLS = "w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 text-sm focus:outline-none focus:border-[#1A6B32] transition-colors";
 
 export default function Dashboard() {
-  console.log("[Dashboard] render");
   const { token, user } = useAuth();
   const qc = useQueryClient();
 
@@ -246,8 +245,8 @@ export default function Dashboard() {
 
         {/* Smart insights — always rendered (CSS hidden when empty) to avoid insertBefore */}
         <section className="space-y-2" style={{ display: insights.length > 0 ? undefined : "none" }}>
-          {insights.slice(0, 2).map((ins, i) => (
-            <InsightCard key={i} {...ins} />
+          {insights.slice(0, 2).map((ins) => (
+            <InsightCard key={`${ins.href}-${ins.title}`} {...ins} />
           ))}
         </section>
 
@@ -269,13 +268,12 @@ export default function Dashboard() {
           ) : tontines.length === 0 ? (
             <div className="bg-white rounded-2xl p-6 text-center shadow-sm border border-gray-100">
               <p className="text-gray-500 text-sm mb-4">Rejoignez une tontine ou créez la vôtre</p>
-              <Link href="/tontines">
-                <button
-                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white text-sm"
-                  style={{ background: "#1A6B32", minHeight: 44 }}
-                >
-                  <Plus size={16} /> Nouvelle Tontine
-                </button>
+              <Link
+                href="/tontines"
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-white text-sm"
+                style={{ background: "#1A6B32", minHeight: 44 }}
+              >
+                <Plus size={16} /> Nouvelle Tontine
               </Link>
             </div>
           ) : (
@@ -293,17 +291,21 @@ export default function Dashboard() {
 
         {/* Quick links row (savings + diaspora) */}
         <div className="grid grid-cols-2 gap-3">
-          <Link href="/savings">
-            <button className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-semibold border border-gray-200 bg-white shadow-sm" style={{ minHeight: 48 }}>
-              <PiggyBank size={16} className="text-gray-500" />
-              <span className="text-gray-700">Épargne</span>
-            </button>
+          <Link
+            href="/savings"
+            className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-semibold border border-gray-200 bg-white shadow-sm"
+            style={{ minHeight: 48 }}
+          >
+            <PiggyBank size={16} className="text-gray-500" />
+            <span className="text-gray-700">Épargne</span>
           </Link>
-          <Link href="/credit">
-            <button className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-semibold text-white shadow-sm" style={{ background: "linear-gradient(135deg, #1A6B32 0%, #2D9148 100%)", minHeight: 48 }}>
-              <TrendingUp size={16} />
-              Crédit
-            </button>
+          <Link
+            href="/credit"
+            className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl text-sm font-semibold text-white shadow-sm"
+            style={{ background: "linear-gradient(135deg, #1A6B32 0%, #2D9148 100%)", minHeight: 48 }}
+          >
+            <TrendingUp size={16} />
+            Crédit
           </Link>
         </div>
 

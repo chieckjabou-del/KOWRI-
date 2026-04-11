@@ -100,13 +100,15 @@ export function BottomNav() {
             const active = location === href || (href !== "/dashboard" && location.startsWith(href));
             return (
               <Link key={href} href={href}>
-                <button
-                  className="flex flex-col items-center gap-0.5 py-3 px-1.5 min-h-[56px] min-w-[52px] transition-colors"
+                <div
+                  className="flex flex-col items-center gap-0.5 py-3 px-1.5 min-h-[56px] min-w-[52px] transition-colors cursor-pointer"
                   style={{ color: active ? "#1A6B32" : "#9CA3AF" }}
+                  role="button"
+                  tabIndex={0}
                 >
                   <Icon size={21} strokeWidth={active ? 2.5 : 1.8} />
                   <span className="text-[9px] font-medium">{label}</span>
-                </button>
+                </div>
               </Link>
             );
           })}

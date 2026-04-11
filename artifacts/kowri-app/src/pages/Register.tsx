@@ -52,9 +52,8 @@ export default function Register() {
 
     setLoading(true);
     try {
-      const res = await fetch("/api/users", {
+      await apiFetch("/users", null, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone:     phone.replace(/\s/g, ""),
           pin,
@@ -62,11 +61,6 @@ export default function Register() {
           lastName:  lastName.trim() || "",
         }),
       });
-
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.message || j.error || `Erreur ${res.status}`);
-      }
 
       setDone(true);
       setTimeout(async () => {
@@ -127,14 +121,14 @@ export default function Register() {
           >
             <ChevronLeft size={22} className="text-gray-700" />
           </button>
-          <Link href="/login" style={{ display: step === 0 ? "contents" : "none" }}>
-            <button
-              className="p-2 rounded-full hover:bg-gray-100"
-              aria-hidden={step > 0}
-              tabIndex={step === 0 ? 0 : -1}
-            >
-              <ChevronLeft size={22} className="text-gray-700" />
-            </button>
+          <Link
+            href="/login"
+            className="p-2 rounded-full hover:bg-gray-100"
+            style={{ display: step === 0 ? "flex" : "none" }}
+            aria-hidden={step > 0}
+            tabIndex={step === 0 ? 0 : -1}
+          >
+            <ChevronLeft size={22} className="text-gray-700" />
           </Link>
 
           <div className="flex-1">

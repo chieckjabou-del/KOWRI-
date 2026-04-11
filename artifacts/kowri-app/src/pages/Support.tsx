@@ -123,10 +123,8 @@ export default function Support() {
       {/* Header */}
       <div className="sticky top-0 z-30 px-4 pt-12 pb-4 bg-white border-b border-gray-100">
         <div className="max-w-lg mx-auto flex items-center gap-3">
-          <Link href="/profile">
-            <button className="p-2 rounded-full hover:bg-gray-100">
-              <ChevronLeft size={22} className="text-gray-700" />
-            </button>
+          <Link href="/profile" className="p-2 rounded-full hover:bg-gray-100 inline-flex">
+            <ChevronLeft size={22} className="text-gray-700" />
           </Link>
           <div className="flex-1">
             <h1 className="font-bold text-gray-900 text-lg">Support KOWRI</h1>

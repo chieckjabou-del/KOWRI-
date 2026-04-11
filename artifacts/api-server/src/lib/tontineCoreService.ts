@@ -63,6 +63,11 @@ async function getOrCreateCycle(tontineId: string, roundNumber: number): Promise
   return created;
 }
 
+function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { code?: string } | null | undefined)?.code;
+  return code === "23505";
+}
+
 async function updateRiskScoresAfterDefault(userId: string): Promise<void> {
   const [score] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, userId));
   if (score) {
@@ -167,16 +172,24 @@ export async function joinCoreTontine(tontineId: string, userId: string): Promis
     if (fresh.memberCount >= fresh.maxMembers) throw new Error("Tontine complète");
 
     const nextOrder = Number(fresh.memberCount) + 1;
-    const [createdMember] = await tx.insert(tontineMembersTable).values({
-      id: generateId("tm"),
-      tontineId,
-      userId,
-      payoutOrder: nextOrder,
-      hasReceivedPayout: 0,
-      contributionsCount: 0,
-      missedContributions: 0,
-      memberStatus: "active",
-    }).returning();
+    let createdMember: typeof tontineMembersTable.$inferSelect | undefined;
+    try {
+      [createdMember] = await tx.insert(tontineMembersTable).values({
+        id: generateId("tm"),
+        tontineId,
+        userId,
+        payoutOrder: nextOrder,
+        hasReceivedPayout: 0,
+        contributionsCount: 0,
+        missedContributions: 0,
+        memberStatus: "active",
+      }).returning();
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new Error("Membre déjà inscrit");
+      }
+      throw err;
+    }
 
     await tx.update(tontinesTable).set({
       memberCount: nextOrder,
@@ -230,7 +243,7 @@ export async function collectMemberPayment(input: {
     ),
   );
 
-  if (existingPayment && (existingPayment.status === "completed" || existingPayment.status === "late")) {
+  if (existingPayment && existingPayment.status !== "defaulted") {
     throw new Error("Paiement déjà enregistré pour ce cycle");
   }
 
@@ -441,15 +454,22 @@ export async function finalizeCoreCycleAndPayout(tontineId: string): Promise<{
   const amount = Number(freshCycle.collectedPool);
   if (amount <= 0) throw new Error("Pool collecté vide");
 
-  const tx = await processTransfer({
-    fromWalletId: tontine.walletId,
-    toWalletId: toWallet.id,
-    amount,
-    currency: tontine.currency,
-    description: `Tontine payout round ${roundNumber}`,
-    reference: generateReference(),
-    skipFraudCheck: true,
-  });
+  const payoutReference = `TONTINE-PAYOUT-${freshCycle.id}`;
+  let tx: Awaited<ReturnType<typeof processTransfer>>;
+  try {
+    tx = await processTransfer({
+      fromWalletId: tontine.walletId,
+      toWalletId: toWallet.id,
+      amount,
+      currency: tontine.currency,
+      description: `Tontine payout round ${roundNumber}`,
+      reference: payoutReference,
+      skipFraudCheck: true,
+    });
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    throw new Error("Payout déjà traité pour ce cycle");
+  }
 
   const [resultCycle, payout] = await db.transaction(async (trx) => {
     await trx.update(tontineCyclesTable).set({
@@ -459,20 +479,31 @@ export async function finalizeCoreCycleAndPayout(tontineId: string): Promise<{
       closedAt: new Date(),
     }).where(eq(tontineCyclesTable.id, freshCycle.id));
 
-    const [createdPayout] = await trx.insert(tontinePayoutsTable).values({
-      id: generateId("tpayout"),
-      tontineId,
-      cycleId: freshCycle.id,
-      roundNumber,
-      memberId: recipient.id,
-      userId: recipient.userId,
-      amount: String(amount),
-      currency: tontine.currency,
-      status: "completed",
-      paidAt: new Date(),
-      txId: tx.id,
-      metadata: { recipientWalletId: toWallet.id },
-    }).returning();
+    let createdPayout: typeof tontinePayoutsTable.$inferSelect | undefined;
+    try {
+      [createdPayout] = await trx.insert(tontinePayoutsTable).values({
+        id: generateId("tpayout"),
+        tontineId,
+        cycleId: freshCycle.id,
+        roundNumber,
+        memberId: recipient.id,
+        userId: recipient.userId,
+        amount: String(amount),
+        currency: tontine.currency,
+        status: "completed",
+        paidAt: new Date(),
+        txId: tx.id,
+        metadata: { recipientWalletId: toWallet.id, reference: payoutReference },
+      }).returning();
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        const [existingPayout] = await trx.select().from(tontinePayoutsTable).where(eq(tontinePayoutsTable.cycleId, freshCycle.id));
+        if (!existingPayout) throw new Error("Payout déjà traité pour ce cycle");
+        createdPayout = existingPayout;
+      } else {
+        throw err;
+      }
+    }
 
     const isComplete = roundNumber >= Number(tontine.totalRounds);
     await trx.update(tontinesTable).set({
@@ -487,7 +518,7 @@ export async function finalizeCoreCycleAndPayout(tontineId: string): Promise<{
     }).where(eq(tontineMembersTable.id, recipient.id));
 
     const [updatedCycle] = await trx.select().from(tontineCyclesTable).where(eq(tontineCyclesTable.id, freshCycle.id));
-    return [updatedCycle, createdPayout] as const;
+    return [updatedCycle, createdPayout!] as const;
   });
 
   return { cycle: resultCycle, payout };
