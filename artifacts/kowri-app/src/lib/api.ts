@@ -1,9 +1,14 @@
 import { isDemoToken, mockApiFetch, MockApiError } from "@/lib/mockApi";
 
 const API_BASE = "/api";
+const API_PREFIX = "/api";
+const RAW_BACKEND_BASE = (import.meta.env.VITE_BACKEND_API_BASE ?? "").trim();
+const BACKEND_API_BASE = RAW_BACKEND_BASE.replace(/\/+$/, "");
 const USE_REAL_API = (import.meta.env.VITE_USE_REAL_API ?? "true") === "true";
 const USE_API_LOGS = (import.meta.env.VITE_API_LOGS ?? "true") === "true";
 const HYBRID_REAL_FIRST_ENDPOINTS = [
+  /^\/auth\/login$/,
+  /^\/auth\/register$/,
   /^\/users\/login$/,
   /^\/users$/,
   /^\/users\/me$/,
@@ -14,6 +19,19 @@ const HYBRID_REAL_FIRST_ENDPOINTS = [
   /^\/wallets(?:\/[^/]+)?$/,
   /^\/transactions(?:\/transfer)?$/,
 ];
+
+function normalizeApiPath(path: string): string {
+  if (!path) return "/";
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
+function buildApiUrl(path: string): string {
+  const normalized = normalizeApiPath(path);
+  if (BACKEND_API_BASE) {
+    return `${BACKEND_API_BASE}${API_PREFIX}${normalized}`;
+  }
+  return `${API_BASE}${normalized}`;
+}
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -62,7 +80,7 @@ async function safeFetchJson<T>(
 ): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, options);
+    res = await fetch(buildApiUrl(path), options);
   } catch {
     throw new ApiError(0, "Connexion impossible. Vérifiez votre réseau.");
   }

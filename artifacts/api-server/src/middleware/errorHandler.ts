@@ -12,7 +12,11 @@ export class AppError extends Error {
 }
 
 export function notFoundHandler(req: Request, res: Response): void {
-  res.status(404).json({ error: true, message: `Route ${req.method} ${req.path} not found` });
+  res.status(404).json({
+    error: "Not found",
+    method: req.method,
+    path: req.path,
+  });
 }
 
 export function errorHandler(

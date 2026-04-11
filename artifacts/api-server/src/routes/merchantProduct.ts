@@ -12,15 +12,20 @@ import {
 import { randomBytes } from "crypto";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
+import { hashPin, isValidPin, normalizePhone, verifyPin } from "../lib/password";
 
 const router = Router();
 
 router.post("/login", async (req, res) => {
-  const { phone } = req.body;
-  if (!phone) return res.status(400).json({ error: "phone required" });
+  const phone = normalizePhone(req.body?.phone);
+  const pin = String(req.body?.pin ?? "");
+  if (!phone || !pin) return res.status(400).json({ error: "phone and pin required" });
+  if (!isValidPin(pin)) return res.status(400).json({ error: "pin must be exactly 4 digits" });
   try {
     const users = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
     if (!users[0]) return res.status(401).json({ error: "User not found" });
+    const ok = await verifyPin(pin, (users[0] as any).pinHash);
+    if (!ok) return res.status(401).json({ error: "Invalid credentials" });
     const merchants = await db.select().from(merchantsTable).where(eq(merchantsTable.userId, users[0].id)).limit(1);
     if (!merchants[0]) return res.status(403).json({ error: "No merchant account found for this user" });
     const session = await createSession(users[0].id, "merchant", { ttlHours: 48 });
@@ -31,20 +36,24 @@ router.post("/login", async (req, res) => {
 });
 
 router.post("/create", async (req, res) => {
-  const { businessName, businessType, country = "SN", phone, firstName, lastName, pin = "000000" } = req.body;
+  const { businessName, businessType, country = "SN", phone, firstName, lastName, pin = "0000" } = req.body;
+  const normalizedPhone = normalizePhone(phone);
+  const pinStr = String(pin ?? "");
   if (!businessName || !businessType || !phone || !firstName || !lastName) {
     return res.status(400).json({ error: "businessName, businessType, phone, firstName, lastName required" });
   }
+  if (!isValidPin(pinStr)) return res.status(400).json({ error: "pin must be exactly 4 digits" });
   try {
-    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
+    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.phone, normalizedPhone)).limit(1);
     if (existing[0]) return res.status(409).json({ error: "Phone already registered" });
     const userId     = generateId("usr");
     const walletId   = generateId("wal");
     const merchantId = generateId("mch");
     const apiKey     = `kwk_${randomBytes(20).toString("hex")}`;
 
+    const pinHash = await hashPin(pinStr);
     await db.insert(usersTable).values({
-      id: userId, phone, firstName, lastName, country, pinHash: pin, status: "pending_kyc",
+      id: userId, phone: normalizedPhone, firstName, lastName, country, pinHash, status: "pending_kyc",
     });
     await db.insert(walletsTable).values({
       id: walletId, userId, currency: "XOF", walletType: "merchant",

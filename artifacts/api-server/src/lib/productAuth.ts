@@ -1,28 +1,18 @@
 import { db } from "@workspace/db";
-import {
-  productSessionsTable,
-  usersTable,
-} from "@workspace/db";
+import { productSessionsTable } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
-import { randomBytes, createHash } from "crypto";
 import { generateId } from "./id";
-
-export function generateToken(): string {
-  return randomBytes(32).toString("hex");
-}
-
-export function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
-}
+import { signAccessToken, verifyAccessToken } from "./authTokens";
 
 export async function createSession(
   userId: string,
   type: "wallet" | "merchant" | "developer" = "wallet",
   opts: { deviceId?: string; ipAddress?: string; ttlHours?: number } = {}
 ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
-  const token      = generateToken();
   const sessionId  = generateId("sess");
   const ttl        = opts.ttlHours ?? 24;
+  const ttlSeconds = Math.max(1, Math.floor(ttl * 3600));
+  const token      = signAccessToken({ sub: userId, type, sid: sessionId }, ttlSeconds);
   const expiresAt  = new Date(Date.now() + ttl * 3600_000);
 
   await db.insert(productSessionsTable).values({
@@ -45,6 +35,9 @@ export async function validateSession(token: string): Promise<{
   sessionId?: string;
   type?: string;
 }> {
+  const claims = verifyAccessToken(token);
+  if (!claims) return { valid: false };
+
   const now = new Date();
   const rows = await db.select()
     .from(productSessionsTable)
@@ -55,6 +48,9 @@ export async function validateSession(token: string): Promise<{
     .limit(1);
 
   if (!rows[0]) return { valid: false };
+  if (rows[0].id !== claims.sid || rows[0].userId !== claims.sub || rows[0].type !== claims.type) {
+    return { valid: false };
+  }
 
   await db.update(productSessionsTable)
     .set({ lastUsedAt: new Date() })

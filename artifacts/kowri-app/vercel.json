@@ -2,18 +2,21 @@
   "framework": "vite",
   "buildCommand": "pnpm --filter @workspace/kowri-app run build",
   "outputDirectory": "dist",
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "status": 404
-    },
+      "source": "/api/:path*",
+      "destination": "https://kowri-api.vercel.app/api/:path*"
+    }
+  ],
+  "headers": [
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "methods": ["GET", "HEAD"],
-      "dest": "/index.html"
+      "source": "/api/:path*",
+      "headers": [
+        {
+          "key": "Accept",
+          "value": "application/json"
+        }
+      ]
     }
   ]
 }
