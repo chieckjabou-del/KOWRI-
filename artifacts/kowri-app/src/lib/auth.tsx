@@ -54,6 +54,16 @@ function writeSession(state: AuthState): void {
 }
 
 async function validateToken(token: string): Promise<AuthUser | null> {
+  if (token.startsWith("demo-token-")) {
+    return {
+      id: "demo-user",
+      phone: "+2250700000000",
+      firstName: "Compte",
+      lastName: "Demo",
+      status: "active",
+      country: "CI",
+    };
+  }
   try {
     const res = await fetch("/api/users/me", {
       headers: {

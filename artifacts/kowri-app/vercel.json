@@ -2,10 +2,14 @@
   "framework": "vite",
   "buildCommand": "pnpm --filter @workspace/kowri-app run build",
   "outputDirectory": "dist",
-  "rewrites": [
+  "routes": [
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "handle": "filesystem"
+    },
+    {
+      "src": "/(.*)",
+      "methods": ["GET", "HEAD"],
+      "dest": "/index.html"
     }
   ]
 }
