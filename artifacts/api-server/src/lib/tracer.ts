@@ -12,9 +12,16 @@ interface SpanContext {
   metadata?: Record<string, unknown>;
 }
 
+interface CallGraphEdge {
+  from: string;
+  to: string;
+  op: string;
+  durationMs: number;
+}
+
 class DistributedTracer {
   private activeSpans = new Map<string, SpanContext>();
-  private callGraph: Array<{ from: string; to: string; op: string; durationMs: number }> = [];
+  private callGraph: CallGraphEdge[] = [];
 
   startSpan(service: string, operation: string, traceId?: string, parentSpanId?: string): SpanContext {
     const ctx: SpanContext = {
@@ -83,7 +90,7 @@ class DistributedTracer {
   async getCallGraph(traceId?: string): Promise<{
     services: string[];
     spans: Array<Record<string, unknown>>;
-    callGraph: typeof this.callGraph;
+    callGraph: CallGraphEdge[];
     latency: Record<string, number>;
   }> {
     const query = db.select().from(serviceTracesTable).limit(500);
