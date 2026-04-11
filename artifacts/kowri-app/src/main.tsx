@@ -10,6 +10,8 @@ const DOM_RECOVERY_ERROR_PATTERNS = [
 ];
 
 let hasAttemptedDomRecovery = false;
+let hasCapturedFallbackWindowError = false;
+let hasCapturedFallbackRejection = false;
 
 function shouldAttemptDomRecovery(message: string): boolean {
   return DOM_RECOVERY_ERROR_PATTERNS.some((pattern) => message.includes(pattern));
@@ -31,6 +33,11 @@ function installDomRecoveryGuards() {
       captureException(event.error, {
         tags: { source: "window.error" },
       });
+    } else if (message && !hasCapturedFallbackWindowError) {
+      hasCapturedFallbackWindowError = true;
+      captureException(new Error(message), {
+        tags: { source: "window.error.message" },
+      });
     }
     if (typeof message === "string" && shouldAttemptDomRecovery(message)) {
       recover();
@@ -41,6 +48,11 @@ function installDomRecoveryGuards() {
     if (event.reason) {
       captureException(event.reason, {
         tags: { source: "window.unhandledrejection" },
+      });
+    } else if (!hasCapturedFallbackRejection) {
+      hasCapturedFallbackRejection = true;
+      captureException(new Error("Unhandled rejection without reason"), {
+        tags: { source: "window.unhandledrejection.empty" },
       });
     }
     const reasonMessage =

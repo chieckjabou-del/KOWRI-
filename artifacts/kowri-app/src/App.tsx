@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
+import { OfflineBanner } from "@/components/OfflineBanner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { setUnauthorizedHandler, ApiError } from "@/lib/api";
@@ -212,6 +213,7 @@ function App() {
       <TooltipProvider>
         <ErrorBoundary>
           <AuthProvider>
+            <OfflineBanner />
             <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
               <AppRouter />
             </WouterRouter>
