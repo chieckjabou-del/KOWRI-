@@ -314,21 +314,33 @@ function Marche() {
         </div>
       )}
 
-      {listingsQ.isLoading ? (
+      <div style={{ display: listingsQ.isLoading ? "block" : "none" }} aria-hidden={!listingsQ.isLoading}>
         <div className="space-y-3">
           {[0, 1, 2].map(i => <div key={i} className="bg-white rounded-2xl h-20 animate-pulse border border-gray-100" />)}
         </div>
-      ) : listingsQ.isError ? (
+      </div>
+
+      <div style={{ display: listingsQ.isError ? "block" : "none" }} aria-hidden={!listingsQ.isError}>
         <ErrorCard
           message={(listingsQ.error as any)?.message ?? "Erreur de chargement"}
           onRetry={() => listingsQ.refetch()}
         />
-      ) : listings.length === 0 ? (
+      </div>
+
+      <div
+        style={{ display: !listingsQ.isLoading && !listingsQ.isError && listings.length === 0 ? "block" : "none" }}
+        aria-hidden={listingsQ.isLoading || listingsQ.isError || listings.length !== 0}
+      >
         <div className="text-center py-10">
           <ShoppingCart size={32} className="mx-auto mb-3 text-gray-300" />
           <p className="text-gray-500 text-sm">Aucune position disponible sur le marché</p>
         </div>
-      ) : (
+      </div>
+
+      <div
+        style={{ display: !listingsQ.isLoading && !listingsQ.isError && listings.length > 0 ? "block" : "none" }}
+        aria-hidden={listingsQ.isLoading || listingsQ.isError || listings.length === 0}
+      >
         <div className="space-y-3">
           {listings.map((l: any) => (
             <div key={l.id} className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
@@ -354,7 +366,7 @@ function Marche() {
             </div>
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }

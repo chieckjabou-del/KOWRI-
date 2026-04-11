@@ -167,117 +167,121 @@ export default function Support() {
 
       <BottomNav />
 
-      {/* Create ticket modal */}
-      {showForm ? (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={() => setShowForm(false)} />
-          <div className="relative w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl p-6 pb-8 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-5">
-              <h2 className="text-xl font-bold text-gray-900">
-                {done ? "Ticket soumis !" : "Créer un ticket"}
-              </h2>
-              <button onClick={() => setShowForm(false)} className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-gray-100">
-                <X size={20} className="text-gray-500" />
+      {/* Create ticket modal (always mounted, hidden via CSS for DOM stability) */}
+      <div
+        className="fixed inset-0 z-50 items-end sm:items-center justify-center"
+        style={{ display: showForm ? "flex" : "none" }}
+        aria-hidden={!showForm}
+      >
+        <div className="absolute inset-0 bg-black/40" onClick={() => setShowForm(false)} />
+        <div className="relative w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl p-6 pb-8 max-h-[90dvh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-5">
+            <h2 className="text-xl font-bold text-gray-900">
+              {done ? "Ticket soumis !" : "Créer un ticket"}
+            </h2>
+            <button onClick={() => setShowForm(false)} className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-gray-100">
+              <X size={20} className="text-gray-500" />
+            </button>
+          </div>
+
+          <div style={{ display: done ? "block" : "none" }} aria-hidden={!done}>
+            <div className="text-center py-6">
+              <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: "#F0FDF4" }}>
+                <CheckCircle2 size={32} style={{ color: "#1A6B32" }} />
+              </div>
+              <p className="font-bold text-gray-900 text-lg mb-1">{done ?? "—"}</p>
+              <p className="text-sm text-gray-500 mb-6">Nous vous répondrons sous 24h par notification.</p>
+              <button
+                onClick={() => setShowForm(false)}
+                className="w-full py-3 rounded-xl font-bold text-white"
+                style={{ background: "#1A6B32" }}
+              >
+                Fermer
               </button>
             </div>
+          </div>
 
-            {done ? (
-              <div className="text-center py-6">
-                <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: "#F0FDF4" }}>
-                  <CheckCircle2 size={32} style={{ color: "#1A6B32" }} />
+          <div style={{ display: done ? "none" : "block" }} aria-hidden={!!done}>
+            <div className="space-y-4">
+              {/* Category */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Catégorie</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {CATEGORIES.map(c => (
+                    <button
+                      key={c.value}
+                      onClick={() => setCategory(c.value)}
+                      className="text-left px-3 py-2.5 rounded-xl border text-xs font-semibold transition-all"
+                      style={{
+                        background:   category === c.value ? "#F0FDF4" : "#F9FAFB",
+                        borderColor:  category === c.value ? "#1A6B32" : "#E5E7EB",
+                        color:        category === c.value ? "#1A6B32" : "#6B7280",
+                        minHeight: 44,
+                      }}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
                 </div>
-                <p className="font-bold text-gray-900 text-lg mb-1">{done}</p>
-                <p className="text-sm text-gray-500 mb-6">Nous vous répondrons sous 24h par notification.</p>
-                <button
-                  onClick={() => setShowForm(false)}
-                  className="w-full py-3 rounded-xl font-bold text-white"
-                  style={{ background: "#1A6B32" }}
-                >
-                  Fermer
-                </button>
               </div>
-            ) : (
-              <div className="space-y-4">
-                {/* Category */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Catégorie</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {CATEGORIES.map(c => (
-                      <button
-                        key={c.value}
-                        onClick={() => setCategory(c.value)}
-                        className="text-left px-3 py-2.5 rounded-xl border text-xs font-semibold transition-all"
-                        style={{
-                          background:   category === c.value ? "#F0FDF4" : "#F9FAFB",
-                          borderColor:  category === c.value ? "#1A6B32" : "#E5E7EB",
-                          color:        category === c.value ? "#1A6B32" : "#6B7280",
-                          minHeight: 44,
-                        }}
-                      >
-                        {c.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Titre</label>
-                  <input
-                    type="text"
-                    value={title}
-                    onChange={e => setTitle(e.target.value)}
-                    placeholder="Ex: Mon transfert n'est pas arrivé"
-                    className={INPUT_CLS}
-                    style={{ minHeight: 48 }}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">Description</label>
-                  <textarea
-                    value={description}
-                    onChange={e => setDescription(e.target.value)}
-                    placeholder="Décrivez votre problème en détail…"
-                    rows={4}
-                    className={INPUT_CLS}
-                    style={{ resize: "none" }}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Référence transaction (optionnel)
-                  </label>
-                  <input
-                    type="text"
-                    value={txId}
-                    onChange={e => setTxId(e.target.value)}
-                    placeholder="ID ou référence de la transaction"
-                    className={INPUT_CLS}
-                    style={{ minHeight: 48 }}
-                  />
-                </div>
-
-                {formError ? (
-                  <div className="px-4 py-3 rounded-xl text-sm font-medium" style={{ background: "#FEF2F2", color: "#DC2626" }}>
-                    {formError}
-                  </div>
-                ) : null}
-
-                <button
-                  onClick={() => { setFormError(""); createMut.mutate(); }}
-                  disabled={createMut.isPending}
-                  className="w-full py-4 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-60"
-                  style={{ background: "#1A6B32", minHeight: 52 }}
-                >
-                  {createMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
-                  Soumettre le ticket
-                </button>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Titre</label>
+                <input
+                  type="text"
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="Ex: Mon transfert n'est pas arrivé"
+                  className={INPUT_CLS}
+                  style={{ minHeight: 48 }}
+                />
               </div>
-            )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">Description</label>
+                <textarea
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                  placeholder="Décrivez votre problème en détail…"
+                  rows={4}
+                  className={INPUT_CLS}
+                  style={{ resize: "none" }}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                  Référence transaction (optionnel)
+                </label>
+                <input
+                  type="text"
+                  value={txId}
+                  onChange={e => setTxId(e.target.value)}
+                  placeholder="ID ou référence de la transaction"
+                  className={INPUT_CLS}
+                  style={{ minHeight: 48 }}
+                />
+              </div>
+
+              {formError ? (
+                <div className="px-4 py-3 rounded-xl text-sm font-medium" style={{ background: "#FEF2F2", color: "#DC2626" }}>
+                  {formError}
+                </div>
+              ) : null}
+
+              <button
+                onClick={() => { setFormError(""); createMut.mutate(); }}
+                disabled={createMut.isPending}
+                className="w-full py-4 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2 disabled:opacity-60"
+                style={{ background: "#1A6B32", minHeight: 52 }}
+              >
+                {createMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
+                Soumettre le ticket
+              </button>
+            </div>
           </div>
         </div>
-      ) : null}
+      </div>
     </div>
   );
 }

@@ -189,6 +189,12 @@ export default function Profile() {
   const [showRepFactors, setShowRepFactors]     = useState(false);
   const [txFilter, setTxFilter]                 = useState<string>("Tous");
   const [txPage, setTxPage]                     = useState(1);
+  const [showPinModal, setShowPinModal]         = useState(false);
+  const [currentPin, setCurrentPin]             = useState("");
+  const [newPin, setNewPin]                     = useState("");
+  const [confirmPin, setConfirmPin]             = useState("");
+  const [pinError, setPinError]                 = useState("");
+  const [pinSuccess, setPinSuccess]             = useState(false);
 
   /* ── Queries ── */
   const { data: userData } = useQuery({
@@ -277,6 +283,30 @@ export default function Profile() {
     },
   });
 
+  const changePinMut = useMutation({
+    mutationFn: () => {
+      const cur = currentPin.trim();
+      const nxt = newPin.trim();
+      const conf = confirmPin.trim();
+      if (!/^\d{4}$/.test(cur)) throw new Error("PIN actuel invalide (4 chiffres)");
+      if (!/^\d{4}$/.test(nxt)) throw new Error("Nouveau PIN invalide (4 chiffres)");
+      if (nxt !== conf) throw new Error("Les PIN ne correspondent pas");
+      if (cur === nxt) throw new Error("Le nouveau PIN doit être différent");
+      return apiFetch<any>(`/users/${user?.id}/pin`, token, {
+        method: "PATCH",
+        body: JSON.stringify({ oldPin: cur, newPin: nxt }),
+      });
+    },
+    onSuccess: () => {
+      setPinError("");
+      setPinSuccess(true);
+      setCurrentPin("");
+      setNewPin("");
+      setConfirmPin("");
+    },
+    onError: (e: any) => setPinError(e.message ?? "Impossible de changer le PIN"),
+  });
+
   async function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -292,6 +322,15 @@ export default function Profile() {
   function handleLogout() {
     logout();
     navigate("/login");
+  }
+
+  function openPinModal() {
+    setPinError("");
+    setPinSuccess(false);
+    setCurrentPin("");
+    setNewPin("");
+    setConfirmPin("");
+    setShowPinModal(true);
   }
 
   const kycLevel   = userData?.kycLevel ?? 0;
@@ -363,12 +402,14 @@ export default function Profile() {
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Réputation</p>
           </div>
 
-          {repQ.isLoading ? (
+          <div style={{ display: repQ.isLoading ? "block" : "none" }} aria-hidden={!repQ.isLoading}>
             <div className="py-8 flex flex-col items-center animate-pulse gap-4">
               <div className="w-36 h-36 rounded-full bg-gray-100" />
               <div className="h-4 w-28 bg-gray-100 rounded" />
             </div>
-          ) : !rep ? (
+          </div>
+
+          <div style={{ display: !repQ.isLoading && !rep ? "block" : "none" }} aria-hidden={repQ.isLoading || !!rep}>
             <div className="py-7 flex flex-col items-center px-6 text-center">
               <div className="w-14 h-14 rounded-2xl mb-3 flex items-center justify-center" style={{ background: "#FEF3C7" }}>
                 <Star size={26} style={{ color: "#D97706" }} />
@@ -385,7 +426,9 @@ export default function Profile() {
                 Calculer mon score
               </button>
             </div>
-          ) : (
+          </div>
+
+          <div style={{ display: !repQ.isLoading && !!rep ? "block" : "none" }} aria-hidden={repQ.isLoading || !rep}>
             <div className="px-4 pb-4">
               <RepRing score={repScore} tier={repTier} />
 
@@ -398,18 +441,18 @@ export default function Profile() {
                 {showRepFactors ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
               </button>
 
-              {showRepFactors && (
+              <div style={{ display: showRepFactors ? "block" : "none" }} aria-hidden={!showRepFactors}>
                 <div className="mb-3">
                   {REP_FACTORS.map(f => (
                     <FactorBar
                       key={f.key}
                       label={f.label}
-                      value={rep.factors?.[f.key] ?? rep[f.key] ?? 0}
+                      value={rep?.factors?.[f.key] ?? rep?.[f.key] ?? 0}
                       max={f.max}
                     />
                   ))}
                 </div>
-              )}
+              </div>
 
               <button
                 onClick={() => computeRepMut.mutate()}
@@ -421,7 +464,7 @@ export default function Profile() {
                 Recalculer mon score
               </button>
             </div>
-          )}
+          </div>
         </div>
 
         {/* ─── Badges ──────────────────────────────── */}
@@ -554,7 +597,10 @@ export default function Profile() {
 
         {/* ─── Security ────────────────────────────── */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <button className="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-gray-50 transition-colors">
+          <button
+            onClick={openPinModal}
+            className="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-gray-50 transition-colors"
+          >
             <Shield size={18} className="text-gray-500" />
             <div>
               <p className="text-sm font-medium text-gray-900">Changer mon PIN</p>
@@ -696,6 +742,93 @@ export default function Profile() {
                   style={{ background: "#1A6B32" }}
                 >
                   {createTicketMut.isPending ? "Envoi…" : "Envoyer le ticket"}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── PIN Modal ───────────────────────────── */}
+      {showPinModal && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowPinModal(false)} />
+          <div className="relative w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl p-6 pb-8 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-5">
+              <h2 className="text-xl font-bold text-gray-900">Changer mon PIN</h2>
+              <button onClick={() => setShowPinModal(false)} className="w-9 h-9 flex items-center justify-center rounded-full hover:bg-gray-100">
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            {pinSuccess ? (
+              <div className="text-center py-6">
+                <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style={{ background: "#F0FDF4" }}>
+                  <CheckCircle size={32} style={{ color: "#16A34A" }} />
+                </div>
+                <p className="font-bold text-gray-900 text-lg mb-1">PIN mis à jour</p>
+                <p className="text-sm text-gray-500 mb-6">Votre code PIN a bien été changé.</p>
+                <button
+                  onClick={() => setShowPinModal(false)}
+                  className="w-full py-3 rounded-xl font-bold text-white"
+                  style={{ background: "#1A6B32" }}
+                >
+                  Fermer
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">PIN actuel</label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={currentPin}
+                    onChange={e => setCurrentPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    placeholder="••••"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Nouveau PIN</label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={newPin}
+                    onChange={e => setNewPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    placeholder="••••"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Confirmer le nouveau PIN</label>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={confirmPin}
+                    onChange={e => setConfirmPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    placeholder="••••"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-3 text-sm"
+                  />
+                </div>
+
+                {pinError ? (
+                  <div className="px-4 py-3 rounded-xl text-sm font-medium" style={{ background: "#FEF2F2", color: "#DC2626" }}>
+                    {pinError}
+                  </div>
+                ) : null}
+
+                <button
+                  onClick={() => { setPinError(""); changePinMut.mutate(); }}
+                  disabled={changePinMut.isPending}
+                  className="w-full py-3.5 rounded-2xl text-white font-semibold text-sm disabled:opacity-50 flex items-center justify-center gap-2"
+                  style={{ background: "#1A6B32" }}
+                >
+                  {changePinMut.isPending ? <Loader2 size={14} className="animate-spin" /> : null}
+                  Mettre à jour le PIN
                 </button>
               </div>
             )}

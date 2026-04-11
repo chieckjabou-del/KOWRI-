@@ -132,6 +132,7 @@ export default function Diaspora() {
   const addBeneMut = useMutation({
     mutationFn: () => apiFetch<any>("/diaspora/beneficiaries", token, {
       method: "POST",
+      headers: { "Idempotency-Key": generateIdempotencyKey() } as any,
       body: JSON.stringify({ userId: user?.id, ...beneForm, currency: "XOF" }),
     }),
     onSuccess: () => {
@@ -148,6 +149,7 @@ export default function Diaspora() {
       if (!wallet || !selectedBene || !selectedCorr) throw new Error("Données manquantes");
       return apiFetch<any>("/diaspora/send", token, {
         method: "POST",
+        headers: { "Idempotency-Key": generateIdempotencyKey() } as any,
         body: JSON.stringify({
           fromWalletId: wallet.id,
           senderUserId: user?.id,
@@ -178,6 +180,7 @@ export default function Diaspora() {
       if (!wallet) throw new Error("Wallet requis");
       return apiFetch<any>("/diaspora/recurring", token, {
         method: "POST",
+        headers: { "Idempotency-Key": generateIdempotencyKey() } as any,
         body: JSON.stringify({
           userId: user?.id,
           fromWalletId: wallet.id,
@@ -214,6 +217,7 @@ export default function Diaspora() {
       if (!resolvedBeneId) throw new Error("Bénéficiaire introuvable pour ce numéro — ajoutez-le d'abord");
       return apiFetch<any>("/diaspora/send", token, {
         method: "POST",
+        headers: { "Idempotency-Key": generateIdempotencyKey() } as any,
         body: JSON.stringify({
           fromWalletId: wallet.id,
           senderUserId: user?.id,
