@@ -52,9 +52,8 @@ export default function Register() {
 
     setLoading(true);
     try {
-      const res = await fetch("/api/users", {
+      await apiFetch<any>("/users", null, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           phone:     phone.replace(/\s/g, ""),
           pin,
@@ -62,11 +61,6 @@ export default function Register() {
           lastName:  lastName.trim() || "",
         }),
       });
-
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.message || j.error || `Erreur ${res.status}`);
-      }
 
       setDone(true);
       setTimeout(async () => {

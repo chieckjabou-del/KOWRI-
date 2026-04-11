@@ -832,6 +832,65 @@ export async function mockApiFetch<T>(
   const state = loadState();
 
   // ---------------------------------------------------------------------------
+  // Auth
+  // ---------------------------------------------------------------------------
+  if (pathname === "/users/login" && method === "POST") {
+    const phone = String(body.phone ?? "").trim();
+    const pin = String(body.pin ?? "").trim();
+    const demoUser = state.users[DEMO_USER_ID];
+    if (!demoUser) throw new MockApiError(404, "Utilisateur démo introuvable");
+    const validPhone = phone === String(demoUser.phone ?? "");
+    const validPin = pin === String(demoUser.pin ?? "1234");
+    if (!validPhone || !validPin) {
+      throw new MockApiError(401, "Identifiants incorrects");
+    }
+    return clone({
+      token: `demo-token-${Date.now()}`,
+      user: {
+        id: demoUser.id,
+        phone: demoUser.phone,
+        firstName: demoUser.firstName,
+        lastName: demoUser.lastName,
+        status: demoUser.status,
+        country: demoUser.country,
+      },
+    }) as T;
+  }
+
+  if (pathname === "/users" && method === "POST") {
+    const phone = String(body.phone ?? "").trim();
+    const pin = String(body.pin ?? "").trim();
+    const firstName = String(body.firstName ?? "").trim();
+    const lastName = String(body.lastName ?? "").trim();
+    if (!phone || !pin || !firstName) {
+      throw new MockApiError(400, "Données d'inscription incomplètes");
+    }
+
+    state.users[DEMO_USER_ID] = {
+      ...state.users[DEMO_USER_ID],
+      id: DEMO_USER_ID,
+      phone,
+      firstName,
+      lastName,
+      status: "active",
+      country: state.users[DEMO_USER_ID]?.country ?? "CI",
+      pin,
+    };
+    persistState(state);
+    return clone({
+      success: true,
+      user: {
+        id: DEMO_USER_ID,
+        phone,
+        firstName,
+        lastName,
+        status: "active",
+        country: state.users[DEMO_USER_ID].country,
+      },
+    }) as T;
+  }
+
+  // ---------------------------------------------------------------------------
   // Notifications
   // ---------------------------------------------------------------------------
   if (pathname === "/notifications" && method === "GET") {

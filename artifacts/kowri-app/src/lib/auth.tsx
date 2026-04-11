@@ -1,6 +1,7 @@
 import {
   createContext, useContext, useState, useEffect, useCallback, ReactNode,
 } from "react";
+import { apiFetch } from "@/lib/api";
 
 export interface AuthUser {
   id: string;
@@ -54,25 +55,8 @@ function writeSession(state: AuthState): void {
 }
 
 async function validateToken(token: string): Promise<AuthUser | null> {
-  if (token.startsWith("demo-token-")) {
-    return {
-      id: "demo-user",
-      phone: "+2250700000000",
-      firstName: "Compte",
-      lastName: "Demo",
-      status: "active",
-      country: "CI",
-    };
-  }
   try {
-    const res = await fetch("/api/users/me", {
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
+    const data = await apiFetch<any>("/users/me", token);
     return data.user ?? null;
   } catch {
     return null;
