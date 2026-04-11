@@ -1,3 +1,5 @@
+import { isDemoToken, mockApiFetch, MockApiError } from "@/lib/mockApi";
+
 const API_BASE = "/api";
 
 export class ApiError extends Error {
@@ -40,6 +42,18 @@ export async function apiFetch<T = unknown>(
   token: string | null,
   options: RequestInit = {}
 ): Promise<T> {
+  if (isDemoToken(token)) {
+    try {
+      return await mockApiFetch<T>(path, token, options);
+    } catch (err: any) {
+      if (err instanceof MockApiError) {
+        if (err.status === 401) _unauthorizedHandler?.();
+        throw new ApiError(err.status, err.message);
+      }
+      throw new ApiError(503, "Service démo temporairement indisponible.");
+    }
+  }
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
