@@ -53,6 +53,10 @@ export default function Login() {
         navigate("/dashboard");
         return;
       }
+      if (isApiUnavailable) {
+        setError("Connexion serveur indisponible. Utilisez le compte démo en attendant la remise en ligne.");
+        return;
+      }
       setError(err.message ?? "Identifiants incorrects");
     } finally {
       setLoading(false);
