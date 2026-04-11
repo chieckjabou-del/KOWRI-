@@ -5,6 +5,7 @@ import { eq, sql, count, and, or, inArray } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/productAuth";
 import { assignCorePositions, createCoreTontine, joinCoreTontine } from "../lib/tontineCoreService";
+import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
 
