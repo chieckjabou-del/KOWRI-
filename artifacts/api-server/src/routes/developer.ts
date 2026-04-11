@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { generateId } from "../lib/id";
 import { createSession, requireAuth } from "../lib/productAuth";
+import { hashPin, isValidPin, normalizePhone, verifyPin } from "../lib/password";
 import {
   generateDeveloperKey, validateDeveloperKey, trackUsage,
   getUsageStats, listDeveloperKeys, revokeKey,
@@ -16,16 +17,22 @@ const router = Router();
 
 router.post("/register", async (req, res) => {
   const { firstName, lastName, email, phone, country = "NG", pin = "000000" } = req.body;
+  const normalizedPhone = normalizePhone(phone);
+  const pinStr = String(pin ?? "");
   if (!firstName || !lastName || !phone) {
     return res.status(400).json({ error: "firstName, lastName, phone required" });
   }
+  if (!isValidPin(pinStr)) {
+    return res.status(400).json({ error: "pin must be exactly 4 digits" });
+  }
   try {
-    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
+    const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.phone, normalizedPhone)).limit(1);
     if (existing[0]) return res.status(409).json({ error: "Phone already registered" });
     const userId = generateId("dev");
+    const pinHash = await hashPin(pinStr);
     await db.insert(usersTable).values({
-      id: userId, phone, email: email ?? null, firstName, lastName,
-      country, pinHash: pin, status: "active",
+      id: userId, phone: normalizedPhone, email: email ?? null, firstName, lastName,
+      country, pinHash, status: "active",
     });
     const session = await createSession(userId, "developer");
     const freeKey = await generateDeveloperKey({
@@ -45,11 +52,15 @@ router.post("/register", async (req, res) => {
 });
 
 router.post("/login", async (req, res) => {
-  const { phone } = req.body;
-  if (!phone) return res.status(400).json({ error: "phone required" });
+  const phone = normalizePhone(req.body?.phone);
+  const pin = String(req.body?.pin ?? "");
+  if (!phone || !pin) return res.status(400).json({ error: "phone and pin required" });
+  if (!isValidPin(pin)) return res.status(400).json({ error: "pin must be exactly 4 digits" });
   try {
     const users = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
     if (!users[0]) return res.status(401).json({ error: "User not found" });
+    const ok = await verifyPin(pin, (users[0] as any).pinHash);
+    if (!ok) return res.status(401).json({ error: "Invalid credentials" });
     const session = await createSession(users[0].id, "developer");
     return res.json({ token: session.token, expiresAt: session.expiresAt, developerId: users[0].id });
   } catch (err) {

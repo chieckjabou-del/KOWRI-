@@ -259,7 +259,14 @@ export default function CreatorDetail({ params }: { params?: { id?: string } }) 
           ) : (
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden divide-y divide-gray-50">
               {pools.map((pool: any, idx: number) => (
-                <div key={pool.id ?? idx} className="p-3 flex items-center justify-between gap-3">
+                <div
+                  key={
+                    pool.id ??
+                    pool.poolId ??
+                    `${pool.name ?? "pool"}-${pool.type ?? pool.poolType ?? "type"}-${idx}`
+                  }
+                  className="p-3 flex items-center justify-between gap-3"
+                >
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold text-gray-900 truncate">{pool.name}</p>
                     <p className="text-xs text-gray-400">{pool.type ?? pool.poolType ?? "Pool"}</p>

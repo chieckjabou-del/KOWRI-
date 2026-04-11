@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect } from "react";
 import { Switch, Route, Router as WouterRouter, Redirect, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
+import { OfflineBanner } from "@/components/OfflineBanner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { setUnauthorizedHandler, ApiError } from "@/lib/api";
@@ -65,20 +66,21 @@ const queryClient = new QueryClient({
 /* ─── Protected route ───────────────────────────────────────────── */
 function ProtectedRoute({ component: Component, params }: { component: React.ComponentType<any>; params?: any }) {
   const { isAuthenticated, isHydrating } = useAuth();
-  console.log("[ProtectedRoute] render, auth state:", { isLoading: isHydrating, user: isAuthenticated });
   return (
     <div id="kowri-protected">
-      {isHydrating ? (
-        <LoadingScreen message="Vérification de la session…" />
-      ) : !isAuthenticated ? (
-        <Redirect to="/login" />
-      ) : (
-        <ErrorBoundary>
-          <Suspense fallback={<PageSkeleton />}>
-            <Component params={params} />
-          </Suspense>
-        </ErrorBoundary>
-      )}
+      <div data-slot="protected-content">
+        {isHydrating ? (
+          <LoadingScreen message="Vérification de la session…" />
+        ) : !isAuthenticated ? (
+          <Redirect to="/login" />
+        ) : (
+          <ErrorBoundary>
+            <Suspense fallback={<PageSkeleton />}>
+              <Component params={params} />
+            </Suspense>
+          </ErrorBoundary>
+        )}
+      </div>
     </div>
   );
 }
@@ -114,15 +116,14 @@ function PublicPage({ Page }: { Page: React.ComponentType }) {
 /* ─── Router ────────────────────────────────────────────────────── */
 function AppRouter() {
   const { isAuthenticated, isHydrating } = useAuth();
-  console.log("[AppRouter] render, isHydrating:", isHydrating);
 
   return (
     <div id="kowri-root">
-      {isHydrating ? (
-        <LoadingScreen message="Démarrage de KOWRI…" />
-      ) : (
-        <>
-          <AuthGate />
+      <AuthGate />
+      <div data-slot="router-content">
+        {isHydrating ? (
+          <LoadingScreen message="Démarrage de KOWRI…" />
+        ) : (
           <Switch>
         {/* Public routes — each with its own isolated Suspense */}
         <Route path="/login">
@@ -201,8 +202,8 @@ function AppRouter() {
           {() => <PublicPage Page={NotFound} />}
         </Route>
           </Switch>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -214,12 +215,13 @@ function App() {
       <TooltipProvider>
         <ErrorBoundary>
           <AuthProvider>
+            <OfflineBanner />
             <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
               <AppRouter />
             </WouterRouter>
+            <Toaster />
           </AuthProvider>
         </ErrorBoundary>
-        <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
   );

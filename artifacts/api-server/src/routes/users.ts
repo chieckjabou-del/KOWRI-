@@ -3,9 +3,9 @@ import { db } from "@workspace/db";
 import { usersTable, walletsTable, tontineMembersTable, transactionsTable, kycRecordsTable } from "@workspace/db";
 import { eq, count, sql, desc } from "drizzle-orm";
 import { generateId } from "../lib/id";
-import { createHash } from "crypto";
 import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
 import { createSession, requireAuth } from "../lib/productAuth";
+import { hashPin, isValidPin, normalizePhone, verifyPin } from "../lib/password";
 
 const router = Router();
 
@@ -71,21 +71,24 @@ router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req
 
 router.post("/", async (req, res, next) => {
   try {
-    console.log("REGISTER INPUT:", { phone: req.body?.phone, firstName: req.body?.firstName, hasPin: !!req.body?.pin });
-
     const { phone, email, firstName, lastName, country, pin } = req.body ?? {};
+    const normalizedPhone = normalizePhone(phone);
+    const pinStr = String(pin ?? "");
 
-    if (!phone || !firstName || !pin) {
+    if (!normalizedPhone || !firstName || !pinStr) {
       return res.status(400).json({ error: "Bad request", message: "Téléphone, prénom et PIN sont requis" });
+    }
+    if (!isValidPin(pinStr)) {
+      return res.status(400).json({ error: true, message: "Le PIN doit contenir exactement 4 chiffres" });
     }
 
     const id       = generateId();
-    const pinHash  = createHash("sha256").update(String(pin)).digest("hex");
+    const pinHash  = await hashPin(pinStr);
 
     // DB schema: last_name and country are NOT NULL — use empty string when not provided
     const [user] = await db.insert(usersTable).values({
       id,
-      phone:     String(phone).replace(/\s/g, ""),
+      phone:     normalizedPhone,
       email:     email    ? String(email)   : null,
       firstName: String(firstName).trim(),
       lastName:  lastName ? String(lastName).trim() : "",
@@ -101,8 +104,6 @@ router.post("/", async (req, res, next) => {
       userId: user.id,
     }).onConflictDoNothing();
 
-    console.log("REGISTER OK:", user.id);
-
     return res.status(201).json({
       id:        user.id,
       phone:     user.phone,
@@ -115,7 +116,6 @@ router.post("/", async (req, res, next) => {
       createdAt: user.createdAt,
     });
   } catch (err: any) {
-    console.error("REGISTER ERROR:", err?.message, err?.code, err?.detail);
     if (err?.code === "23505") {
       return res.status(409).json({ error: true, message: "Ce numéro est déjà enregistré" });
     }
@@ -124,15 +124,19 @@ router.post("/", async (req, res, next) => {
 });
 
 router.post("/login", async (req, res) => {
-  const { phone, pin } = req.body;
+  const phone = normalizePhone(req.body?.phone);
+  const pin = String(req.body?.pin ?? "");
   if (!phone || !pin) {
     return res.status(400).json({ error: true, message: "phone and pin required" });
+  }
+  if (!isValidPin(pin)) {
+    return res.status(400).json({ error: true, message: "pin must be exactly 4 digits" });
   }
   try {
     const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
     if (!user) return res.status(401).json({ error: true, message: "Invalid credentials" });
-    const pinHash = createHash("sha256").update(String(pin)).digest("hex");
-    if ((user as any).pinHash !== pinHash) {
+    const ok = await verifyPin(pin, (user as any).pinHash);
+    if (!ok) {
       return res.status(401).json({ error: true, message: "Invalid credentials" });
     }
     const session = await createSession(user.id, "wallet");
@@ -306,12 +310,12 @@ router.patch("/:userId/pin", async (req, res, next) => {
       return res.status(404).json({ error: true, message: "Utilisateur introuvable" });
     }
 
-    const oldHash = createHash("sha256").update(oldPinStr).digest("hex");
-    if ((user as any).pinHash !== oldHash) {
+    const validOldPin = await verifyPin(oldPinStr, (user as any).pinHash);
+    if (!validOldPin) {
       return res.status(401).json({ error: true, message: "Ancien PIN incorrect" });
     }
 
-    const newHash = createHash("sha256").update(newPinStr).digest("hex");
+    const newHash = await hashPin(newPinStr);
     await db
       .update(usersTable)
       .set({ pinHash: newHash, updatedAt: new Date() })

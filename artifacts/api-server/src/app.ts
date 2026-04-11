@@ -6,6 +6,7 @@ import { seedFeeConfig } from "./lib/feeEngine";
 import { globalSanitizer, validatePagination } from "./middleware/validate";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { stickyPrimaryRequest, stickyPrimaryResponse } from "./middleware/stickyPrimary";
+import { apiRateLimit } from "./middleware/apiRateLimit";
 import { paymentRouter } from "./lib/paymentRouter";
 import { seedConnectors } from "./lib/connectors";
 import "./services/index";
@@ -53,6 +54,7 @@ app.get("/api/debug-build", async (req, res) => {
   });
 });
 
+app.use("/api", apiRateLimit);
 app.use("/api", router);
 
 app.use(notFoundHandler);

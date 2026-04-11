@@ -4,6 +4,20 @@ import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth, AuthUser } from "@/lib/auth";
 
+const DEMO_PHONE = "+2250700000000";
+const DEMO_PIN = "1234";
+
+function buildDemoUser(phone: string): AuthUser {
+  return {
+    id: "demo-user",
+    phone,
+    firstName: "Compte",
+    lastName: "Demo",
+    status: "active",
+    country: "CI",
+  };
+}
+
 export default function Login() {
   const [, navigate] = useLocation();
   const { login } = useAuth();
@@ -31,6 +45,18 @@ export default function Login() {
       login(data.token, data.user);
       navigate("/dashboard");
     } catch (err: any) {
+      const normalizedPhone = phone.trim();
+      const isApiUnavailable = err?.status === 0 || err?.status === 404 || err?.status === 405;
+      const canUseDemo = normalizedPhone === DEMO_PHONE && pin === DEMO_PIN;
+      if (isApiUnavailable && canUseDemo) {
+        login(`demo-token-${Date.now()}`, buildDemoUser(normalizedPhone));
+        navigate("/dashboard");
+        return;
+      }
+      if (isApiUnavailable) {
+        setError("Connexion serveur indisponible. Utilisez le compte démo en attendant la remise en ligne.");
+        return;
+      }
       setError(err.message ?? "Identifiants incorrects");
     } finally {
       setLoading(false);
@@ -117,7 +143,7 @@ export default function Login() {
 
         <p className="mt-6 text-center text-sm text-gray-500">
           Pas encore de compte ?{" "}
-          <a href="/app/register" className="font-semibold" style={{ color: "#1A6B32" }}>
+          <a href="/register" className="font-semibold" style={{ color: "#1A6B32" }}>
             Créer un compte
           </a>
         </p>

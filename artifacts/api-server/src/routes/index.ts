@@ -90,5 +90,6 @@ router.use("/notifications",       notificationsRouter);
 router.use("/agents",              agentsRouter);
 router.use("/support",             supportRouter);
 router.use("/auth",                authRouter);
+router.use("/users",               authRouter);
 
 export default router;
