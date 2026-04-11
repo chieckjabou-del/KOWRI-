@@ -18,6 +18,46 @@ function shouldAttemptDomRecovery(message: string): boolean {
 }
 
 function installDomRecoveryGuards() {
+  const patchDomMutators = () => {
+    const nodeProto = Node.prototype as Node & {
+      __kowriInsertBeforePatched?: boolean;
+      __kowriRemoveChildPatched?: boolean;
+    };
+
+    if (!nodeProto.__kowriInsertBeforePatched) {
+      const originalInsertBefore = Node.prototype.insertBefore;
+      Node.prototype.insertBefore = function <T extends Node>(
+        newChild: T,
+        refChild: Node | null
+      ): T {
+        if (refChild && refChild.parentNode !== this) {
+          captureException(new Error("Blocked unsafe insertBefore reference"), {
+            tags: { source: "dom.insertBefore.guard" },
+          });
+          return this.appendChild(newChild) as T;
+        }
+        return originalInsertBefore.call(this, newChild, refChild) as T;
+      };
+      nodeProto.__kowriInsertBeforePatched = true;
+    }
+
+    if (!nodeProto.__kowriRemoveChildPatched) {
+      const originalRemoveChild = Node.prototype.removeChild;
+      Node.prototype.removeChild = function <T extends Node>(child: T): T {
+        if (child.parentNode !== this) {
+          captureException(new Error("Blocked unsafe removeChild target"), {
+            tags: { source: "dom.removeChild.guard" },
+          });
+          return child as T;
+        }
+        return originalRemoveChild.call(this, child) as T;
+      };
+      nodeProto.__kowriRemoveChildPatched = true;
+    }
+  };
+
+  patchDomMutators();
+
   const recover = () => {
     if (hasAttemptedDomRecovery) return;
     hasAttemptedDomRecovery = true;
