@@ -11,6 +11,8 @@ interface State {
 }
 
 export class ErrorBoundary extends Component<Props, State> {
+  private domRecoveryAttempted = false;
+
   constructor(props: Props) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -22,9 +24,26 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[ErrorBoundary] Uncaught error:", error, info.componentStack);
+
+    const msg = String(error?.message ?? "");
+    const isDomReconcileError =
+      msg.includes("insertBefore") ||
+      msg.includes("removeChild") ||
+      msg.includes("not a child of this node");
+
+    // Mobile webviews may surface transient DOM mismatch errors.
+    // Try one controlled remount before showing the fallback screen.
+    if (isDomReconcileError && !this.domRecoveryAttempted) {
+      this.domRecoveryAttempted = true;
+      this.setState({
+        hasError: false,
+        error: null,
+      });
+    }
   }
 
   handleReset = () => {
+    this.domRecoveryAttempted = false;
     this.setState({ hasError: false, error: null });
   };
 

@@ -75,22 +75,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const stored = readStoredSession();
-    console.log("[AUTH] Rehydrating session…", { hasToken: !!stored.token });
 
     if (!stored.token) {
-      console.log("[AUTH] No stored token → unauthenticated");
       setIsHydrating(false);
       return;
     }
 
     validateToken(stored.token).then((freshUser) => {
       if (freshUser) {
-        console.log("[AUTH] Token valid → restoring session", freshUser.id);
         const nextState = { token: stored.token, user: freshUser };
         setAuth(nextState);
         writeSession(nextState);
       } else {
-        console.log("[AUTH] Token invalid/expired → clearing session");
         writeSession({ token: null, user: null });
         setAuth({ token: null, user: null });
       }
@@ -99,31 +95,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback((token: string, user: AuthUser) => {
-    console.log("[AUTH] Login →", user.id);
     const next = { token, user };
     setAuth(next);
     writeSession(next);
   }, []);
 
   const logout = useCallback(() => {
-    console.log("[AUTH] Logout");
     writeSession({ token: null, user: null });
     setAuth({ token: null, user: null });
   }, []);
 
   const clearAuth = useCallback(() => {
-    console.log("[AUTH] clearAuth (401 intercept)");
     writeSession({ token: null, user: null });
     setAuth({ token: null, user: null });
   }, []);
-
-  useEffect(() => {
-    console.log("[AUTH STATE]", {
-      token: auth.token ? auth.token.slice(0, 8) + "…" : null,
-      user: auth.user?.id ?? null,
-      isHydrating,
-    });
-  }, [auth, isHydrating]);
 
   return (
     <AuthContext.Provider

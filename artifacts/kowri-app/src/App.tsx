@@ -65,7 +65,6 @@ const queryClient = new QueryClient({
 /* ─── Protected route ───────────────────────────────────────────── */
 function ProtectedRoute({ component: Component, params }: { component: React.ComponentType<any>; params?: any }) {
   const { isAuthenticated, isHydrating } = useAuth();
-  console.log("[ProtectedRoute] render, auth state:", { isLoading: isHydrating, user: isAuthenticated });
   return (
     <div id="kowri-protected">
       {isHydrating ? (
@@ -114,7 +113,6 @@ function PublicPage({ Page }: { Page: React.ComponentType }) {
 /* ─── Router ────────────────────────────────────────────────────── */
 function AppRouter() {
   const { isAuthenticated, isHydrating } = useAuth();
-  console.log("[AppRouter] render, isHydrating:", isHydrating);
 
   return (
     <div id="kowri-root">
@@ -217,9 +215,9 @@ function App() {
             <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
               <AppRouter />
             </WouterRouter>
+            <Toaster />
           </AuthProvider>
         </ErrorBoundary>
-        <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
   );
