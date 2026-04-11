@@ -34,8 +34,8 @@ router.get("/", async (req, res, next) => {
       db.select({ total: count() }).from(webhooksTable),
     ]);
 
-    res.json({ webhooks, pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) } });
-  } catch (err) { next(err); }
+    return res.json({ webhooks, pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) } });
+  } catch (err) { return next(err); }
 });
 
 router.post("/", async (req, res, next) => {
@@ -44,12 +44,10 @@ router.post("/", async (req, res, next) => {
     const evType = event_type ?? eventType;
 
     if (!url || !evType) {
-      res.status(400).json({ error: true, message: "url and event_type are required" });
-      return;
+      return res.status(400).json({ error: true, message: "url and event_type are required" });
     }
     if (!VALID_EVENT_TYPES.includes(evType)) {
-      res.status(400).json({ error: true, message: `Invalid event_type. Valid: ${VALID_EVENT_TYPES.join(", ")}` });
-      return;
+      return res.status(400).json({ error: true, message: `Invalid event_type. Valid: ${VALID_EVENT_TYPES.join(", ")}` });
     }
 
     const id = generateId();
@@ -58,8 +56,8 @@ router.post("/", async (req, res, next) => {
     await db.insert(webhooksTable).values({ id, url, eventType: evType, secret, active: true });
 
     const [created] = await db.select().from(webhooksTable).where(eq(webhooksTable.id, id));
-    res.status(201).json({ ...created, _secret: secret, message: "Store the secret — it will not be shown again" });
-  } catch (err) { next(err); }
+    return res.status(201).json({ ...created, _secret: secret, message: "Store the secret — it will not be shown again" });
+  } catch (err) { return next(err); }
 });
 
 router.patch("/:id", async (req, res, next) => {
@@ -68,19 +66,19 @@ router.patch("/:id", async (req, res, next) => {
     await db.update(webhooksTable).set({ active: !!active }).where(eq(webhooksTable.id, req.params.id));
     const [updated] = await db.select().from(webhooksTable).where(eq(webhooksTable.id, req.params.id));
     if (!updated) { res.status(404).json({ error: true, message: "Webhook not found" }); return; }
-    res.json(updated);
-  } catch (err) { next(err); }
+    return res.json(updated);
+  } catch (err) { return next(err); }
 });
 
 router.delete("/:id", async (req, res, next) => {
   try {
     await db.delete(webhooksTable).where(eq(webhooksTable.id, req.params.id));
-    res.json({ message: "Webhook deleted" });
-  } catch (err) { next(err); }
+    return res.json({ message: "Webhook deleted" });
+  } catch (err) { return next(err); }
 });
 
 router.get("/events", async (_req, res) => {
-  res.json({ supportedEvents: VALID_EVENT_TYPES });
+  return res.json({ supportedEvents: VALID_EVENT_TYPES });
 });
 
 export default router;

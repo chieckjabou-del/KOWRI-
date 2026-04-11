@@ -80,7 +80,7 @@ export async function processDeposit(params: {
   const txId = generateId();
   const now = new Date();
 
-  let txRecord: typeof transactionsTable.$inferSelect;
+  let newBalanceAfterDeposit: number | undefined;
 
   await db.transaction(async (tx) => {
     const lockResult = await tx.execute(
@@ -140,7 +140,7 @@ export async function processDeposit(params: {
     recordMetric("ledger", Date.now() - ledgerStart);
 
     const newBalance = await syncWalletBalance(walletId, tx as any);
-    (txRecord as any) = { newBalance };
+    newBalanceAfterDeposit = newBalance;
 
     await tx
       .update(transactionsTable)
@@ -149,7 +149,7 @@ export async function processDeposit(params: {
   });
 
   const [finalTx] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, txId));
-  const newBalance = (txRecord as any)?.newBalance;
+  const newBalance = newBalanceAfterDeposit;
 
   await Promise.all([
     audit({ action: "transaction.created", entity: "transaction", entityId: txId, metadata: { type: "deposit", amount, currency, walletId } }),

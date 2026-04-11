@@ -1,7 +1,9 @@
 import { randomUUID } from "crypto";
 
-export function generateId(): string {
-  return randomUUID();
+/** Optional prefix for human-readable IDs (e.g. `usr`, `wal`); UUID remains unique. */
+export function generateId(prefix?: string): string {
+  const id = randomUUID();
+  return prefix ? `${prefix}_${id}` : id;
 }
 
 export function generateReference(): string {

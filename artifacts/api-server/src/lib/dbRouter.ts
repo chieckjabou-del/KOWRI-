@@ -30,7 +30,7 @@ async function pollReplicaLag(): Promise<void> {
     // Return lag_sec as NULL explicitly when the replay timestamp is NULL
     // (primary server, or replica that has never replayed a transaction).
     // Casting NULL to numeric still produces NULL — we detect it in application code.
-    const result = await (dbRead as any).execute<{ lag_sec: string | null; has_replay: boolean }>(
+    const result = await (dbRead as { execute: (q: unknown) => Promise<{ rows?: Array<{ lag_sec: string | null; has_replay: boolean }> }> }).execute(
       sql`SELECT
             CASE WHEN pg_last_xact_replay_timestamp() IS NULL
                  THEN NULL
@@ -41,7 +41,12 @@ async function pollReplicaLag(): Promise<void> {
 
     const row      = result.rows?.[0];
     const rawLag   = row?.lag_sec;
-    const hasReplay = row?.has_replay === true || row?.has_replay === "true";
+    const replayRaw = row?.has_replay as boolean | string | undefined;
+    const hasReplay =
+      replayRaw === true ||
+      replayRaw === "true" ||
+      replayRaw === "t" ||
+      replayRaw === "T";
 
     // NULL lag means either: pointed at primary, or replica never replayed → unhealthy
     if (rawLag === null || rawLag === undefined || !hasReplay) {

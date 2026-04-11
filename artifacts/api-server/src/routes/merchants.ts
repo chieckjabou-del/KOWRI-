@@ -10,10 +10,9 @@ const router = Router();
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get("/", async (req, res) => {
@@ -30,7 +29,7 @@ router.get("/", async (req, res) => {
       db.select({ total: count() }).from(merchantsTable).where(where),
     ]);
 
-    res.json({
+    return res.json({
       merchants: merchants.map(m => ({
         ...m,
         totalRevenue: Number(m.totalRevenue),
@@ -39,7 +38,7 @@ router.get("/", async (req, res) => {
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    return res.status(500).json({ error: "Internal server error", message: String(err) });
   }
 });
 
@@ -74,9 +73,9 @@ router.post("/", async (req, res) => {
       transactionCount: 0,
     }).returning();
 
-    res.status(201).json({ ...merchant, totalRevenue: Number(merchant.totalRevenue) });
+    return res.status(201).json({ ...merchant, totalRevenue: Number(merchant.totalRevenue) });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    return res.status(500).json({ error: "Internal server error", message: String(err) });
   }
 });
 

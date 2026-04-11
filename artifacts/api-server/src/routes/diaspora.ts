@@ -17,10 +17,9 @@ const router = Router();
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get("/corridors", async (req, res, next) => {
@@ -31,8 +30,8 @@ router.get("/corridors", async (req, res, next) => {
       fromCountry as string | undefined,
       toCountry   as string | undefined,
     );
-    res.json({ corridors, count: corridors.length });
-  } catch (err) { next(err); }
+    return res.json({ corridors, count: corridors.length });
+  } catch (err) { return next(err); }
 });
 
 router.get("/corridors/:corridorId", async (req, res, next) => {
@@ -40,14 +39,14 @@ router.get("/corridors/:corridorId", async (req, res, next) => {
     const [corridor] = await db.select().from(remittanceCorridorsTable)
       .where(eq(remittanceCorridorsTable.id, req.params.corridorId));
     if (!corridor) return res.status(404).json({ error: true, message: "Corridor not found" });
-    res.json({
+    return res.json({
       ...corridor,
       flatFee:    Number(corridor.flatFee),
       percentFee: Number(corridor.percentFee),
       maxAmount:  Number(corridor.maxAmount),
       minAmount:  Number(corridor.minAmount),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/quote", async (req, res, next) => {
@@ -83,14 +82,14 @@ router.post("/quote", async (req, res, next) => {
 
     quotes.sort((a, b) => a.fee - b.fee);
 
-    res.json({
+    return res.json({
       amount: Number(amount),
       fromCurrency,
       toCurrency,
       quotes,
       bestQuote: quotes[0] ?? null,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/beneficiaries", async (req, res, next) => {
@@ -98,8 +97,8 @@ router.get("/beneficiaries", async (req, res, next) => {
     const { userId } = req.query;
     if (!userId) return res.status(400).json({ error: true, message: "userId required" });
     const beneficiaries = await getBeneficiaries(userId as string);
-    res.json({ beneficiaries, count: beneficiaries.length });
-  } catch (err) { next(err); }
+    return res.json({ beneficiaries, count: beneficiaries.length });
+  } catch (err) { return next(err); }
 });
 
 router.post("/beneficiaries", async (req, res, next) => {
@@ -112,9 +111,9 @@ router.post("/beneficiaries", async (req, res, next) => {
       return res.status(400).json({ error: true, message: "Either phone or walletId required" });
     }
     const bene = await addBeneficiary({ userId, name, phone, walletId, relationship, country, currency });
-    res.status(201).json(bene);
+    return res.status(201).json(bene);
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -123,8 +122,8 @@ router.delete("/beneficiaries/:beneficiaryId", async (req, res, next) => {
     await db.update(beneficiariesTable)
       .set({ active: false })
       .where(eq(beneficiariesTable.id, req.params.beneficiaryId));
-    res.json({ success: true });
-  } catch (err) { next(err); }
+    return res.json({ success: true });
+  } catch (err) { return next(err); }
 });
 
 router.post("/send", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
@@ -140,9 +139,9 @@ router.post("/send", requireIdempotencyKey, checkIdempotency, async (req, res, n
       fromWalletId, senderUserId, beneficiaryId,
       amount: Number(amount), fromCurrency, toCurrency, description,
     });
-    res.status(201).json({ success: true, ...result });
+    return res.status(201).json({ success: true, ...result });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -155,11 +154,11 @@ router.get("/recurring", async (req, res, next) => {
       .where(eq(recurringTransfersTable.userId, userId as string))
       .orderBy(desc(recurringTransfersTable.createdAt));
 
-    res.json({
+    return res.json({
       recurring: rows.map(r => ({ ...r, amount: Number(r.amount) })),
       count: rows.length,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/recurring", async (req, res, next) => {
@@ -179,9 +178,9 @@ router.post("/recurring", async (req, res, next) => {
       maxRuns: maxRuns ? Number(maxRuns) : undefined,
     });
 
-    res.status(201).json({ ...recurring, amount: Number(recurring.amount) });
+    return res.status(201).json({ ...recurring, amount: Number(recurring.amount) });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -190,8 +189,8 @@ router.patch("/recurring/:recurringId/pause", async (req, res, next) => {
     await db.update(recurringTransfersTable)
       .set({ status: "paused" })
       .where(eq(recurringTransfersTable.id, req.params.recurringId));
-    res.json({ success: true, status: "paused" });
-  } catch (err) { next(err); }
+    return res.json({ success: true, status: "paused" });
+  } catch (err) { return next(err); }
 });
 
 router.patch("/recurring/:recurringId/resume", async (req, res, next) => {
@@ -199,8 +198,8 @@ router.patch("/recurring/:recurringId/resume", async (req, res, next) => {
     await db.update(recurringTransfersTable)
       .set({ status: "active" })
       .where(eq(recurringTransfersTable.id, req.params.recurringId));
-    res.json({ success: true, status: "active" });
-  } catch (err) { next(err); }
+    return res.json({ success: true, status: "active" });
+  } catch (err) { return next(err); }
 });
 
 router.delete("/recurring/:recurringId", async (req, res, next) => {
@@ -208,16 +207,16 @@ router.delete("/recurring/:recurringId", async (req, res, next) => {
     await db.update(recurringTransfersTable)
       .set({ status: "cancelled" })
       .where(eq(recurringTransfersTable.id, req.params.recurringId));
-    res.json({ success: true, status: "cancelled" });
-  } catch (err) { next(err); }
+    return res.json({ success: true, status: "cancelled" });
+  } catch (err) { return next(err); }
 });
 
 router.post("/recurring/run", async (req, res, next) => {
   try {
     const result = await runDueRecurringTransfers();
-    res.json({ success: true, ...result });
+    return res.json({ success: true, ...result });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 

@@ -96,8 +96,8 @@ router.get("/zones", async (_req, res, next) => {
       }),
     );
 
-    res.json({ zones });
-  } catch (err) { next(err); }
+    return res.json({ zones });
+  } catch (err) { return next(err); }
 });
 
 // ── POST /agents ───────────────────────────────────────────────────────────────
@@ -170,8 +170,8 @@ router.post("/", async (req, res, next) => {
     const agent  = await db.select().from(agentsTable).where(eq(agentsTable.id, agentId)).limit(1).then(r => r[0]);
     const wallet = await db.select().from(agentWalletsTable).where(eq(agentWalletsTable.agentId, agentId)).limit(1).then(r => r[0]);
 
-    res.status(201).json({ agent, wallet, walletId });
-  } catch (err) { next(err); }
+    return res.status(201).json({ agent, wallet, walletId });
+  } catch (err) { return next(err); }
 });
 
 // ── GET /agents ────────────────────────────────────────────────────────────────
@@ -217,8 +217,8 @@ router.get("/", async (req, res, next) => {
       }),
     );
 
-    res.json({ agents: enriched, count: enriched.length, limit, offset });
-  } catch (err) { next(err); }
+    return res.json({ agents: enriched, count: enriched.length, limit, offset });
+  } catch (err) { return next(err); }
 });
 
 // ── GET /agents/:id ─────────────────────────────────────────────────────────
@@ -235,8 +235,8 @@ router.get("/:id", async (req, res, next) => {
         .limit(10),
     ]);
 
-    res.json({ agent, wallet, activeAlerts: alerts });
-  } catch (err) { next(err); }
+    return res.json({ agent, wallet, activeAlerts: alerts });
+  } catch (err) { return next(err); }
 });
 
 // ── GET /agents/:id/liquidity ─────────────────────────────────────────────────
@@ -270,7 +270,7 @@ router.get("/:id/liquidity", async (req, res, next) => {
       }
     }
 
-    res.json({
+    return res.json({
       cashBalance:      liquidity.cashBalance,
       floatBalance:     liquidity.floatBalance,
       cashStatus:       cashStatus(liquidity.cashBalance,  Number(wallet?.minCashThreshold  ?? 0)),
@@ -288,7 +288,7 @@ router.get("/:id/liquidity", async (req, res, next) => {
       nearestSuperAgent,
       rebalanceSuggestion: rebalance,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── GET /agents/:id/alerts ────────────────────────────────────────────────────
@@ -298,8 +298,8 @@ router.get("/:id/alerts", async (req, res, next) => {
       .from(liquidityAlertsTable)
       .where(and(eq(liquidityAlertsTable.agentId, req.params.id), eq(liquidityAlertsTable.resolved, false)))
       .orderBy(desc(liquidityAlertsTable.level), desc(liquidityAlertsTable.createdAt));
-    res.json({ alerts, count: alerts.length });
-  } catch (err) { next(err); }
+    return res.json({ alerts, count: alerts.length });
+  } catch (err) { return next(err); }
 });
 
 // ── PATCH /agents/:id/alerts/:alertId/resolve ─────────────────────────────────
@@ -308,8 +308,8 @@ router.patch("/:id/alerts/:alertId/resolve", async (req, res, next) => {
     await db.update(liquidityAlertsTable)
       .set({ resolved: true, resolvedAt: new Date() })
       .where(and(eq(liquidityAlertsTable.id, req.params.alertId), eq(liquidityAlertsTable.agentId, req.params.id)));
-    res.json({ ok: true });
-  } catch (err) { next(err); }
+    return res.json({ ok: true });
+  } catch (err) { return next(err); }
 });
 
 // ── POST /agents/:id/liquidity-transfer ───────────────────────────────────────
@@ -354,8 +354,8 @@ router.post("/:id/liquidity-transfer", async (req, res, next) => {
       .where(eq(liquidityTransfersTable.note, `idempkey:${idempKey}`))
       .limit(1).then(r => r[0] ?? null);
 
-    res.status(201).json({ transfer, ok: true });
-  } catch (err) { next(err); }
+    return res.status(201).json({ transfer, ok: true });
+  } catch (err) { return next(err); }
 });
 
 // ── GET /agents/:id/commissions ───────────────────────────────────────────────
@@ -386,7 +386,7 @@ router.get("/:id/commissions", async (req, res, next) => {
       .where(eq(agentCommissionsTable.agentId, req.params.id)),
     ]);
 
-    res.json({
+    return res.json({
       commissions,
       totals: {
         earnedThisMonth: Number(totals[0]?.earnedThisMonth ?? 0),
@@ -396,7 +396,7 @@ router.get("/:id/commissions", async (req, res, next) => {
       },
       count: commissions.length,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── POST /agents/:id/cash-update ──────────────────────────────────────────────
@@ -414,8 +414,8 @@ router.post("/:id/cash-update", async (req, res, next) => {
     // Auto-trigger liquidity check
     const liquidity = await checkLiquidity(req.params.id);
 
-    res.json({ ok: true, cashBalance, liquidity });
-  } catch (err) { next(err); }
+    return res.json({ ok: true, cashBalance, liquidity });
+  } catch (err) { return next(err); }
 });
 
 // ── POST /liquidity/rebalance ─────────────────────────────────────────────────
@@ -423,8 +423,8 @@ router.post("/:id/cash-update", async (req, res, next) => {
 router.post("/liquidity/rebalance", async (req, res, next) => {
   try {
     await runLiquidityMonitor();
-    res.json({ ok: true, message: "Zone rebalance analysis complete — alerts created where needed" });
-  } catch (err) { next(err); }
+    return res.json({ ok: true, message: "Zone rebalance analysis complete — alerts created where needed" });
+  } catch (err) { return next(err); }
 });
 
 // ── BLOCK 1: Trust Score + Withdrawal Approval ────────────────────────────────
@@ -442,8 +442,8 @@ router.post("/:id/anomalies", async (req, res, next) => {
       return res.status(400).json({ error: "type, severity, description required" });
     }
     const anomalyId = await createAnomaly(req.params.id, type, severity, description, evidence);
-    res.status(201).json({ anomalyId, trustUpdated: true });
-  } catch (err) { next(err); }
+    return res.status(201).json({ anomalyId, trustUpdated: true });
+  } catch (err) { return next(err); }
 });
 
 // GET /agents/:id/anomalies — list agent anomalies
@@ -454,8 +454,8 @@ router.get("/:id/anomalies", async (req, res, next) => {
       .from(agentAnomaliesTable)
       .where(eq(agentAnomaliesTable.agentId, req.params.id))
       .orderBy(desc(agentAnomaliesTable.createdAt));
-    res.json({ anomalies, count: anomalies.length });
-  } catch (err) { next(err); }
+    return res.json({ anomalies, count: anomalies.length });
+  } catch (err) { return next(err); }
 });
 
 // POST /agents/:id/withdrawal-approval — generate approval code for large withdrawal
@@ -472,8 +472,8 @@ router.post("/:id/withdrawal-approval", async (req, res, next) => {
     }
 
     const result = await createWithdrawalApproval(req.params.id, transactionId, supervisorPin ? "supervisor" : undefined);
-    res.json(result);
-  } catch (err) { next(err); }
+    return res.json(result);
+  } catch (err) { return next(err); }
 });
 
 // POST /agents/:id/withdrawal-approval/validate — check a code before executing withdrawal
@@ -485,8 +485,8 @@ router.post("/:id/withdrawal-approval/validate", async (req, res, next) => {
     }
     const result = await checkLargeWithdrawalApproval(req.params.id, transactionId, approvalCode);
     if (!result.approved) return res.status(403).json({ error: result.reason });
-    res.json({ approved: true });
-  } catch (err) { next(err); }
+    return res.json({ approved: true });
+  } catch (err) { return next(err); }
 });
 
 // PATCH /agents/:id/trust-score/refresh — recompute trust score
@@ -496,8 +496,8 @@ router.patch("/:id/trust-score/refresh", async (req, res, next) => {
     const agent = await db
       .select({ trustScore: agentsTable.trustScore, trustLevel: agentsTable.trustLevel })
       .from(agentsTable).where(eq(agentsTable.id, req.params.id)).limit(1).then(r => r[0]);
-    res.json({ trustScore: agent?.trustScore, trustLevel: agent?.trustLevel });
-  } catch (err) { next(err); }
+    return res.json({ trustScore: agent?.trustScore, trustLevel: agent?.trustLevel });
+  } catch (err) { return next(err); }
 });
 
 // ── BLOCK 2: Cash Reconciliation ──────────────────────────────────────────────
@@ -513,8 +513,8 @@ router.get("/:id/reconciliations", async (req, res, next) => {
       .where(eq(cashReconciliationsTable.agentId, req.params.id))
       .orderBy(desc(cashReconciliationsTable.createdAt))
       .limit(limit).offset(offset);
-    res.json({ reconciliations: records, count: records.length });
-  } catch (err) { next(err); }
+    return res.json({ reconciliations: records, count: records.length });
+  } catch (err) { return next(err); }
 });
 
 // POST /agents/:id/reconcile
@@ -530,8 +530,8 @@ router.post("/:id/reconcile", async (req, res, next) => {
       return res.status(400).json({ error: "date and declaredCash required" });
     }
     const result = await submitReconciliation(req.params.id, date, declaredCash, agentNote, photoProof);
-    res.json({ ok: true, ...result });
-  } catch (err) { next(err); }
+    return res.json({ ok: true, ...result });
+  } catch (err) { return next(err); }
 });
 
 // PATCH /agents/:id/reconciliations/:date/dispute
@@ -547,8 +547,8 @@ router.patch("/:id/reconciliations/:date/dispute", async (req, res, next) => {
       ))
       .returning();
     if (!updated.length) return res.status(404).json({ error: "Reconciliation not found" });
-    res.json({ ok: true, reconciliation: updated[0] });
-  } catch (err) { next(err); }
+    return res.json({ ok: true, reconciliation: updated[0] });
+  } catch (err) { return next(err); }
 });
 
 // ── BLOCK 4: Gamification ─────────────────────────────────────────────────────
@@ -561,16 +561,16 @@ router.get("/:id/achievements", async (req, res, next) => {
       .from(agentAchievementsTable)
       .where(eq(agentAchievementsTable.agentId, req.params.id))
       .orderBy(desc(agentAchievementsTable.earnedAt));
-    res.json({ achievements, count: achievements.length });
-  } catch (err) { next(err); }
+    return res.json({ achievements, count: achievements.length });
+  } catch (err) { return next(err); }
 });
 
 // POST /agents/:id/achievements/check — manually trigger achievement check
 router.post("/:id/achievements/check", async (req, res, next) => {
   try {
     const awarded = await checkAchievements(req.params.id);
-    res.json({ awarded, newBadges: awarded.length });
-  } catch (err) { next(err); }
+    return res.json({ awarded, newBadges: awarded.length });
+  } catch (err) { return next(err); }
 });
 
 export default router;

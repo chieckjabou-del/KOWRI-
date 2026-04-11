@@ -9,16 +9,16 @@ import {
 } from "../lib/savingsEngine";
 import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
 
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get("/plans", async (req, res, next) => {
@@ -34,7 +34,7 @@ router.get("/plans", async (req, res, next) => {
       .orderBy(desc(savingsPlansTable.createdAt));
 
     const now = new Date();
-    res.json({
+    return res.json({
       plans: rows.map(p => ({
         ...p,
         lockedAmount:      Number(p.lockedAmount),
@@ -45,7 +45,7 @@ router.get("/plans", async (req, res, next) => {
         daysRemaining:     Math.max(0, Math.ceil((new Date(p.maturityDate).getTime() - now.getTime()) / 86400000)),
       })),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
@@ -80,9 +80,9 @@ router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       daysRemaining:     Number(termDays),
     };
     await req.saveIdempotentResponse?.(body);
-    res.status(201).json(body);
+    return res.status(201).json(body);
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -93,7 +93,7 @@ router.get("/plans/:planId", async (req, res, next) => {
     if (!plan) return res.status(404).json({ error: true, message: "Savings plan not found" });
 
     const now = new Date();
-    res.json({
+    return res.json({
       ...plan,
       lockedAmount:      Number(plan.lockedAmount),
       interestRate:      Number(plan.interestRate),
@@ -102,15 +102,16 @@ router.get("/plans/:planId", async (req, res, next) => {
       isMatured:         now >= new Date(plan.maturityDate),
       daysRemaining:     Math.max(0, Math.ceil((new Date(plan.maturityDate).getTime() - now.getTime()) / 86400000)),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/plans/:planId/accrue", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const yieldAmount = await accrueYield(req.params.planId);
-    res.json({ success: true, yieldAmount, message: `Accrued ${yieldAmount.toFixed(4)} yield` });
+    const planId = routeParamString(req, "planId")!;
+    const yieldAmount = await accrueYield(planId);
+    return res.json({ success: true, yieldAmount, message: `Accrued ${yieldAmount.toFixed(4)} yield` });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -120,8 +121,9 @@ router.post("/plans/:planId/break", requireIdempotencyKey, checkIdempotency, asy
     if (!targetWalletId) {
       return res.status(400).json({ error: true, message: "targetWalletId required" });
     }
-    const result = await matureSavingsPlan(req.params.planId, targetWalletId);
-    res.json({
+    const planId = routeParamString(req, "planId")!;
+    const result = await matureSavingsPlan(planId, targetWalletId);
+    return res.json({
       success: true,
       ...result,
       isEarlyBreak: result.penalty > 0,
@@ -130,7 +132,7 @@ router.post("/plans/:planId/break", requireIdempotencyKey, checkIdempotency, asy
         : "Plan matured successfully",
     });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -142,14 +144,14 @@ router.get("/rate", async (req, res, next) => {
     const rate = await getRateForUser(userId as string);
     const tierRates = { bronze: 6, silver: 8, gold: 10, platinum: 12 };
 
-    res.json({
+    return res.json({
       userId,
       annualRate: rate,
       dailyRate:  Number((rate / 365).toFixed(6)),
       tierRates,
       message: `Your current savings rate is ${rate}% per annum`,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/summary/:userId", async (req, res, next) => {
@@ -161,7 +163,7 @@ router.get("/summary/:userId", async (req, res, next) => {
     const totalLocked = active.reduce((s, p) => s + p.lockedAmount, 0);
     const totalYield  = active.reduce((s, p) => s + p.accruedYield, 0);
 
-    res.json({
+    return res.json({
       userId: req.params.userId,
       totalPlans:   plans.length,
       activePlans:  active.length,
@@ -170,7 +172,7 @@ router.get("/summary/:userId", async (req, res, next) => {
       totalYield,
       plans,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 export default router;

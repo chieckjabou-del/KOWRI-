@@ -21,8 +21,8 @@ router.get("/", async (req, res, next) => {
     }
 
     const [sagas, [{ total }]] = await Promise.all([query, countQuery]);
-    res.json({ sagas, pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) } });
-  } catch (err) { next(err); }
+    return res.json({ sagas, pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) } });
+  } catch (err) { return next(err); }
 });
 
 router.get("/stats", async (req, res, next) => {
@@ -34,16 +34,16 @@ router.get("/stats", async (req, res, next) => {
 
     const stats = Object.fromEntries(rows.map((r) => [r.status, Number(r.count)]));
     const total = Object.values(stats).reduce((a, b) => a + b, 0);
-    res.json({ stats, total });
-  } catch (err) { next(err); }
+    return res.json({ stats, total });
+  } catch (err) { return next(err); }
 });
 
 router.get("/:id", async (req, res, next) => {
   try {
     const [saga] = await db.select().from(sagasTable).where(eq(sagasTable.id, req.params.id));
     if (!saga) { res.status(404).json({ error: true, message: "Saga not found" }); return; }
-    res.json(saga);
-  } catch (err) { next(err); }
+    return res.json(saga);
+  } catch (err) { return next(err); }
 });
 
 export default router;

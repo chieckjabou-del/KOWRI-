@@ -17,9 +17,9 @@ const VALID_ROUTE_TYPES = new Set([
 router.get("/", async (_req, res) => {
   try {
     const routes = await db.select().from(paymentRoutesTable).orderBy(asc(paymentRoutesTable.priority));
-    res.json({ routes, total: routes.length });
+    return res.json({ routes, total: routes.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch routes" });
+    return res.status(500).json({ error: "Failed to fetch routes" });
   }
 });
 
@@ -31,9 +31,9 @@ router.post("/", requireIdempotencyKey, checkIdempotency, async (req, res) => {
     const [route] = await db.insert(paymentRoutesTable).values({
       id: generateId(), routeType, processor, priority, active, config: config as any,
     }).returning();
-    res.status(201).json(route);
+    return res.status(201).json(route);
   } catch (err) {
-    res.status(500).json({ error: "Failed to create route" });
+    return res.status(500).json({ error: "Failed to create route" });
   }
 });
 
@@ -44,9 +44,9 @@ router.patch("/:id", async (req, res) => {
       .where(eq(paymentRoutesTable.id, req.params.id))
       .returning();
     if (!updated) return res.status(404).json({ error: "Route not found" });
-    res.json(updated);
+    return res.json(updated);
   } catch (err) {
-    res.status(500).json({ error: "Failed to update route" });
+    return res.status(500).json({ error: "Failed to update route" });
   }
 });
 
@@ -71,14 +71,14 @@ router.post("/select", async (req, res) => {
       return res.json({ decision: internalDecision, processor: processorDecision?.processor ?? null, context: req.body });
     }
 
-    res.json({
+    return res.json({
       decision:  processorDecision ?? { routeType: "processor_direct", processor: "interswitch-africa" },
       processor: processorDecision?.processor ?? null,
       strategy:  processorDecision?.strategy ?? "lowest_cost",
       context:   req.body,
     });
   } catch (err) {
-    res.status(500).json({ error: "Route selection failed" });
+    return res.status(500).json({ error: "Route selection failed" });
   }
 });
 

@@ -10,16 +10,16 @@ import {
 } from "../lib/communityFinance";
 import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
 
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get("/", async (req, res, next) => {
@@ -36,7 +36,7 @@ router.get("/", async (req, res, next) => {
 
     const [{ total }] = await db.select({ total: count() }).from(insurancePoolsTable);
 
-    res.json({
+    return res.json({
       pools: rows.map(p => ({
         ...p,
         premiumAmount: Number(p.premiumAmount),
@@ -45,7 +45,7 @@ router.get("/", async (req, res, next) => {
       })),
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/", async (req, res, next) => {
@@ -73,13 +73,13 @@ router.post("/", async (req, res, next) => {
       claimLimit: Number(claimLimit), currency, maxMembers: Number(maxMembers),
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       ...pool,
       premiumAmount: Number(pool.premiumAmount),
       claimLimit:    Number(pool.claimLimit),
       reserveRatio:  Number(pool.reserveRatio),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/:poolId", async (req, res, next) => {
@@ -92,14 +92,14 @@ router.get("/:poolId", async (req, res, next) => {
       .from(insuranceClaimsTable)
       .where(eq(insuranceClaimsTable.poolId, req.params.poolId));
 
-    res.json({
+    return res.json({
       ...pool,
       premiumAmount: Number(pool.premiumAmount),
       claimLimit:    Number(pool.claimLimit),
       reserveRatio:  Number(pool.reserveRatio),
       claimCount:    Number(claimCount),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/:poolId/join", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
@@ -108,26 +108,28 @@ router.post("/:poolId/join", requireIdempotencyKey, checkIdempotency, async (req
     if (!userId || !walletId) {
       return res.status(400).json({ error: true, message: "userId and walletId required" });
     }
-    const policy = await joinInsurancePool(req.params.poolId, userId, walletId);
+    const poolId = routeParamString(req, "poolId")!;
+    const policy = await joinInsurancePool(poolId, userId, walletId);
     const body = { ...policy, totalPremiumPaid: Number(policy.totalPremiumPaid) };
     await req.saveIdempotentResponse?.(body);
-    res.status(201).json(body);
+    return res.status(201).json(body);
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
 router.get("/:poolId/policies", async (req, res, next) => {
   try {
+    const poolId = routeParamString(req, "poolId")!;
     const policies = await db.select().from(insurancePoliciesTable)
-      .where(eq(insurancePoliciesTable.poolId, req.params.poolId))
+      .where(eq(insurancePoliciesTable.poolId, poolId))
       .orderBy(desc(insurancePoliciesTable.createdAt));
-    res.json({
+    return res.json({
       policies: policies.map(p => ({
         ...p, totalPremiumPaid: Number(p.totalPremiumPaid),
       })),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/:poolId/claims", async (req, res, next) => {
@@ -136,33 +138,35 @@ router.post("/:poolId/claims", async (req, res, next) => {
     if (!policyId || !userId || !claimAmount || !reason) {
       return res.status(400).json({ error: true, message: "policyId, userId, claimAmount, reason required" });
     }
+    const poolId = routeParamString(req, "poolId")!;
     const claim = await fileClaim({
-      policyId, poolId: req.params.poolId, userId,
+      policyId, poolId, userId,
       claimAmount: Number(claimAmount), reason, evidenceUrl,
     });
-    res.status(201).json({ ...claim, claimAmount: Number(claim.claimAmount) });
+    return res.status(201).json({ ...claim, claimAmount: Number(claim.claimAmount) });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
 router.get("/:poolId/claims", async (req, res, next) => {
   try {
+    const poolId = routeParamString(req, "poolId")!;
     const status = req.query.status as string | undefined;
     const claims = await db.select().from(insuranceClaimsTable)
       .where(and(
-        eq(insuranceClaimsTable.poolId, req.params.poolId),
+        eq(insuranceClaimsTable.poolId, poolId),
         status ? eq(insuranceClaimsTable.status, status as any) : undefined,
       ))
       .orderBy(desc(insuranceClaimsTable.createdAt));
-    res.json({
+    return res.json({
       claims: claims.map(c => ({
         ...c,
         claimAmount:  Number(c.claimAmount),
         payoutAmount: c.payoutAmount ? Number(c.payoutAmount) : null,
       })),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.patch("/claims/:claimId/adjudicate", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
@@ -171,12 +175,13 @@ router.patch("/claims/:claimId/adjudicate", requireIdempotencyKey, checkIdempote
     if (!adjudicatorId || approved === undefined) {
       return res.status(400).json({ error: true, message: "adjudicatorId and approved required" });
     }
-    await adjudicateClaim(req.params.claimId, adjudicatorId, Boolean(approved), payoutAmount, rejectionReason);
+    const claimId = routeParamString(req, "claimId")!;
+    await adjudicateClaim(claimId, adjudicatorId, Boolean(approved), payoutAmount, rejectionReason);
     const body = { success: true, approved: Boolean(approved) };
     await req.saveIdempotentResponse?.(body);
-    res.json(body);
+    return res.json(body);
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 

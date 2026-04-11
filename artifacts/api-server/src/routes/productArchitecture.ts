@@ -184,14 +184,14 @@ router.get("/", async (_req, res) => {
       },
     };
 
-    res.json(diagram);
+    return res.json(diagram);
   } catch (err) {
-    res.status(500).json({ error: "Architecture report failed" });
+    return res.status(500).json({ error: "Architecture report failed" });
   }
 });
 
 router.get("/services", (_req, res) => {
-  res.json({
+  return res.json({
     services: [
       { name: "wallet-service",      type: "product",         route: "/wallet",           status: "live" },
       { name: "merchant-service",    type: "product",         route: "/merchant",         status: "live" },

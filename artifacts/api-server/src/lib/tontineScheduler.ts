@@ -728,8 +728,6 @@ export async function distributeToTargets(tontineId: string): Promise<{
         currency:     tontine.currency,
         description:  `Strategy distribution – ${tontine.name} → ${merchant.businessName}`,
         reference:    `STRAT-${tontineId}-${target.id}`,
-        initiatedBy:  tontine.adminUserId,
-        type:         "tontine_strategy_fund",
       });
 
       await db.update(tontineStrategyTargetsTable).set({
@@ -748,8 +746,8 @@ export async function distributeToTargets(tontineId: string): Promise<{
 
   await audit({
     action:    "strategy_distribution",
+    entity:    "tontine",
     entityId:  tontineId,
-    entityType:"tontine",
     metadata:  { totalDistributed, failedCount: failed.length },
   });
 

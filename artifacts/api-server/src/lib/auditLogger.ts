@@ -13,7 +13,29 @@ export type AuditAction =
   | "admin.patch_tontines"
   | "idempotency.replayed"
   | "fee.applied"
-  | "tontine.goal.vendor_claim_expired";
+  | "tontine.goal.vendor_claim_expired"
+  | "investment.pool.created"
+  | "community.created"
+  | "remittance.sent"
+  | "fraud.alert.created"
+  | "saga.started"
+  | "saga.step.failed"
+  | "saga.completed"
+  | "saga.compensated"
+  | "savings.plan.created"
+  | "savings.plan.matured"
+  | "settlement.created"
+  | "settlement.completed"
+  | "tontine.growth.rate_applied"
+  | "tontine_missed_contribution"
+  | "tontine.payout.completed"
+  | "tontine.hybrid.solidarity_reserve_tagged"
+  | "tontine.hybrid.cycle_completed"
+  | "strategy_distribution"
+  | "tontine.payout.crash_recovery.marked_paid"
+  | "tontine.payout.crash_recovery.state_advanced"
+  | "tontine.payout.crash_recovery.reset_for_retry"
+  | "tontine.goal.pending_vendor_claim";
 
 interface AuditEntry {
   action: AuditAction;

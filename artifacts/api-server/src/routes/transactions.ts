@@ -10,10 +10,9 @@ const router = Router();
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get("/", validateQueryParams({ status: VALID_TX_STATUSES }), async (req, res, next) => {
@@ -39,12 +38,12 @@ router.get("/", validateQueryParams({ status: VALID_TX_STATUSES }), async (req, 
       db.select({ total: count() }).from(transactionsTable).where(where),
     ]);
 
-    res.json({
+    return res.json({
       transactions: transactions.map((t) => ({ ...t, amount: Number(t.amount) })),
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -52,12 +51,11 @@ router.get("/:transactionId", async (req, res, next) => {
   try {
     const [tx] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, req.params.transactionId));
     if (!tx) {
-      res.status(404).json({ error: true, message: "Transaction not found" });
-      return;
+      return res.status(404).json({ error: true, message: "Transaction not found" });
     }
-    res.json({ ...tx, amount: Number(tx.amount) });
+    return res.json({ ...tx, amount: Number(tx.amount) });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 

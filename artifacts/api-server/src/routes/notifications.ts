@@ -19,12 +19,12 @@ router.get("/", async (req, res, next) => {
       .orderBy(desc(productNotificationsTable.createdAt))
       .limit(50);
 
-    res.json({
+    return res.json({
       notifications,
       unreadCount: notifications.filter(n => !n.read).length,
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -45,9 +45,9 @@ router.patch("/:id/read", async (req, res, next) => {
 
     if (!updated) { res.status(404).json({ error: true, message: "Notification not found" }); return; }
 
-    res.json({ success: true, notification: updated });
+    return res.json({ success: true, notification: updated });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -65,9 +65,9 @@ router.patch("/read-all", async (req, res, next) => {
         eq(productNotificationsTable.read, false),
       ));
 
-    res.json({ success: true });
+    return res.json({ success: true });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 

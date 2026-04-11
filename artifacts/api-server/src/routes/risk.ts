@@ -16,11 +16,11 @@ router.get("/alerts", async (req, res, next) => {
       db.select({ total: count() }).from(riskAlertsTable),
     ]);
 
-    res.json({
+    return res.json({
       alerts,
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/alerts/stats", async (req, res, next) => {
@@ -35,12 +35,12 @@ router.get("/alerts/stats", async (req, res, next) => {
       .from(riskAlertsTable)
       .groupBy(riskAlertsTable.alertType);
 
-    res.json({
+    return res.json({
       bySeverity: Object.fromEntries(bySeverity.map((r) => [r.severity, Number(r.count)])),
       byType: Object.fromEntries(byType.map((r) => [r.alertType, Number(r.count)])),
       total: bySeverity.reduce((a, b) => a + Number(b.count), 0),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/alerts/:walletId", async (req, res, next) => {
@@ -52,8 +52,8 @@ router.get("/alerts/:walletId", async (req, res, next) => {
       .orderBy(desc(riskAlertsTable.createdAt))
       .limit(50);
 
-    res.json({ alerts, walletId: req.params.walletId });
-  } catch (err) { next(err); }
+    return res.json({ alerts, walletId: req.params.walletId });
+  } catch (err) { return next(err); }
 });
 
 export default router;

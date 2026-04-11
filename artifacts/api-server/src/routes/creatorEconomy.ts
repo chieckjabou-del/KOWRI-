@@ -14,10 +14,9 @@ const router = Router();
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get("/communities", async (req, res, next) => {
@@ -26,11 +25,11 @@ router.get("/communities", async (req, res, next) => {
     const limit = Number(req.query.limit) || 20;
     const communities = await listCommunities(page, limit);
     const [{ total }] = await db.select({ total: count() }).from(creatorCommunitiesTable);
-    res.json({
+    return res.json({
       communities,
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/communities", async (req, res, next) => {
@@ -44,12 +43,12 @@ router.post("/communities", async (req, res, next) => {
       platformFeeRate: platformFeeRate ? Number(platformFeeRate) : undefined,
       creatorFeeRate:  creatorFeeRate  ? Number(creatorFeeRate)  : undefined,
     });
-    res.status(201).json(community);
+    return res.status(201).json(community);
   } catch (err: any) {
     if (err.message === "Handle already taken") {
       return res.status(409).json({ error: true, message: err.message });
     }
-    next(err);
+    return next(err);
   }
 });
 
@@ -57,8 +56,8 @@ router.get("/communities/:handleOrId", async (req, res, next) => {
   try {
     const community = await getCommunity(req.params.handleOrId);
     if (!community) return res.status(404).json({ error: true, message: "Community not found" });
-    res.json(community);
-  } catch (err) { next(err); }
+    return res.json(community);
+  } catch (err) { return next(err); }
 });
 
 router.post("/communities/:communityId/join", async (req, res, next) => {
@@ -66,18 +65,18 @@ router.post("/communities/:communityId/join", async (req, res, next) => {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: true, message: "userId required" });
     await joinCommunity(req.params.communityId, userId);
-    res.json({ success: true, message: "Joined community" });
+    return res.json({ success: true, message: "Joined community" });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
 router.get("/communities/:communityId/pools", async (req, res, next) => {
   try {
     const data = await getCommunityPools(req.params.communityId);
-    res.json(data);
+    return res.json(data);
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -90,9 +89,9 @@ router.post("/communities/:communityId/earnings", async (req, res, next) => {
     const result = await distributeCreatorEarnings(
       req.params.communityId, Number(transactionAmount), currency,
     );
-    res.json({ success: true, ...result });
+    return res.json({ success: true, ...result });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -107,15 +106,15 @@ router.patch("/communities/:communityId/status", async (req, res, next) => {
       .where(eq(creatorCommunitiesTable.id, req.params.communityId))
       .returning();
     if (!updated) return res.status(404).json({ error: true, message: "Community not found" });
-    res.json({ ...updated, platformFeeRate: Number(updated.platformFeeRate), creatorFeeRate: Number(updated.creatorFeeRate) });
-  } catch (err) { next(err); }
+    return res.json({ ...updated, platformFeeRate: Number(updated.platformFeeRate), creatorFeeRate: Number(updated.creatorFeeRate) });
+  } catch (err) { return next(err); }
 });
 
 router.get("/dashboard/:creatorId", async (req, res, next) => {
   try {
     const dashboard = await getCreatorDashboard(req.params.creatorId);
-    res.json(dashboard);
-  } catch (err) { next(err); }
+    return res.json(dashboard);
+  } catch (err) { return next(err); }
 });
 
 export default router;

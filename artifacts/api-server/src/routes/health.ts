@@ -5,11 +5,11 @@ const router: IRouter = Router();
 
 router.get("/healthz", (_req, res) => {
   const data = HealthCheckResponse.parse({ status: "ok" });
-  res.json(data);
+  return res.json(data);
 });
 
 router.get("/health", (_req, res) => {
-  res.json({
+  return res.json({
     service: "kowri-backend",
     status: "running"
   });

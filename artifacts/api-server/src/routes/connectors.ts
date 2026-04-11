@@ -15,9 +15,9 @@ router.get("/", async (_req, res) => {
       capabilities: ["initiate_payment", "confirm_payment", "reconcile_settlement"],
       registered:   !!connectorRegistry[c.connectorType],
     }));
-    res.json({ connectors: enriched, total: enriched.length });
+    return res.json({ connectors: enriched, total: enriched.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch connectors" });
+    return res.status(500).json({ error: "Failed to fetch connectors" });
   }
 });
 
@@ -25,9 +25,9 @@ router.get("/:id", async (req, res) => {
   try {
     const [connector] = await db.select().from(connectorsTable).where(eq(connectorsTable.id, req.params.id));
     if (!connector) return res.status(404).json({ error: "Connector not found" });
-    res.json(connector);
+    return res.json(connector);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch connector" });
+    return res.status(500).json({ error: "Failed to fetch connector" });
   }
 });
 
@@ -47,9 +47,9 @@ router.post("/:id/ping", async (req, res) => {
       .set({ lastPingMs: pingMs, updatedAt: new Date() })
       .where(eq(connectorsTable.id, req.params.id));
 
-    res.json({ connector: connector.name, pingMs, status: "healthy" });
+    return res.json({ connector: connector.name, pingMs, status: "healthy" });
   } catch (err) {
-    res.status(500).json({ error: "Ping failed" });
+    return res.status(500).json({ error: "Ping failed" });
   }
 });
 
@@ -68,9 +68,9 @@ router.post("/:id/initiate", async (req, res) => {
 
     const paymentId = generateId();
     const result = await impl.initiatePayment({ id: paymentId, amount: Number(amount), currency, reference, metadata });
-    res.json({ paymentId, connector: connector.name, ...result });
+    return res.json({ paymentId, connector: connector.name, ...result });
   } catch (err) {
-    res.status(500).json({ error: "Payment initiation failed" });
+    return res.status(500).json({ error: "Payment initiation failed" });
   }
 });
 
@@ -86,9 +86,9 @@ router.post("/:id/confirm", async (req, res) => {
     if (!impl) return res.status(400).json({ error: "No implementation registered" });
 
     const result = await impl.confirmPayment(externalRef);
-    res.json({ connector: connector.name, ...result });
+    return res.json({ connector: connector.name, ...result });
   } catch (err) {
-    res.status(500).json({ error: "Payment confirmation failed" });
+    return res.status(500).json({ error: "Payment confirmation failed" });
   }
 });
 
@@ -104,9 +104,9 @@ router.post("/:id/reconcile", async (req, res) => {
     if (!impl) return res.status(400).json({ error: "No implementation registered" });
 
     const result = await impl.reconcileSettlement(settlementId);
-    res.json({ connector: connector.name, settlementId, ...result });
+    return res.json({ connector: connector.name, settlementId, ...result });
   } catch (err) {
-    res.status(500).json({ error: "Reconciliation failed" });
+    return res.status(500).json({ error: "Reconciliation failed" });
   }
 });
 

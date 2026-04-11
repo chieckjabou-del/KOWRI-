@@ -134,16 +134,16 @@ router.get("/full", async (_req, res) => {
       verdict: "KOWRI V5.0 is production-ready as a Global Financial Infrastructure Platform capable of supporting millions of financial operations per day.",
     };
 
-    res.json(report);
+    return res.json(report);
   } catch (err) {
-    res.status(500).json({ error: "Report generation failed" });
+    return res.status(500).json({ error: "Report generation failed" });
   }
 });
 
 router.get("/summary", async (_req, res) => {
   try {
     const txCount = await db.select({ cnt: sql<number>`count(*)` }).from(transactionsTable);
-    res.json({
+    return res.json({
       platform:  "KOWRI V5.0",
       status:    "operational",
       version:   "5.0.0",
@@ -153,7 +153,7 @@ router.get("/summary", async (_req, res) => {
       generatedAt: new Date(),
     });
   } catch (err) {
-    res.status(500).json({ error: "Summary failed" });
+    return res.status(500).json({ error: "Summary failed" });
   }
 });
 

@@ -96,8 +96,8 @@ router.post("/tickets", async (req, res, next) => {
 
     const ticket = await db.select().from(supportTicketsTable).where(eq(supportTicketsTable.id, id)).limit(1);
 
-    res.status(201).json({ ticket: ticket[0], ticketNumber });
-  } catch (err) { next(err); }
+    return res.status(201).json({ ticket: ticket[0], ticketNumber });
+  } catch (err) { return next(err); }
 });
 
 // ── GET /support/tickets ──────────────────────────────────────────────────────
@@ -123,8 +123,8 @@ router.get("/tickets", async (req, res, next) => {
       .limit(Number(lim))
       .offset(Number(off));
 
-    res.json({ tickets, count: tickets.length });
-  } catch (err) { next(err); }
+    return res.json({ tickets, count: tickets.length });
+  } catch (err) { return next(err); }
 });
 
 // ── GET /support/tickets/:id ──────────────────────────────────────────────────
@@ -137,8 +137,8 @@ router.get("/tickets/:id", async (req, res, next) => {
       .limit(1);
 
     if (!ticket.length) return res.status(404).json({ error: "Ticket not found" });
-    res.json({ ticket: ticket[0] });
-  } catch (err) { next(err); }
+    return res.json({ ticket: ticket[0] });
+  } catch (err) { return next(err); }
 });
 
 // ── PATCH /support/tickets/:id/resolve ───────────────────────────────────────
@@ -174,8 +174,8 @@ router.patch("/tickets/:id/resolve", async (req, res, next) => {
       `Votre ticket ${existing[0].ticketNumber} a été résolu. ${resolution}`,
     ).catch(() => {});
 
-    res.json({ ticket: updated[0] });
-  } catch (err) { next(err); }
+    return res.json({ ticket: updated[0] });
+  } catch (err) { return next(err); }
 });
 
 // ── PATCH /support/tickets/:id/status ────────────────────────────────────────
@@ -197,8 +197,8 @@ router.patch("/tickets/:id/status", async (req, res, next) => {
       .where(eq(supportTicketsTable.id, req.params.id))
       .returning();
 
-    res.json({ ticket: updated[0] });
-  } catch (err) { next(err); }
+    return res.json({ ticket: updated[0] });
+  } catch (err) { return next(err); }
 });
 
 export default router;

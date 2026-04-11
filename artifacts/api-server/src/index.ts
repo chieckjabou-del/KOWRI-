@@ -149,11 +149,12 @@ app.listen(port, () => {
       setInterval(async () => {
         try {
           const result = await reconcileAllWallets();
-          if (result.mismatches.length > 0) {
+          const mismatchCount = result.filter((r) => r.mismatch).length;
+          if (mismatchCount > 0) {
             logIncident({
               type: "reconciliation",
               action: "scheduled_run",
-              result: `${result.mismatches.length} mismatches found`,
+              result: `${mismatchCount} mismatches found`,
             });
           }
         } catch (err: any) {

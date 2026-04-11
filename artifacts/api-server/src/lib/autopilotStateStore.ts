@@ -13,7 +13,7 @@
 import { db }                                     from "@workspace/db";
 import { sql }                                    from "drizzle-orm";
 import { getBatchSize, setBatchSize }             from "./outboxWorker";
-import { getStrategyMode, rehydrateStrategyMode } from "./strategyEngine";
+import { getStrategyMode, rehydrateStrategyMode, type StrategyMode } from "./strategyEngine";
 import { getLearningEngineState, rehydrateConfidenceMap, rehydrateSnapshotBuffer, getPendingPrediction, rehydratePendingPrediction, getPredictedHoursSet, rehydratePredictedHoursSet, getLastFlushedHour, rehydrateLastFlushedHour } from "./learningEngine";
 import { getA1State, rehydrateA1State }                                             from "./selfOptimizer";
 import { getGlobalEvaluatorState, rehydrateGlobalState }  from "./globalEvaluator";
@@ -108,8 +108,11 @@ export async function rehydrateAutopilotState(): Promise<void> {
     }
 
     if (state["modeHistory"] || state["failureCount"] || state["blockedUntil"]) {
+      const rawHistory = stale ? [] : ((state["modeHistory"] as string[] | undefined) ?? []);
+      const validModes = new Set<StrategyMode>(["LATENCY_FIRST", "THROUGHPUT_FIRST", "BALANCED"]);
+      const modeHistory = rawHistory.filter((m): m is StrategyMode => validModes.has(m as StrategyMode));
       rehydrateGlobalState({
-        modeHistory:  stale ? [] : ((state["modeHistory"]  as string[] | undefined) ?? []),
+        modeHistory,
         failureCount: stale ? {} : ((state["failureCount"] as Record<string, number> | undefined) ?? {}),
         blockedUntil: stale ? {} : ((state["blockedUntil"] as Record<string, number> | undefined) ?? {}),
       });

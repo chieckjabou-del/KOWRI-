@@ -56,7 +56,7 @@ router.get("/overview", async (req, res) => {
       return Math.round(((current - previous) / previous) * 1000) / 10;
     }
 
-    res.json({
+    return res.json({
       totalUsers: Number(totalUsers),
       activeWallets: Number(activeWallets),
       totalTransactionVolume: Number(totalVolume),
@@ -73,7 +73,7 @@ router.get("/overview", async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    return res.status(500).json({ error: "Internal server error", message: String(err) });
   }
 });
 
@@ -113,9 +113,9 @@ router.get("/transactions", async (req, res) => {
       totalCount += d.count;
     }
 
-    res.json({ period, dataPoints, totalVolume, totalCount, byType });
+    return res.json({ period, dataPoints, totalVolume, totalCount, byType });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    return res.status(500).json({ error: "Internal server error", message: String(err) });
   }
 });
 
@@ -149,14 +149,14 @@ router.get("/ledger/partitions", async (_req, res) => {
       })
     );
 
-    res.json({
+    return res.json({
       partitions: results,
       strategy: "monthly_views",
       description: "Ledger partitioned by calendar month. Each partition is a PostgreSQL view over ledger_entries.",
       totalEntries: results.reduce((a, b) => a + b.count, 0),
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    return res.status(500).json({ error: "Internal server error", message: String(err) });
   }
 });
 
@@ -173,7 +173,7 @@ router.get("/ledger", async (req, res) => {
       db.select({ totalCredits: sql`COALESCE(SUM(CAST(${ledgerEntriesTable.creditAmount} AS NUMERIC)), 0)` }).from(ledgerEntriesTable),
     ]);
 
-    res.json({
+    return res.json({
       entries: entries.map(e => ({
         ...e,
         debitAmount: Number(e.debitAmount),
@@ -184,7 +184,7 @@ router.get("/ledger", async (req, res) => {
       totalCredits: Number(totalCredits),
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    return res.status(500).json({ error: "Internal server error", message: String(err) });
   }
 });
 
@@ -222,7 +222,7 @@ router.get("/ledger/shards", async (_req, res) => {
     }
 
     const totalEntries = shards.reduce((a, s) => a + s.entryCount, 0);
-    res.json({
+    return res.json({
       shards,
       strategy: "wallet_id_hash",
       numShards: shards.length,
@@ -231,7 +231,7 @@ router.get("/ledger/shards", async (_req, res) => {
       totalEntries,
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch shard data", message: String(err) });
+    return res.status(500).json({ error: "Failed to fetch shard data", message: String(err) });
   }
 });
 
@@ -240,13 +240,13 @@ router.get("/aml/summary", async (_req, res) => {
     const [flags]  = await db.select({ cnt: count() }).from(amlFlagsTable);
     const [cases]  = await db.select({ cnt: count() }).from(complianceCasesTable);
     const [open]   = await db.select({ cnt: count() }).from(complianceCasesTable).where(eq(complianceCasesTable.status, "open"));
-    res.json({
+    return res.json({
       totalFlags: Number(flags.cnt),
       totalCases: Number(cases.cnt),
       openCases:  Number(open.cnt),
     });
   } catch (err) {
-    res.status(500).json({ error: "AML summary failed" });
+    return res.status(500).json({ error: "AML summary failed" });
   }
 });
 

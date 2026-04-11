@@ -14,10 +14,9 @@ const router = Router();
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get("/", async (req, res, next) => {
@@ -38,7 +37,7 @@ router.get("/", async (req, res, next) => {
 
     const [{ total }] = await db.select({ total: count() }).from(investmentPoolsTable);
 
-    res.json({
+    return res.json({
       pools: rows.map(p => ({
         ...p,
         goalAmount:    Number(p.goalAmount),
@@ -52,7 +51,7 @@ router.get("/", async (req, res, next) => {
       })),
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/", async (req, res, next) => {
@@ -79,14 +78,14 @@ router.post("/", async (req, res, next) => {
       maturityDate: maturityDate ? new Date(maturityDate) : undefined,
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       ...pool,
       goalAmount:    Number(pool.goalAmount),
       currentAmount: Number(pool.currentAmount),
       minInvestment: Number(pool.minInvestment),
       expectedReturn: Number(pool.expectedReturn),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/:poolId", async (req, res, next) => {
@@ -99,7 +98,7 @@ router.get("/:poolId", async (req, res, next) => {
       .where(eq(poolPositionsTable.poolId, req.params.poolId));
 
     const totalShares = Number(pool.totalShares);
-    res.json({
+    return res.json({
       ...pool,
       goalAmount:    Number(pool.goalAmount),
       currentAmount: Number(pool.currentAmount),
@@ -115,7 +114,7 @@ router.get("/:poolId", async (req, res, next) => {
         returnAmount:  Number(p.returnAmount),
       })),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/:poolId/invest", async (req, res, next) => {
@@ -128,14 +127,14 @@ router.post("/:poolId/invest", async (req, res, next) => {
       poolId: req.params.poolId, userId,
       fromWalletId, amount: Number(amount),
     });
-    res.status(201).json({
+    return res.status(201).json({
       ...position,
       investedAmount: Number(position.investedAmount),
       shares:        Number(position.shares),
       returnAmount:  Number(position.returnAmount),
     });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -144,9 +143,9 @@ router.post("/:poolId/distribute", async (req, res, next) => {
     const { totalReturn } = req.body;
     if (!totalReturn) return res.status(400).json({ error: true, message: "totalReturn required" });
     const distributed = await distributePoolReturns(req.params.poolId, Number(totalReturn));
-    res.json({ success: true, distributed });
+    return res.json({ success: true, distributed });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -155,9 +154,9 @@ router.post("/positions/:positionId/redeem", async (req, res, next) => {
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: true, message: "userId required" });
     await redeemPoolPosition(req.params.positionId, userId);
-    res.json({ success: true, message: "Position redeemed successfully" });
+    return res.json({ success: true, message: "Position redeemed successfully" });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -171,7 +170,7 @@ router.get("/:poolId/nav", async (req, res, next) => {
     const currentAmount = Number(pool.currentAmount);
     const nav = totalShares > 0 ? currentAmount / totalShares : 1;
 
-    res.json({
+    return res.json({
       poolId:        pool.id,
       nav,
       currentAmount,
@@ -179,7 +178,7 @@ router.get("/:poolId/nav", async (req, res, next) => {
       currency:      pool.currency,
       computedAt:    new Date().toISOString(),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 export default router;

@@ -18,6 +18,7 @@ import {
 } from "../lib/tontineScheduler";
 import { computeReputationScore, getReputationScore, computeTontineAIPriority } from "../lib/reputationEngine";
 import { requireAuth } from "../lib/productAuth";
+import { routeParamString } from "../lib/routeParams";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
 const router = Router();
@@ -25,15 +26,14 @@ const router = Router();
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.post("/tontines/:tontineId/activate", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const { rotationModel = "fixed" } = req.body;
 
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
@@ -62,18 +62,18 @@ router.post("/tontines/:tontineId/activate", async (req, res, next) => {
 
     await createSchedulerJob("tontine_contribution", tontineId, "tontine", nextPayoutDate, { rotationModel });
 
-    res.json({
+    return res.json({
       ...updated,
       contributionAmount: Number(updated.contributionAmount),
       rotationModel,
       message: `Tontine activated with ${rotationModel} rotation. First contribution cycle on ${nextPayoutDate.toISOString()}.`,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/:tontineId/members", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const { userId } = req.body;
     if (!userId) return res.status(400).json({ error: true, message: "userId required" });
 
@@ -100,13 +100,14 @@ router.post("/tontines/:tontineId/members", async (req, res, next) => {
       updatedAt: new Date(),
     }).where(eq(tontinesTable.id, tontineId));
 
-    res.status(201).json(member);
-  } catch (err) { next(err); }
+    return res.status(201).json(member);
+  } catch (err) { return next(err); }
 });
 
 router.delete("/tontines/:tontineId/members/:userId", async (req, res, next) => {
   try {
-    const { tontineId, userId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
+    const userId = routeParamString(req, "userId")!;
 
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
@@ -147,37 +148,37 @@ router.delete("/tontines/:tontineId/members/:userId", async (req, res, next) => 
       updatedAt: new Date(),
     }).where(eq(tontinesTable.id, tontineId));
 
-    res.json({ success: true, message: "Member removed from tontine", remainingMembers: newCount });
-  } catch (err) { next(err); }
+    return res.json({ success: true, message: "Member removed from tontine", remainingMembers: newCount });
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/:tontineId/collect", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const result = await runContributionCycle(tontineId);
     const body = { success: true, ...result };
     await req.saveIdempotentResponse?.(body);
-    res.json(body);
+    return res.json(body);
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
 router.post("/tontines/:tontineId/payout", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const result = await runPayoutCycle(tontineId);
     const body = { success: true, ...result };
     await req.saveIdempotentResponse?.(body);
-    res.json(body);
+    return res.json(body);
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
 router.get("/tontines/:tontineId/schedule", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
 
@@ -202,7 +203,7 @@ router.get("/tontines/:tontineId/schedule", async (req, res, next) => {
       };
     });
 
-    res.json({
+    return res.json({
       tontineId,
       frequency: tontine.frequency,
       contributionAmount: Number(tontine.contributionAmount),
@@ -212,12 +213,12 @@ router.get("/tontines/:tontineId/schedule", async (req, res, next) => {
       nextPayoutDate: tontine.nextPayoutDate,
       schedule,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/:tontineId/bids", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const { userId, bidAmount, desiredPosition } = req.body;
     if (!userId || !bidAmount) return res.status(400).json({ error: true, message: "userId and bidAmount required" });
 
@@ -231,23 +232,23 @@ router.post("/tontines/:tontineId/bids", async (req, res, next) => {
       roundNumber: tontine.currentRound + 1,
     }).returning();
 
-    res.status(201).json({ ...bid, bidAmount: Number(bid.bidAmount) });
-  } catch (err) { next(err); }
+    return res.status(201).json({ ...bid, bidAmount: Number(bid.bidAmount) });
+  } catch (err) { return next(err); }
 });
 
 router.get("/tontines/:tontineId/bids", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const bids = await db.select().from(tontineBidsTable)
       .where(eq(tontineBidsTable.tontineId, tontineId))
       .orderBy(desc(tontineBidsTable.bidAmount));
-    res.json({ bids: bids.map(b => ({ ...b, bidAmount: Number(b.bidAmount) })) });
-  } catch (err) { next(err); }
+    return res.json({ bids: bids.map(b => ({ ...b, bidAmount: Number(b.bidAmount) })) });
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/:tontineId/positions/list", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const { sellerId, payoutOrder, askPrice, currency = "XOF", expiresAt } = req.body;
     if (!sellerId || !payoutOrder || !askPrice) {
       return res.status(400).json({ error: true, message: "sellerId, payoutOrder, askPrice required" });
@@ -256,34 +257,34 @@ router.post("/tontines/:tontineId/positions/list", async (req, res, next) => {
       tontineId, sellerId, payoutOrder: Number(payoutOrder), askPrice: Number(askPrice), currency,
       expiresAt: expiresAt ? new Date(expiresAt) : undefined,
     });
-    res.status(201).json({ ...listing, askPrice: Number(listing.askPrice) });
+    return res.status(201).json({ ...listing, askPrice: Number(listing.askPrice) });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
 router.get("/tontines/:tontineId/positions/market", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const listings = await db.select().from(tontinePositionListingsTable)
       .where(and(
         eq(tontinePositionListingsTable.tontineId, tontineId),
         eq(tontinePositionListingsTable.status, "open"),
       ))
       .orderBy(tontinePositionListingsTable.payoutOrder);
-    res.json({ listings: listings.map(l => ({ ...l, askPrice: Number(l.askPrice) })) });
-  } catch (err) { next(err); }
+    return res.json({ listings: listings.map(l => ({ ...l, askPrice: Number(l.askPrice) })) });
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/positions/:listingId/buy", async (req, res, next) => {
   try {
-    const { listingId } = req.params;
+    const listingId = routeParamString(req, "listingId")!;
     const { buyerId } = req.body;
     if (!buyerId) return res.status(400).json({ error: true, message: "buyerId required" });
     await buyTontinePosition(listingId, buyerId);
-    res.json({ success: true, message: "Position purchased successfully" });
+    return res.json({ success: true, message: "Position purchased successfully" });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -302,35 +303,37 @@ router.get("/tontines/positions", async (req, res, next) => {
       .from(tontinePositionListingsTable)
       .where(eq(tontinePositionListingsTable.status, "open"));
 
-    res.json({
+    return res.json({
       listings: listings.map(l => ({ ...l, askPrice: l.askPrice ? Number(l.askPrice) : null })),
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/reputation/:userId", async (req, res, next) => {
   try {
-    const score = await getReputationScore(req.params.userId);
+    const userId = routeParamString(req, "userId")!;
+    const score = await getReputationScore(userId);
     if (!score) return res.status(404).json({ error: true, message: "No reputation score yet" });
-    res.json({
+    return res.json({
       ...score,
       contributionRate: Number(score.contributionRate),
       repaymentRate:    Number(score.repaymentRate),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/reputation/:userId/compute", async (req, res, next) => {
   try {
-    const score = await computeReputationScore(req.params.userId);
-    res.json({
+    const userId = routeParamString(req, "userId")!;
+    const score = await computeReputationScore(userId);
+    return res.json({
       ...score,
       contributionRate: Number(score.contributionRate),
       repaymentRate:    Number(score.repaymentRate),
     });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
@@ -338,7 +341,7 @@ router.post("/reputation/:userId/compute", async (req, res, next) => {
 
 router.post("/tontines/:tontineId/goals", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const { vendorName, vendorPhone, vendorWalletId, goalAmount, goalDescription, releaseCondition, targetDate, votesRequired } = req.body;
 
     if (!vendorName || !goalAmount || !goalDescription) {
@@ -371,13 +374,13 @@ router.post("/tontines/:tontineId/goals", async (req, res, next) => {
       votesReceived:    0,
     }).returning();
 
-    res.status(201).json({ ...goal, goalAmount: Number(goal.goalAmount), currentAmount: Number(goal.currentAmount) });
-  } catch (err) { next(err); }
+    return res.status(201).json({ ...goal, goalAmount: Number(goal.goalAmount), currentAmount: Number(goal.currentAmount) });
+  } catch (err) { return next(err); }
 });
 
 router.get("/tontines/:tontineId/goals", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
 
@@ -385,18 +388,19 @@ router.get("/tontines/:tontineId/goals", async (req, res, next) => {
       .where(eq(tontinePurchaseGoalsTable.tontineId, tontineId))
       .orderBy(desc(tontinePurchaseGoalsTable.createdAt));
 
-    res.json(goals.map(g => ({
+    return res.json(goals.map(g => ({
       ...g,
       goalAmount:    Number(g.goalAmount),
       currentAmount: Number(g.currentAmount),
       progressPct:   Math.min(100, Math.round((Number(g.currentAmount) / Number(g.goalAmount)) * 100)),
     })));
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/:tontineId/goals/:goalId/release", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { tontineId, goalId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
+    const goalId = routeParamString(req, "goalId")!;
 
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
@@ -512,7 +516,7 @@ router.post("/tontines/:tontineId/goals/:goalId/release", requireIdempotencyKey,
       transferId,
     });
 
-    res.json({
+    return res.json({
       ...updated,
       goalAmount:    Number(updated.goalAmount),
       currentAmount: Number(updated.currentAmount),
@@ -523,12 +527,13 @@ router.post("/tontines/:tontineId/goals/:goalId/release", requireIdempotencyKey,
         ? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
         : null,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/:tontineId/goals/:goalId/vote", async (req, res, next) => {
   try {
-    const { tontineId, goalId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
+    const goalId = routeParamString(req, "goalId")!;
 
     const [goal] = await db.select().from(tontinePurchaseGoalsTable)
       .where(and(eq(tontinePurchaseGoalsTable.id, goalId), eq(tontinePurchaseGoalsTable.tontineId, tontineId)));
@@ -574,7 +579,7 @@ router.post("/tontines/:tontineId/goals/:goalId/vote", async (req, res, next) =>
       return res.json({ ...updated, votesReceived: newVotes, autoReleased: true, message: "Vote threshold reached — funds released" });
     }
 
-    res.json({
+    return res.json({
       ...updated,
       goalAmount:    Number(updated.goalAmount),
       currentAmount: Number(updated.currentAmount),
@@ -582,14 +587,14 @@ router.post("/tontines/:tontineId/goals/:goalId/vote", async (req, res, next) =>
       votesRequired: goal.votesRequired,
       autoReleased:  false,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── Yield & Growth analytics ────────────────────────────────────────────────
 
 router.get("/tontines/:tontineId/yield-summary", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
     if (tontine.tontineType !== "yield") {
@@ -635,7 +640,7 @@ router.get("/tontines/:tontineId/yield-summary", async (req, res, next) => {
       };
     });
 
-    res.json({
+    return res.json({
       tontineId,
       tontineType:      tontine.tontineType,
       yieldRate,
@@ -653,12 +658,12 @@ router.get("/tontines/:tontineId/yield-summary", async (req, res, next) => {
       })),
       projectedPayouts,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/tontines/:tontineId/growth-projection", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
     if (tontine.tontineType !== "growth") {
@@ -681,7 +686,7 @@ router.get("/tontines/:tontineId/growth-projection", async (req, res, next) => {
       });
     }
 
-    res.json({
+    return res.json({
       tontineId,
       tontineType:              tontine.tontineType,
       growthRate,
@@ -691,14 +696,14 @@ router.get("/tontines/:tontineId/growth-projection", async (req, res, next) => {
       projections,
       totalFundedIfAllRounds:   Number(projections.reduce((s, p) => s + p.contributionAmount, 0).toFixed(4)),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── Hybrid Tontine ──────────────────────────────────────────────────────────
 
 router.post("/tontines/:tontineId/hybrid-config", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const { rotation_pct, investment_pct, solidarity_pct, yield_pct, rebalance_each_cycle = true } = req.body;
 
     if (rotation_pct == null || investment_pct == null || solidarity_pct == null || yield_pct == null) {
@@ -726,17 +731,17 @@ router.post("/tontines/:tontineId/hybrid-config", async (req, res, next) => {
 
     await eventBus.publish("tontine.hybrid.config_set", { tontineId, hybridConfig });
 
-    res.json({
+    return res.json({
       tontineId,
       hybridConfig,
       message: "Hybrid configuration saved. The tontine type has been set to 'hybrid'.",
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/tontines/:tontineId/hybrid-summary", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
 
@@ -754,7 +759,7 @@ router.get("/tontines/:tontineId/hybrid-summary", async (req, res, next) => {
     // Solidarity reserve = current balance on tontine record
     const solidarityReserve = Number(tontine.solidarityReserve ?? 0);
 
-    res.json({
+    return res.json({
       tontineId,
       hybridConfig:     tontine.hybridConfig,
       cycleCount:       cycles.length,
@@ -779,12 +784,12 @@ router.get("/tontines/:tontineId/hybrid-summary", async (req, res, next) => {
         executedAt:       lastCycle.createdAt,
       } : null,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/:tontineId/solidarity-claim", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const { amount, reason, urgency = "low" } = req.body;
     const userId = (req as any).auth?.userId;
 
@@ -854,7 +859,7 @@ router.post("/tontines/:tontineId/solidarity-claim", async (req, res, next) => {
       amount: claimAmt, urgency, autoApprove, status: claimStatus,
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       claimId:       claim.id,
       status:        claimStatus,
       autoApproved:  autoApprove,
@@ -866,14 +871,14 @@ router.post("/tontines/:tontineId/solidarity-claim", async (req, res, next) => {
         ? "Emergency claim auto-approved and disbursed immediately"
         : "Claim submitted for admin review",
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── Strategy Tontine ────────────────────────────────────────────────────────
 
 router.post("/tontines/:tontineId/strategy/targets", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const { merchantId, allocatedAmount, purpose } = req.body;
     if (!merchantId || !allocatedAmount || !purpose) {
       return res.status(400).json({ error: true, message: "merchantId, allocatedAmount, purpose required" });
@@ -898,13 +903,13 @@ router.post("/tontines/:tontineId/strategy/targets", async (req, res, next) => {
       tontineId, targetId: target.id, merchantId, allocatedAmount, purpose,
     });
 
-    res.status(201).json({ target, merchant: { id: merchant.id, businessName: merchant.businessName } });
-  } catch (err) { next(err); }
+    return res.status(201).json({ target, merchant: { id: merchant.id, businessName: merchant.businessName } });
+  } catch (err) { return next(err); }
 });
 
 router.get("/tontines/:tontineId/strategy/targets", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
 
@@ -919,19 +924,19 @@ router.get("/tontines/:tontineId/strategy/targets", async (req, res, next) => {
       return { ...t, merchant: merchant ?? null };
     }));
 
-    res.json({
+    return res.json({
       tontineId, strategyMode: tontine.strategyMode, strategyZone: tontine.strategyZone,
       strategyObjective: tontine.strategyObjective,
       targetCount: enriched.length,
       totalAllocated: enriched.reduce((s, t) => s + Number(t.allocatedAmount), 0),
       targets: enriched,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/:tontineId/strategy/distribute", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
     if (!tontine.strategyMode) {
@@ -941,19 +946,19 @@ router.post("/tontines/:tontineId/strategy/distribute", async (req, res, next) =
     const { distributeToTargets: distribute } = await import("../lib/tontineScheduler");
     const result = await distribute(tontineId);
 
-    res.json({
+    return res.json({
       success: true,
       tontineId,
       distributed:      result.distributed,
       totalDistributed: result.totalDistributed,
       failed:           result.failed,
     });
-  } catch (err: any) { res.status(500).json({ error: true, message: err.message }); }
+  } catch (err: any) { return res.status(500).json({ error: true, message: err.message }); }
 });
 
 router.get("/tontines/:tontineId/strategy/performance", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
 
@@ -988,7 +993,7 @@ router.get("/tontines/:tontineId/strategy/performance", async (req, res, next) =
       };
     }));
 
-    res.json({
+    return res.json({
       tontineId,
       strategyZone:      tontine.strategyZone,
       strategyObjective: tontine.strategyObjective,
@@ -1004,20 +1009,20 @@ router.get("/tontines/:tontineId/strategy/performance", async (req, res, next) =
       worstPerformer: enriched[enriched.length - 1] ? { merchantId: enriched[enriched.length - 1].merchantId, businessName: enriched[enriched.length - 1].businessName, performanceScore: enriched[enriched.length - 1].performanceScore } : null,
       targets: enriched,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── AI Priority Assessment ──────────────────────────────────────────────────
 
 router.post("/tontines/:tontineId/ai-assess", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
 
     const ranked = await computeTontineAIPriority(tontineId);
 
-    res.json({
+    return res.json({
       tontineId,
       assessedAt: new Date(),
       memberCount: ranked.length,
@@ -1029,12 +1034,12 @@ router.post("/tontines/:tontineId/ai-assess", async (req, res, next) => {
         factors:        a.factors,
       })),
     });
-  } catch (err: any) { res.status(500).json({ error: true, message: err.message }); }
+  } catch (err: any) { return res.status(500).json({ error: true, message: err.message }); }
 });
 
 router.get("/tontines/:tontineId/ai-assessment", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
 
@@ -1046,7 +1051,7 @@ router.get("/tontines/:tontineId/ai-assessment", async (req, res, next) => {
       return res.status(404).json({ error: true, message: "No AI assessment found — run POST /ai-assess first" });
     }
 
-    res.json({
+    return res.json({
       tontineId,
       applied:    assessments.some(a => a.applied),
       assessedAt: assessments[0].assessedAt,
@@ -1059,12 +1064,12 @@ router.get("/tontines/:tontineId/ai-assessment", async (req, res, next) => {
         applied:        a.applied,
       })),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/tontines/:tontineId/apply-ai-order", async (req, res, next) => {
   try {
-    const { tontineId } = req.params;
+    const tontineId = routeParamString(req, "tontineId")!;
     const { adminOverride = false } = req.body;
 
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
@@ -1100,20 +1105,20 @@ router.post("/tontines/:tontineId/apply-ai-order", async (req, res, next) => {
 
     await eventBus.publish("tontine.ai.order_applied", { tontineId, updatedMembers: updates.length, adminOverride });
 
-    res.json({
+    return res.json({
       success: true,
       tontineId,
       message:  `AI payout order applied to ${updates.length} members`,
       appliedOrder: updates,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── Reputation Badges ───────────────────────────────────────────────────────
 
 router.get("/reputation/:userId/badges", async (req, res, next) => {
   try {
-    const { userId } = req.params;
+    const userId = routeParamString(req, "userId")!;
     const [rep] = await db.select().from(reputationScoresTable).where(eq(reputationScoresTable.userId, userId));
     if (!rep) {
       return res.status(404).json({ error: true, message: "No reputation score found. Run POST /reputation/:userId/compute first." });
@@ -1128,7 +1133,7 @@ router.get("/reputation/:userId/badges", async (req, res, next) => {
       diaspora_connector:   { label: "Connecteur Diaspora",   description: "Participation à une tontine multi-pays" },
     };
 
-    res.json({
+    return res.json({
       userId,
       score:      rep.score,
       tier:       rep.tier,
@@ -1141,7 +1146,7 @@ router.get("/reputation/:userId/badges", async (req, res, next) => {
         .filter(([key]) => !badges.some(b => b.badge === key))
         .map(([key, meta]) => ({ badge: key, ...meta, earned: false })),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/scheduler/jobs", async (req, res, next) => {
@@ -1150,8 +1155,8 @@ router.get("/scheduler/jobs", async (req, res, next) => {
       .orderBy(desc(schedulerJobsTable.scheduledAt))
       .limit(50);
     const [{ total }] = await db.select({ total: count() }).from(schedulerJobsTable);
-    res.json({ jobs, total: Number(total) });
-  } catch (err) { next(err); }
+    return res.json({ jobs, total: Number(total) });
+  } catch (err) { return next(err); }
 });
 
 export default router;

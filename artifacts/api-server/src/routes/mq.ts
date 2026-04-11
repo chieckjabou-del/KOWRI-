@@ -7,7 +7,7 @@ import { messageQueue, MESSAGE_TOPICS, MessageProducer } from "../lib/messageQue
 const router = Router();
 
 router.get("/topics", (_req, res) => {
-  res.json({
+  return res.json({
     topics: messageQueue.getTopics(),
     description: {
       [MESSAGE_TOPICS.TRANSACTIONS]:   "All financial transaction events",
@@ -32,7 +32,7 @@ router.get("/stats", async (_req, res) => {
       cnt:   sql<number>`count(*)`,
     }).from(messageQueueTable).groupBy(messageQueueTable.topic);
 
-    res.json({
+    return res.json({
       stats,
       depth,
       totalMessages: Number(total.cnt),
@@ -40,7 +40,7 @@ router.get("/stats", async (_req, res) => {
       brokerMode:    "in-process (Kafka/RabbitMQ compatible abstraction)",
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch MQ stats" });
+    return res.status(500).json({ error: "Failed to fetch MQ stats" });
   }
 });
 
@@ -50,9 +50,9 @@ router.get("/messages", async (req, res) => {
     const topic = req.query.topic as string | undefined;
     const messages = await db.select().from(messageQueueTable).orderBy(desc(messageQueueTable.createdAt)).limit(limit);
     const filtered = topic ? messages.filter((m) => m.topic === topic) : messages;
-    res.json({ messages: filtered, total: filtered.length });
+    return res.json({ messages: filtered, total: filtered.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch messages" });
+    return res.status(500).json({ error: "Failed to fetch messages" });
   }
 });
 
@@ -65,9 +65,9 @@ router.post("/publish", async (req, res) => {
     }
     const producer = new MessageProducer(topic);
     const id = await producer.send(payload);
-    res.status(201).json({ id, topic, status: "published" });
+    return res.status(201).json({ id, topic, status: "published" });
   } catch (err) {
-    res.status(500).json({ error: "Failed to publish message" });
+    return res.status(500).json({ error: "Failed to publish message" });
   }
 });
 
@@ -77,9 +77,9 @@ router.post("/replay", async (req, res) => {
     if (!topic) return res.status(400).json({ error: "topic is required" });
     const from    = fromDate ? new Date(fromDate) : new Date(Date.now() - 24 * 60 * 60 * 1000);
     const replayed = await messageQueue.replay(topic, from, consumerGroup);
-    res.json({ topic, replayed, fromDate: from });
+    return res.json({ topic, replayed, fromDate: from });
   } catch (err) {
-    res.status(500).json({ error: "Replay failed" });
+    return res.status(500).json({ error: "Replay failed" });
   }
 });
 

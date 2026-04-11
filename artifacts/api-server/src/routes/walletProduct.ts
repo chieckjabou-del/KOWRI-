@@ -21,21 +21,21 @@ router.post("/login", async (req, res) => {
     const users = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
     if (!users[0]) return res.status(401).json({ error: "User not found" });
     const session = await createSession(users[0].id, "wallet", { ttlHours: 24 });
-    res.json({
+    return res.json({
       token:     session.token,
       expiresAt: session.expiresAt,
       userId:    users[0].id,
       name:      `${users[0].firstName} ${users[0].lastName}`,
     });
   } catch (err) {
-    res.status(500).json({ error: "Login failed" });
+    return res.status(500).json({ error: "Login failed" });
   }
 });
 
 router.post("/logout", async (req, res) => {
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (token) await revokeSession(token);
-  res.json({ loggedOut: true });
+  return res.json({ loggedOut: true });
 });
 
 router.post("/create", async (req, res) => {
@@ -57,14 +57,14 @@ router.post("/create", async (req, res) => {
     });
     const session = await createSession(userId, "wallet");
     await createNotification(userId, "welcome", "Welcome to KOWRI!", `Hello ${firstName}, your wallet is ready.`, { channel: "in_app" });
-    res.status(201).json({
+    return res.status(201).json({
       userId, walletId, currency,
       token:    session.token,
       message:  "Wallet created successfully",
     });
   } catch (err: any) {
     if (err.code === "23505" || err.message?.includes("unique")) return res.status(409).json({ error: "Phone already registered" });
-    res.status(500).json({ error: "Wallet creation failed" });
+    return res.status(500).json({ error: "Wallet creation failed" });
   }
 });
 
@@ -74,9 +74,9 @@ router.get("/balance", async (req, res) => {
   try {
     const summary = await getWalletSummary(walletId as string);
     if (!summary) return res.status(404).json({ error: "Wallet not found" });
-    res.json(summary);
+    return res.json(summary);
   } catch (err) {
-    res.status(500).json({ error: "Balance fetch failed" });
+    return res.status(500).json({ error: "Balance fetch failed" });
   }
 });
 
@@ -85,9 +85,9 @@ router.get("/wallets", async (req, res) => {
   if (!auth) return res.status(401).json({ error: "Authentication required" });
   try {
     const wallets = await getWalletsByUser(auth.userId);
-    res.json({ wallets, count: wallets.length });
+    return res.json({ wallets, count: wallets.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch wallets" });
+    return res.status(500).json({ error: "Failed to fetch wallets" });
   }
 });
 
@@ -105,10 +105,10 @@ router.post("/transfer", requireIdempotencyKey, checkIdempotency, async (req, re
     });
     await createNotification(fromWalletId, "transfer_sent", "Transfer Sent",
       `${Number(amount).toLocaleString()} ${currency} sent successfully.`);
-    res.status(201).json({ success: true, ...result });
+    return res.status(201).json({ success: true, ...result });
   } catch (err: any) {
     if (err.message?.includes("Insufficient")) return res.status(422).json({ error: "Insufficient balance" });
-    res.status(500).json({ error: "Transfer failed" });
+    return res.status(500).json({ error: "Transfer failed" });
   }
 });
 
@@ -120,9 +120,9 @@ router.get("/transactions", async (req, res) => {
       limit:  Number(limit  ?? 20),
       offset: Number(offset ?? 0),
     });
-    res.json({ transactions: txs, count: txs.length, walletId });
+    return res.json({ transactions: txs, count: txs.length, walletId });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch transactions" });
+    return res.status(500).json({ error: "Failed to fetch transactions" });
   }
 });
 
@@ -131,9 +131,9 @@ router.post("/qr/generate", async (req, res) => {
   if (!walletId) return res.status(400).json({ error: "walletId required" });
   try {
     const result = await generateWalletQR(walletId, { amount, currency, label, ttlMins });
-    res.status(201).json(result);
+    return res.status(201).json(result);
   } catch (err) {
-    res.status(500).json({ error: "QR generation failed" });
+    return res.status(500).json({ error: "QR generation failed" });
   }
 });
 
@@ -143,9 +143,9 @@ router.post("/qr/pay", requireIdempotencyKey, checkIdempotency, async (req, res)
   try {
     const result = await processQRPayment(qrData, fromWalletId);
     if (!result.success) return res.status(400).json({ error: result.message });
-    res.json(result);
+    return res.json(result);
   } catch (err) {
-    res.status(500).json({ error: "QR payment failed" });
+    return res.status(500).json({ error: "QR payment failed" });
   }
 });
 
@@ -164,9 +164,9 @@ router.post("/verify/identity", async (req, res) => {
       .where(eq(usersTable.id, userId));
     await createNotification(userId, "kyc_submitted", "Identity Verification Submitted",
       "Your identity verification is under review.", { channel: "in_app" });
-    res.json({ submitted: true, userId, documentType, status: "pending", estimatedReviewTime: "1-2 business days" });
+    return res.json({ submitted: true, userId, documentType, status: "pending", estimatedReviewTime: "1-2 business days" });
   } catch (err) {
-    res.status(500).json({ error: "Identity verification submission failed" });
+    return res.status(500).json({ error: "Identity verification submission failed" });
   }
 });
 
@@ -179,9 +179,9 @@ router.get("/notifications", async (req, res) => {
       unreadOnly: unreadOnly === "true",
       limit:      Number(limit ?? 20),
     });
-    res.json({ notifications: notifs, count: notifs.length, userId: auth.userId });
+    return res.json({ notifications: notifs, count: notifs.length, userId: auth.userId });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch notifications" });
+    return res.status(500).json({ error: "Failed to fetch notifications" });
   }
 });
 
@@ -190,9 +190,9 @@ router.post("/notifications/:id/read", async (req, res) => {
   if (!auth) return res.status(401).json({ error: "Authentication required" });
   try {
     await markNotificationRead(req.params.id, auth.userId);
-    res.json({ read: true, notificationId: req.params.id });
+    return res.json({ read: true, notificationId: req.params.id });
   } catch (err) {
-    res.status(500).json({ error: "Failed to mark notification" });
+    return res.status(500).json({ error: "Failed to mark notification" });
   }
 });
 
@@ -201,9 +201,9 @@ router.post("/notifications/read-all", async (req, res) => {
   if (!auth) return res.status(401).json({ error: "Authentication required" });
   try {
     await markAllRead(auth.userId);
-    res.json({ success: true });
+    return res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: "Failed to mark all read" });
+    return res.status(500).json({ error: "Failed to mark all read" });
   }
 });
 

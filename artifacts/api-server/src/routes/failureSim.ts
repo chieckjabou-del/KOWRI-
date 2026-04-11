@@ -11,7 +11,7 @@ import {
 const router = Router();
 
 router.get("/scenarios", (_req, res) => {
-  res.json({
+  return res.json({
     scenarios: [
       { type: "database_outage",    description: "Simulates primary DB failure with replica failover" },
       { type: "message_queue_outage", description: "Simulates MQ failure with in-memory fallback" },
@@ -34,23 +34,23 @@ router.post("/simulate", async (req, res) => {
     else if (failureType === "message_queue_outage") result = await simulateMessageQueueOutage();
     else if (failureType === "region_outage")  result = await simulateRegionOutage(region ?? "africa");
     else                                       result = await simulateProcessorDowntime(processorId ?? "interswitch-africa");
-    res.json(result);
+    return res.json(result);
   } catch (err) {
-    res.status(500).json({ error: "Simulation failed" });
+    return res.status(500).json({ error: "Simulation failed" });
   }
 });
 
 router.post("/run-all", async (_req, res) => {
   try {
     const results = await runAllFailures();
-    res.json(results);
+    return res.json(results);
   } catch (err) {
-    res.status(500).json({ error: "Full simulation failed" });
+    return res.status(500).json({ error: "Full simulation failed" });
   }
 });
 
 router.get("/recovery/status", async (_req, res) => {
-  res.json({
+  return res.json({
     dbPrimary:       "online",
     dbReplicas:      "active",
     messageQueue:    "online",

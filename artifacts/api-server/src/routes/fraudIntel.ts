@@ -18,9 +18,9 @@ router.get("/network/graph", async (req, res) => {
   try {
     const limit = Math.min(500, Number(req.query.limit) || 100);
     const graph = await getNetworkGraph(limit);
-    res.json(graph);
+    return res.json(graph);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch network graph" });
+    return res.status(500).json({ error: "Failed to fetch network graph" });
   }
 });
 
@@ -31,18 +31,18 @@ router.post("/network/edge", async (req, res) => {
   }
   try {
     await recordNetworkEdge(fromWalletId, toWalletId, Number(amount), currency);
-    res.status(201).json({ recorded: true, fromWalletId, toWalletId });
+    return res.status(201).json({ recorded: true, fromWalletId, toWalletId });
   } catch (err) {
-    res.status(500).json({ error: "Failed to record network edge" });
+    return res.status(500).json({ error: "Failed to record network edge" });
   }
 });
 
 router.get("/scores", async (_req, res) => {
   try {
     const scores = await getTopRiskWallets(20);
-    res.json({ scores, count: scores.length });
+    return res.json({ scores, count: scores.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch fraud scores" });
+    return res.status(500).json({ error: "Failed to fetch fraud scores" });
   }
 });
 
@@ -51,9 +51,9 @@ router.post("/scores/compute", async (req, res) => {
   if (!walletId) return res.status(400).json({ error: "walletId required" });
   try {
     const result = await computeFraudScore(walletId);
-    res.json({ walletId, ...result });
+    return res.json({ walletId, ...result });
   } catch (err) {
-    res.status(500).json({ error: "Failed to compute fraud score" });
+    return res.status(500).json({ error: "Failed to compute fraud score" });
   }
 });
 
@@ -62,9 +62,9 @@ router.post("/anomaly/detect", async (req, res) => {
   if (!walletId) return res.status(400).json({ error: "walletId required" });
   try {
     const result = await detectBehavioralAnomalies(walletId);
-    res.json({ walletId, ...result });
+    return res.json({ walletId, ...result });
   } catch (err) {
-    res.status(500).json({ error: "Failed to detect anomalies" });
+    return res.status(500).json({ error: "Failed to detect anomalies" });
   }
 });
 
@@ -75,9 +75,9 @@ router.post("/velocity/cross-wallet", async (req, res) => {
   }
   try {
     const result = await detectCrossWalletVelocity(walletIds);
-    res.json({ walletCount: walletIds.length, ...result });
+    return res.json({ walletCount: walletIds.length, ...result });
   } catch (err) {
-    res.status(500).json({ error: "Failed to run cross-wallet velocity check" });
+    return res.status(500).json({ error: "Failed to run cross-wallet velocity check" });
   }
 });
 
@@ -89,14 +89,14 @@ router.get("/stats", async (_req, res) => {
       db.select({ cnt: sql<number>`count(*)` }).from(fraudScoresTable),
     ]);
     const topScores = await db.select().from(fraudScoresTable).orderBy(desc(fraudScoresTable.score)).limit(5);
-    res.json({
+    return res.json({
       networkNodes:   Number(nodeCount[0]?.cnt ?? 0),
       networkEdges:   Number(edgeCount[0]?.cnt ?? 0),
       scoresComputed: Number(scoreCount[0]?.cnt ?? 0),
       topHighRisk:    topScores,
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch fraud intel stats" });
+    return res.status(500).json({ error: "Failed to fetch fraud intel stats" });
   }
 });
 

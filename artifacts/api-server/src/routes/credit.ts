@@ -10,16 +10,16 @@ import { eventBus } from "../lib/eventBus";
 import { computeCreditScoreFromActivity } from "../lib/reputationEngine";
 import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
 
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get("/scores", async (req, res, next) => {
@@ -33,7 +33,7 @@ router.get("/scores", async (req, res, next) => {
       db.select({ total: count() }).from(creditScoresTable),
     ]);
 
-    res.json({
+    return res.json({
       scores: scores.map((s) => ({
         ...s,
         maxLoanAmount: Number(s.maxLoanAmount),
@@ -49,18 +49,18 @@ router.get("/scores", async (req, res, next) => {
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
 router.get("/scores/:userId", async (req, res, next) => {
   try {
-    const [score] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, req.params.userId));
+    const userId = routeParamString(req, "userId")!;
+    const [score] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, userId));
     if (!score) {
-      res.status(404).json({ error: true, message: "Credit score not found" });
-      return;
+      return res.status(404).json({ error: true, message: "Credit score not found" });
     }
-    res.json({
+    return res.json({
       ...score,
       maxLoanAmount: Number(score.maxLoanAmount),
       interestRate: Number(score.interestRate),
@@ -73,7 +73,7 @@ router.get("/scores/:userId", async (req, res, next) => {
       },
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -91,7 +91,7 @@ router.get("/loans", validateQueryParams({ status: VALID_LOAN_STATUSES }), async
       db.select({ total: count() }).from(loansTable).where(where),
     ]);
 
-    res.json({
+    return res.json({
       loans: loans.map((l) => ({
         ...l,
         amount: Number(l.amount),
@@ -101,7 +101,7 @@ router.get("/loans", validateQueryParams({ status: VALID_LOAN_STATUSES }), async
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -109,19 +109,16 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
   try {
     const { userId, walletId, amount, currency, termDays, purpose } = req.body;
     if (!userId || !walletId || !amount || !currency || !termDays) {
-      res.status(400).json({ error: true, message: "Missing required fields: userId, walletId, amount, currency, termDays" });
-      return;
+      return res.status(400).json({ error: true, message: "Missing required fields: userId, walletId, amount, currency, termDays" });
     }
 
     const [creditScore] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, userId));
     if (!creditScore) {
-      res.status(400).json({ error: true, message: "No credit score found. Build your credit history first." });
-      return;
+      return res.status(400).json({ error: true, message: "No credit score found. Build your credit history first." });
     }
 
     if (Number(amount) > Number(creditScore.maxLoanAmount)) {
-      res.status(400).json({ error: true, message: `Loan amount exceeds maximum allowed: ${creditScore.maxLoanAmount}` });
-      return;
+      return res.status(400).json({ error: true, message: `Loan amount exceeds maximum allowed: ${creditScore.maxLoanAmount}` });
     }
 
     const dueDate = new Date();
@@ -230,7 +227,7 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
     );
 
     const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, loanId));
-    res.status(201).json({
+    return res.status(201).json({
       ...loan,
       amount: Number(loan.amount),
       interestRate: Number(loan.interestRate),
@@ -238,25 +235,25 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       saga: { loanId: ctx.loanId, disbursed: ctx.disbursed },
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
 router.get("/loans/:loanId", async (req, res, next) => {
   try {
-    const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, req.params.loanId));
+    const loanId = routeParamString(req, "loanId")!;
+    const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, loanId));
     if (!loan) {
-      res.status(404).json({ error: true, message: "Loan not found" });
-      return;
+      return res.status(404).json({ error: true, message: "Loan not found" });
     }
-    res.json({
+    return res.json({
       ...loan,
       amount: Number(loan.amount),
       interestRate: Number(loan.interestRate),
       amountRepaid: Number(loan.amountRepaid),
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -280,24 +277,25 @@ router.get("/repayments", async (req, res, next) => {
 
     const totalAmount = repayments.reduce((s, r) => s + Number(r.amount), 0);
 
-    res.json({
+    return res.json({
       repayments: repayments.map(r => ({ ...r, amount: Number(r.amount) })),
       count:       repayments.length,
       totalAmount,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/loans/:loanId/repayments", async (req, res, next) => {
   try {
+    const loanId = routeParamString(req, "loanId")!;
     const repayments = await db.select().from(loanRepaymentsTable)
-      .where(eq(loanRepaymentsTable.loanId, req.params.loanId))
+      .where(eq(loanRepaymentsTable.loanId, loanId))
       .orderBy(desc(loanRepaymentsTable.createdAt));
-    res.json({
+    return res.json({
       repayments: repayments.map(r => ({ ...r, amount: Number(r.amount) })),
       count: repayments.length,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
@@ -307,7 +305,8 @@ router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, asy
       return res.status(400).json({ error: true, message: "walletId, amount, userId required" });
     }
 
-    const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, req.params.loanId));
+    const loanId = routeParamString(req, "loanId")!;
+    const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, loanId));
     if (!loan) return res.status(404).json({ error: true, message: "Loan not found" });
     if (loan.userId !== userId) return res.status(403).json({ error: true, message: "Forbidden" });
     if (!["approved", "disbursed"].includes(loan.status)) {
@@ -365,22 +364,23 @@ router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, asy
       message:      isFullyRepaid ? "Loan fully repaid!" : "Repayment recorded",
     };
     await req.saveIdempotentResponse?.(body);
-    res.status(201).json(body);
+    return res.status(201).json(body);
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 
 router.post("/scores/:userId/compute", async (req, res, next) => {
   try {
-    const factors = await computeCreditScoreFromActivity(req.params.userId);
+    const userId = routeParamString(req, "userId")!;
+    const factors = await computeCreditScoreFromActivity(userId);
 
     const score = factors.composite;
     const tier = score >= 80 ? "platinum" : score >= 60 ? "gold" : score >= 40 ? "silver" : "bronze";
     const maxLoanAmount = { bronze: 50000, silver: 200000, gold: 500000, platinum: 2000000 }[tier] ?? 50000;
     const interestRate  = { bronze: 12, silver: 10, gold: 8, platinum: 6 }[tier] ?? 12;
 
-    const existing = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, req.params.userId));
+    const existing = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, userId));
 
     let result;
     if (existing[0]) {
@@ -394,13 +394,13 @@ router.post("/scores/:userId/compute", async (req, res, next) => {
         transactionVolume:   factors.transactionVolume,
         tontineParticipation: factors.tontineParticipation,
         networkScore:        factors.networkScore,
-        updatedAt:           new Date(),
-      }).where(eq(creditScoresTable.userId, req.params.userId)).returning();
+        lastUpdated:         new Date(),
+      }).where(eq(creditScoresTable.userId, userId)).returning();
       result = updated;
     } else {
       const [created] = await db.insert(creditScoresTable).values({
         id:                  generateId(),
-        userId:              req.params.userId,
+        userId,
         score,
         tier,
         maxLoanAmount:       String(maxLoanAmount),
@@ -414,14 +414,14 @@ router.post("/scores/:userId/compute", async (req, res, next) => {
       result = created;
     }
 
-    res.json({
+    return res.json({
       ...result,
       maxLoanAmount: Number(result.maxLoanAmount),
       interestRate:  Number(result.interestRate),
       factors,
     });
   } catch (err: any) {
-    res.status(400).json({ error: true, message: err.message });
+    return res.status(400).json({ error: true, message: err.message });
   }
 });
 

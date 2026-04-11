@@ -157,7 +157,11 @@ export async function runAutopilotCycle(): Promise<void> {
   const lockResult = await db.execute(
     sql`SELECT pg_try_advisory_lock(${ADVISORY_LOCK_ID}) AS acquired`,
   );
-  const acquired = (lockResult as any).rows?.[0]?.acquired ?? lockResult?.[0]?.acquired ?? false;
+  const rows = (lockResult as { rows?: Array<{ acquired?: boolean }> }).rows;
+  const acquired =
+    rows?.[0]?.acquired ??
+    (Array.isArray(lockResult) ? (lockResult[0] as { acquired?: boolean } | undefined)?.acquired : undefined) ??
+    false;
   if (!acquired) return;
 
   try {

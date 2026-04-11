@@ -11,6 +11,7 @@ import {
 } from "../lib/productMerchant";
 import { randomBytes } from "crypto";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
 
@@ -23,9 +24,9 @@ router.post("/login", async (req, res) => {
     const merchants = await db.select().from(merchantsTable).where(eq(merchantsTable.userId, users[0].id)).limit(1);
     if (!merchants[0]) return res.status(403).json({ error: "No merchant account found for this user" });
     const session = await createSession(users[0].id, "merchant", { ttlHours: 48 });
-    res.json({ token: session.token, expiresAt: session.expiresAt, merchantId: merchants[0].id, businessName: merchants[0].businessName });
+    return res.json({ token: session.token, expiresAt: session.expiresAt, merchantId: merchants[0].id, businessName: merchants[0].businessName });
   } catch (err) {
-    res.status(500).json({ error: "Merchant login failed" });
+    return res.status(500).json({ error: "Merchant login failed" });
   }
 });
 
@@ -53,14 +54,14 @@ router.post("/create", async (req, res) => {
       status: "pending_approval", apiKey,
     });
     const session = await createSession(userId, "merchant", { ttlHours: 48 });
-    res.status(201).json({
+    return res.status(201).json({
       merchantId, userId, walletId, businessName,
       apiKey, status: "pending_approval",
       token: session.token,
     });
   } catch (err: any) {
     if (err.code === "23505" || err.message?.includes("unique")) return res.status(409).json({ error: "Phone already registered" });
-    res.status(500).json({ error: "Merchant creation failed" });
+    return res.status(500).json({ error: "Merchant creation failed" });
   }
 });
 
@@ -70,9 +71,9 @@ router.get("/profile", async (req, res) => {
   try {
     const merchants = await db.select().from(merchantsTable).where(eq(merchantsTable.userId, auth.userId)).limit(1);
     if (!merchants[0]) return res.status(404).json({ error: "Merchant not found" });
-    res.json(merchants[0]);
+    return res.json(merchants[0]);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch merchant profile" });
+    return res.status(500).json({ error: "Failed to fetch merchant profile" });
   }
 });
 
@@ -88,7 +89,7 @@ router.post("/payment", requireIdempotencyKey, checkIdempotency, async (req, res
 
     const ref = reference ?? `MRX-${Date.now()}-${randomBytes(4).toString("hex").toUpperCase()}`;
     const txId = generateId("tx");
-    res.status(201).json({
+    return res.status(201).json({
       paymentId:      txId,
       merchantId,
       fromWalletId,
@@ -102,7 +103,7 @@ router.post("/payment", requireIdempotencyKey, checkIdempotency, async (req, res
       toWalletId_use: merchant.walletId,
     });
   } catch (err) {
-    res.status(500).json({ error: "Payment initiation failed" });
+    return res.status(500).json({ error: "Payment initiation failed" });
   }
 });
 
@@ -114,9 +115,9 @@ router.get("/payments", async (req, res) => {
       limit:  Number(limit  ?? 20),
       offset: Number(offset ?? 0),
     });
-    res.json({ payments, count: payments.length, merchantId });
+    return res.json({ payments, count: payments.length, merchantId });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch payments" });
+    return res.status(500).json({ error: "Failed to fetch payments" });
   }
 });
 
@@ -125,9 +126,9 @@ router.get("/settlements", async (req, res) => {
   if (!merchantId) return res.status(400).json({ error: "merchantId required" });
   try {
     const settlements = await getMerchantSettlements(merchantId as string);
-    res.json({ settlements, count: settlements.length, merchantId });
+    return res.json({ settlements, count: settlements.length, merchantId });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch settlements" });
+    return res.status(500).json({ error: "Failed to fetch settlements" });
   }
 });
 
@@ -137,9 +138,9 @@ router.get("/stats", async (req, res) => {
   try {
     const stats = await getMerchantStats(merchantId as string);
     if (!stats) return res.status(404).json({ error: "Merchant not found" });
-    res.json(stats);
+    return res.json(stats);
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch stats" });
+    return res.status(500).json({ error: "Failed to fetch stats" });
   }
 });
 
@@ -151,9 +152,9 @@ router.post("/payment-link", async (req, res) => {
       title, description, amount, currency,
       expiresAt: expiresAt ? new Date(expiresAt) : undefined,
     });
-    res.status(201).json(result);
+    return res.status(201).json(result);
   } catch (err) {
-    res.status(500).json({ error: "Failed to create payment link" });
+    return res.status(500).json({ error: "Failed to create payment link" });
   }
 });
 
@@ -162,9 +163,9 @@ router.get("/payment-links", async (req, res) => {
   if (!merchantId) return res.status(400).json({ error: "merchantId required" });
   try {
     const links = await getPaymentLinks(merchantId as string);
-    res.json({ links, count: links.length });
+    return res.json({ links, count: links.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch payment links" });
+    return res.status(500).json({ error: "Failed to fetch payment links" });
   }
 });
 
@@ -179,9 +180,9 @@ router.post("/invoice", async (req, res) => {
       items, currency, notes,
       dueAt: dueAt ? new Date(dueAt) : undefined,
     });
-    res.status(201).json(result);
+    return res.status(201).json(result);
   } catch (err) {
-    res.status(500).json({ error: "Invoice creation failed" });
+    return res.status(500).json({ error: "Invoice creation failed" });
   }
 });
 
@@ -190,18 +191,18 @@ router.get("/invoices", async (req, res) => {
   if (!merchantId) return res.status(400).json({ error: "merchantId required" });
   try {
     const invoices = await getInvoices(merchantId as string);
-    res.json({ invoices, count: invoices.length });
+    return res.json({ invoices, count: invoices.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch invoices" });
+    return res.status(500).json({ error: "Failed to fetch invoices" });
   }
 });
 
 router.post("/invoices/:invoiceId/send", async (req, res) => {
   try {
     await sendInvoice(req.params.invoiceId);
-    res.json({ sent: true, invoiceId: req.params.invoiceId });
+    return res.json({ sent: true, invoiceId: req.params.invoiceId });
   } catch (err) {
-    res.status(500).json({ error: "Failed to send invoice" });
+    return res.status(500).json({ error: "Failed to send invoice" });
   }
 });
 
@@ -210,10 +211,10 @@ router.post("/qr/generate", async (req, res) => {
   if (!merchantId) return res.status(400).json({ error: "merchantId required" });
   try {
     const result = await generateMerchantQR(merchantId, { amount, currency, label });
-    res.status(201).json(result);
+    return res.status(201).json(result);
   } catch (err: any) {
     if (err.message === "Merchant not found") return res.status(404).json({ error: "Merchant not found" });
-    res.status(500).json({ error: "QR generation failed" });
+    return res.status(500).json({ error: "QR generation failed" });
   }
 });
 
@@ -221,7 +222,7 @@ router.post("/qr/generate", async (req, res) => {
 // POST /api/merchants/:id/payment — record a completed sale and update
 // any linked tontine strategy target performance scores.
 router.post("/:merchantId/payment", requireIdempotencyKey, checkIdempotency, async (req, res) => {
-  const { merchantId } = req.params;
+  const merchantId = routeParamString(req, "merchantId")!;
   const { amount, description, reference } = req.body;
   if (!amount || Number(amount) <= 0) {
     return res.status(400).json({ error: "amount required and must be > 0" });
@@ -258,7 +259,7 @@ router.post("/:merchantId/payment", requireIdempotencyKey, checkIdempotency, asy
       updatedTargets.push({ targetId: target.id, revenueGenerated: newRevenue, performanceScore });
     }
 
-    res.status(201).json({
+    return res.status(201).json({
       success:        true,
       merchantId,
       saleAmount,
@@ -267,7 +268,7 @@ router.post("/:merchantId/payment", requireIdempotencyKey, checkIdempotency, asy
       updatedTargets,
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to record payment" });
+    return res.status(500).json({ error: "Failed to record payment" });
   }
 });
 
@@ -275,10 +276,11 @@ router.get("/webhooks", async (req, res) => {
   const auth = await requireAuth(req.headers.authorization, ["merchant"]);
   if (!auth) return res.status(401).json({ error: "Authentication required" });
   try {
-    const webhooks = await db.select().from(webhooksTable).where(eq(webhooksTable.userId, auth.userId));
-    res.json({ webhooks, count: webhooks.length });
+    // webhooks rows are not scoped to users/merchants in schema — cannot filter by merchant
+    const webhooks: (typeof webhooksTable.$inferSelect)[] = [];
+    return res.json({ webhooks, count: 0 });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch webhooks" });
+    return res.status(500).json({ error: "Failed to fetch webhooks" });
   }
 });
 

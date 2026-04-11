@@ -59,7 +59,7 @@ router.get("/reconcile", async (req, res, next) => {
       },
     });
 
-    res.json({
+    return res.json({
       summary: {
         totalWallets: report.length,
         mismatchesBefore: mismatchesBefore.length,
@@ -81,7 +81,7 @@ router.get("/reconcile", async (req, res, next) => {
       })),
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -94,9 +94,9 @@ router.post("/patch-tontines", async (req, res, next) => {
       entityId: "tontines",
       metadata: result,
     });
-    res.json(result);
+    return res.json(result);
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -111,15 +111,15 @@ router.post("/patch-tontines", async (req, res, next) => {
 // POST   /admin/kill-switches/:name/rollback — fire rollback + lift
 
 router.get("/kill-switches", (_req, res) => {
-  res.json({ switches: getAllSwitches() });
+  return res.json({ switches: getAllSwitches() });
 });
 
 router.get("/kill-switches/:name", (req, res) => {
   const name = req.params.name as KillSwitchName;
   try {
-    res.json(getSwitch(name));
+    return res.json(getSwitch(name));
   } catch {
-    res.status(404).json({ error: "Unknown switch", name });
+    return res.status(404).json({ error: "Unknown switch", name });
   }
 });
 
@@ -129,7 +129,7 @@ router.post("/kill-switches/:name/fire", (req, res) => {
   const reason   = (req.body?.reason   as string) ?? "manual fire";
 
   fire(name, reason, operator);
-  res.json({ switch: name, state: getSwitch(name).state, action: "fired", by: operator });
+  return res.json({ switch: name, state: getSwitch(name).state, action: "fired", by: operator });
 });
 
 router.post("/kill-switches/:name/force", (req, res) => {
@@ -138,7 +138,7 @@ router.post("/kill-switches/:name/force", (req, res) => {
   const reason   = (req.body?.reason   as string) ?? "manual force-off";
 
   forceOff(name, operator, reason);
-  res.json({ switch: name, state: getSwitch(name).state, action: "forced_off", by: operator });
+  return res.json({ switch: name, state: getSwitch(name).state, action: "forced_off", by: operator });
 });
 
 router.post("/kill-switches/:name/lift", (req, res) => {
@@ -146,7 +146,7 @@ router.post("/kill-switches/:name/lift", (req, res) => {
   const operator = (req.body?.operator as string) ?? "admin";
 
   manualLift(name, operator);
-  res.json({ switch: name, state: getSwitch(name).state, action: "lifted", by: operator });
+  return res.json({ switch: name, state: getSwitch(name).state, action: "lifted", by: operator });
 });
 
 router.post("/kill-switches/:name/recover", (req, res) => {
@@ -170,7 +170,7 @@ router.post("/kill-switches/:name/rollback", (req, res) => {
   const operator = (req.body?.operator as string) ?? "admin";
 
   const result = rollback(name, operator);
-  res.json({ ...result, switch: name, currentState: getSwitch(name).state });
+  return res.json({ ...result, switch: name, currentState: getSwitch(name).state });
 });
 
 // ── Fee Configuration ─────────────────────────────────────────────────────────
@@ -182,9 +182,9 @@ router.post("/kill-switches/:name/rollback", (req, res) => {
 router.get("/fees", async (_req, res, next) => {
   try {
     const rules = await db.select().from(feeConfigTable);
-    res.json({ rules });
+    return res.json({ rules });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 

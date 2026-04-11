@@ -7,6 +7,7 @@ import { getWalletBalance } from "../lib/walletService";
 import { processDeposit, processTransfer } from "../lib/walletService";
 import { validatePagination, validateQueryParams, VALID_CURRENCIES } from "../middleware/validate";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import { routeParamString } from "../lib/routeParams";
 import { audit } from "../lib/auditLogger";
 import { requireAuth } from "../lib/productAuth";
 
@@ -15,10 +16,9 @@ const router = Router();
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get(
@@ -47,7 +47,7 @@ router.get(
         db.select({ total: count() }).from(walletsTable).where(whereClause),
       ]);
 
-      res.json({
+      return res.json({
         wallets: wallets.map((w) => ({
           ...w,
           balance: Number(w.balance),
@@ -56,7 +56,7 @@ router.get(
         pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
       });
     } catch (err) {
-      next(err);
+      return next(err);
     }
   }
 );
@@ -65,12 +65,10 @@ router.post("/", async (req, res, next) => {
   try {
     const { userId, currency, walletType } = req.body;
     if (!userId || !currency || !walletType) {
-      res.status(400).json({ error: true, message: "Missing required fields: userId, currency, walletType" });
-      return;
+      return res.status(400).json({ error: true, message: "Missing required fields: userId, currency, walletType" });
     }
     if (!VALID_CURRENCIES.has(currency)) {
-      res.status(400).json({ error: true, message: `Invalid currency. Must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
-      return;
+      return res.status(400).json({ error: true, message: `Invalid currency. Must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
     }
 
     const [wallet] = await db
@@ -78,9 +76,9 @@ router.post("/", async (req, res, next) => {
       .values({ id: generateId(), userId, currency, walletType, balance: "0", availableBalance: "0", status: "active" })
       .returning();
 
-    res.status(201).json({ ...wallet, balance: 0, availableBalance: 0 });
+    return res.status(201).json({ ...wallet, balance: 0, availableBalance: 0 });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -88,13 +86,12 @@ router.get("/:walletId", async (req, res, next) => {
   try {
     const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, req.params.walletId));
     if (!wallet) {
-      res.status(404).json({ error: true, message: "Wallet not found" });
-      return;
+      return res.status(404).json({ error: true, message: "Wallet not found" });
     }
     const derivedBalance = await getWalletBalance(req.params.walletId);
-    res.json({ ...wallet, balance: derivedBalance, availableBalance: derivedBalance, balanceSource: "ledger" });
+    return res.json({ ...wallet, balance: derivedBalance, availableBalance: derivedBalance, balanceSource: "ledger" });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -104,22 +101,19 @@ router.post(
   checkIdempotency,
   async (req, res, next) => {
     try {
-      const { walletId } = req.params;
+      const walletId = routeParamString(req, "walletId")!;
       const { amount, currency, reference, description } = req.body;
 
       if (!amount || Number(amount) <= 0 || !currency) {
-        res.status(400).json({ error: true, message: "Invalid deposit: amount (>0) and currency are required" });
-        return;
+        return res.status(400).json({ error: true, message: "Invalid deposit: amount (>0) and currency are required" });
       }
       if (!VALID_CURRENCIES.has(currency)) {
-        res.status(400).json({ error: true, message: `Invalid currency. Must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
-        return;
+        return res.status(400).json({ error: true, message: `Invalid currency. Must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
       }
 
       const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, walletId));
       if (!wallet) {
-        res.status(404).json({ error: true, message: "Wallet not found" });
-        return;
+        return res.status(404).json({ error: true, message: "Wallet not found" });
       }
 
       const tx = await processDeposit({
@@ -133,13 +127,12 @@ router.post(
 
       const body = { ...tx, amount: Number(tx.amount) };
       await req.saveIdempotentResponse?.(body);
-      res.json(body);
+      return res.json(body);
     } catch (err: any) {
       if (err.message === "Wallet not found") {
-        res.status(404).json({ error: true, message: "Wallet not found" });
-        return;
+        return res.status(404).json({ error: true, message: "Wallet not found" });
       }
-      next(err);
+      return next(err);
     }
   }
 );
@@ -150,20 +143,17 @@ router.post(
   checkIdempotency,
   async (req, res, next) => {
     try {
-      const { walletId } = req.params;
+      const walletId = routeParamString(req, "walletId")!;
       const { toWalletId, amount, currency, description, reference } = req.body;
 
       if (!toWalletId || !amount || Number(amount) <= 0 || !currency) {
-        res.status(400).json({ error: true, message: "Invalid transfer: toWalletId, amount (>0), and currency are required" });
-        return;
+        return res.status(400).json({ error: true, message: "Invalid transfer: toWalletId, amount (>0), and currency are required" });
       }
       if (!VALID_CURRENCIES.has(currency)) {
-        res.status(400).json({ error: true, message: `Invalid currency. Must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
-        return;
+        return res.status(400).json({ error: true, message: `Invalid currency. Must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
       }
       if (walletId === toWalletId) {
-        res.status(400).json({ error: true, message: "Source and destination wallets must be different" });
-        return;
+        return res.status(400).json({ error: true, message: "Source and destination wallets must be different" });
       }
 
       const tx = await processTransfer({
@@ -178,21 +168,18 @@ router.post(
 
       const body = { ...tx, amount: Number(tx.amount) };
       await req.saveIdempotentResponse?.(body);
-      res.json(body);
+      return res.json(body);
     } catch (err: any) {
       if (err.message === "Insufficient funds") {
-        res.status(400).json({ error: true, message: "Insufficient funds" });
-        return;
+        return res.status(400).json({ error: true, message: "Insufficient funds" });
       }
       if (err.message === "One or both wallets not found") {
-        res.status(404).json({ error: true, message: "One or both wallets not found" });
-        return;
+        return res.status(404).json({ error: true, message: "One or both wallets not found" });
       }
       if (err.name === "RateLimitExceededError") {
-        res.status(429).json({ error: true, message: err.message, retryAfter: 60 });
-        return;
+        return res.status(429).json({ error: true, message: err.message, retryAfter: 60 });
       }
-      next(err);
+      return next(err);
     }
   }
 );

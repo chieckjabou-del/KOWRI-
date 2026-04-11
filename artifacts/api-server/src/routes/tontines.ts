@@ -68,7 +68,7 @@ router.get("/public", async (req, res, next) => {
       db.select({ total: count() }).from(tontinesTable).where(where),
     ]);
 
-    res.json({
+    return res.json({
       tontines: tontines.map(t => ({
         ...t,
         contributionAmount: Number(t.contributionAmount),
@@ -76,17 +76,16 @@ router.get("/public", async (req, res, next) => {
       })),
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── All routes below require auth ──────────────────────────────────────────────
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
-    res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-    return;
+    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
-  next();
+  return next();
 });
 
 router.get("/", async (req, res, next) => {
@@ -97,8 +96,7 @@ router.get("/", async (req, res, next) => {
     const status = req.query.status as string | undefined;
 
     if (status && !VALID_TONTINE_STATUSES.has(status)) {
-      res.status(400).json({ error: true, message: `Invalid status. Must be one of: ${[...VALID_TONTINE_STATUSES].join(", ")}` });
-      return;
+      return res.status(400).json({ error: true, message: `Invalid status. Must be one of: ${[...VALID_TONTINE_STATUSES].join(", ")}` });
     }
 
     const where = status ? eq(tontinesTable.status, status as any) : undefined;
@@ -108,7 +106,7 @@ router.get("/", async (req, res, next) => {
       db.select({ total: count() }).from(tontinesTable).where(where),
     ]);
 
-    res.json({
+    return res.json({
       tontines: tontines.map(t => ({
         ...t,
         contributionAmount: Number(t.contributionAmount),
@@ -116,7 +114,7 @@ router.get("/", async (req, res, next) => {
       })),
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.post("/", async (req, res, next) => {
@@ -127,8 +125,7 @@ router.post("/", async (req, res, next) => {
     } = req.body;
 
     if (!name || !contributionAmount || !currency || !frequency || !maxMembers || !adminUserId) {
-      res.status(400).json({ error: true, message: "Missing required fields: name, contributionAmount, currency, frequency, maxMembers, adminUserId" });
-      return;
+      return res.status(400).json({ error: true, message: "Missing required fields: name, contributionAmount, currency, frequency, maxMembers, adminUserId" });
     }
 
     if (tontine_type && !VALID_TONTINE_TYPES.has(tontine_type)) {
@@ -165,12 +162,12 @@ router.post("/", async (req, res, next) => {
       contributionsCount: 0,
     });
 
-    res.status(201).json({
+    return res.status(201).json({
       ...tontine,
       contributionAmount: Number(tontine.contributionAmount),
       goalAmount: tontine.goalAmount ? Number(tontine.goalAmount) : null,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/:tontineId", async (req, res, next) => {
@@ -178,8 +175,7 @@ router.get("/:tontineId", async (req, res, next) => {
     const { tontineId } = req.params;
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) {
-      res.status(404).json({ error: true, message: "Tontine not found" });
-      return;
+      return res.status(404).json({ error: true, message: "Tontine not found" });
     }
 
     const members = await db
@@ -203,7 +199,7 @@ router.get("/:tontineId", async (req, res, next) => {
       return sum + m.contributionsCount * perMember;
     }, 0);
 
-    res.json({
+    return res.json({
       ...tontine,
       contributionAmount: defaultAmount,
       goalAmount: tontine.goalAmount ? Number(tontine.goalAmount) : null,
@@ -217,7 +213,7 @@ router.get("/:tontineId", async (req, res, next) => {
       })),
       totalContributed,
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 export default router;

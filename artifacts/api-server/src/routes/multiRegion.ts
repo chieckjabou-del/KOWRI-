@@ -64,17 +64,17 @@ const READ_REPLICAS = REGIONS.flatMap(r =>
 );
 
 router.get("/regions", (_req, res) => {
-  res.json({ regions: REGIONS, count: REGIONS.length, zones: ["africa", "europe", "asia"] });
+  return res.json({ regions: REGIONS, count: REGIONS.length, zones: ["africa", "europe", "asia"] });
 });
 
 router.get("/regions/:regionId", (req, res) => {
   const region = REGIONS.find(r => r.id === req.params.regionId);
   if (!region) return res.status(404).json({ error: "Region not found" });
-  res.json(region);
+  return res.json(region);
 });
 
 router.get("/replicas", (_req, res) => {
-  res.json({ replicas: READ_REPLICAS, count: READ_REPLICAS.length });
+  return res.json({ replicas: READ_REPLICAS, count: READ_REPLICAS.length });
 });
 
 router.get("/routing", (req, res) => {
@@ -86,7 +86,7 @@ router.get("/routing", (req, res) => {
   });
   const primary   = eligible.find(r => r.primary) ?? eligible[0];
   const secondary = eligible.filter(r => r !== primary).slice(0, 2);
-  res.json({
+  return res.json({
     selected:     primary ?? null,
     alternatives: secondary,
     strategy:     "latency_aware",
@@ -100,7 +100,7 @@ router.post("/failover", (req, res) => {
   const from = REGIONS.find(r => r.id === fromRegion);
   const to   = REGIONS.find(r => r.id === toRegion);
   if (!from || !to) return res.status(404).json({ error: "Region not found" });
-  res.json({
+  return res.json({
     failoverInitiated: true,
     fromRegion,
     toRegion,
@@ -123,7 +123,7 @@ router.get("/replication/status", (_req, res) => {
     replicaCount: r.readReplicaCount,
     status:    r.replicationLagMs < 100 ? "healthy" : r.replicationLagMs < 500 ? "lagging" : "critical",
   }));
-  res.json({
+  return res.json({
     replication: status,
     overallHealth: status.every(s => s.status === "healthy") ? "healthy" : "degraded",
     primaryRegion: "africa-west",

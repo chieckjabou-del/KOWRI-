@@ -21,12 +21,12 @@ app.use(validatePagination);
 app.use(stickyPrimaryRequest);
 app.use(stickyPrimaryResponse);
 
-app.get("/health", (req, res) => {
-  res.json({ service: "kowri-backend", status: "running" });
+app.get("/health", (_req, res) => {
+  return res.json({ service: "kowri-backend", status: "running" });
 });
 
-app.get("/api/health", (req, res) => {
-  res.json({ service: "kowri-backend", status: "running" });
+app.get("/api/health", (_req, res) => {
+  return res.json({ service: "kowri-backend", status: "running" });
 });
 
 app.get("/api/debug-build", async (req, res) => {

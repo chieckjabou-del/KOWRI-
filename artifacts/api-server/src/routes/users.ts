@@ -20,9 +20,9 @@ router.get("/me", async (req, res) => {
       email: usersTable.email,
     }).from(usersTable).where(eq(usersTable.id, auth.userId)).limit(1);
     if (!users[0]) return res.status(404).json({ error: "Utilisateur introuvable" });
-    res.json({ user: users[0], sessionType: auth.type });
+    return res.json({ user: users[0], sessionType: auth.type });
   } catch (err) {
-    res.status(500).json({ error: "Erreur serveur" });
+    return res.status(500).json({ error: "Erreur serveur" });
   }
 });
 
@@ -44,7 +44,7 @@ router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req
       db.select({ total: count() }).from(usersTable).where(conditions),
     ]);
 
-    res.json({
+    return res.json({
       users: users.map(u => ({
         id: u.id,
         phone: u.phone,
@@ -65,7 +65,7 @@ router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req
       },
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -103,7 +103,7 @@ router.post("/", async (req, res, next) => {
 
     console.log("REGISTER OK:", user.id);
 
-    res.status(201).json({
+    return res.status(201).json({
       id:        user.id,
       phone:     user.phone,
       email:     user.email,
@@ -119,7 +119,7 @@ router.post("/", async (req, res, next) => {
     if (err?.code === "23505") {
       return res.status(409).json({ error: true, message: "Ce numéro est déjà enregistré" });
     }
-    next(err);
+    return next(err);
   }
 });
 
@@ -136,7 +136,7 @@ router.post("/login", async (req, res) => {
       return res.status(401).json({ error: true, message: "Invalid credentials" });
     }
     const session = await createSession(user.id, "wallet");
-    res.json({
+    return res.json({
       token: session.token,
       expiresAt: session.expiresAt,
       user: {
@@ -149,7 +149,7 @@ router.post("/login", async (req, res) => {
       },
     });
   } catch (err) {
-    res.status(500).json({ error: true, message: "Login failed" });
+    return res.status(500).json({ error: true, message: "Login failed" });
   }
 });
 
@@ -159,8 +159,7 @@ router.get("/:userId", async (req, res, next) => {
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
 
     if (!user) {
-      res.status(404).json({ error: true, message: "User not found" });
-      return;
+      return res.status(404).json({ error: true, message: "User not found" });
     }
 
     const [[walletData], [txData], [tontineData]] = await Promise.all([
@@ -172,7 +171,7 @@ router.get("/:userId", async (req, res, next) => {
       db.select({ count: count() }).from(tontineMembersTable).where(eq(tontineMembersTable.userId, userId)),
     ]);
 
-    res.json({
+    return res.json({
       id: user.id,
       phone: user.phone,
       email: user.email,
@@ -189,7 +188,7 @@ router.get("/:userId", async (req, res, next) => {
       tontineCount: Number(tontineData.count),
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -207,7 +206,7 @@ router.get("/:userId/kyc", async (req, res, next) => {
       .limit(10);
 
     const latest = records[0] ?? null;
-    res.json({
+    return res.json({
       record: latest ? {
         id: latest.id,
         kycLevel: latest.kycLevel,
@@ -224,7 +223,7 @@ router.get("/:userId/kyc", async (req, res, next) => {
         id: r.id, kycLevel: r.kycLevel, status: r.status, submittedAt: r.submittedAt,
       })),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── KYC: POST submit new KYC application ──────────────────────────────────────
@@ -240,8 +239,7 @@ router.post("/:userId/kyc", async (req, res, next) => {
     } = req.body;
 
     if (!kycLevel || !documentType || !fullName || !dateOfBirth || !documentNumber) {
-      res.status(400).json({ error: true, message: "Missing required fields" });
-      return;
+      return res.status(400).json({ error: true, message: "Missing required fields" });
     }
 
     const [record] = await db.insert(kycRecordsTable).values({
@@ -259,8 +257,8 @@ router.post("/:userId/kyc", async (req, res, next) => {
       status:         "pending",
     }).returning();
 
-    res.status(201).json({ success: true, record: { id: record.id, status: record.status, kycLevel: record.kycLevel } });
-  } catch (err) { next(err); }
+    return res.status(201).json({ success: true, record: { id: record.id, status: record.status, kycLevel: record.kycLevel } });
+  } catch (err) { return next(err); }
 });
 
 // ── Avatar: PATCH update user avatar ──────────────────────────────────────────
@@ -277,8 +275,8 @@ router.patch("/:userId/avatar", async (req, res, next) => {
       .set({ avatarUrl: avatarBase64, updatedAt: new Date() })
       .where(eq(usersTable.id, req.params.userId));
 
-    res.json({ success: true });
-  } catch (err) { next(err); }
+    return res.json({ success: true });
+  } catch (err) { return next(err); }
 });
 
 // ── PIN: PATCH update user PIN ───────────────────────────────────────────────
@@ -286,12 +284,10 @@ router.patch("/:userId/pin", async (req, res, next) => {
   try {
     const auth = await requireAuth(req.headers.authorization);
     if (!auth) {
-      res.status(401).json({ error: true, message: "Unauthorized" });
-      return;
+      return res.status(401).json({ error: true, message: "Unauthorized" });
     }
     if (auth.userId !== req.params.userId) {
-      res.status(403).json({ error: true, message: "Forbidden" });
-      return;
+      return res.status(403).json({ error: true, message: "Forbidden" });
     }
 
     const { oldPin, newPin } = req.body ?? {};
@@ -299,24 +295,20 @@ router.patch("/:userId/pin", async (req, res, next) => {
     const newPinStr = String(newPin ?? "");
 
     if (!/^\d{4}$/.test(oldPinStr) || !/^\d{4}$/.test(newPinStr)) {
-      res.status(400).json({ error: true, message: "Ancien et nouveau PIN (4 chiffres) requis" });
-      return;
+      return res.status(400).json({ error: true, message: "Ancien et nouveau PIN (4 chiffres) requis" });
     }
     if (oldPinStr === newPinStr) {
-      res.status(400).json({ error: true, message: "Le nouveau PIN doit être différent" });
-      return;
+      return res.status(400).json({ error: true, message: "Le nouveau PIN doit être différent" });
     }
 
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.params.userId)).limit(1);
     if (!user) {
-      res.status(404).json({ error: true, message: "Utilisateur introuvable" });
-      return;
+      return res.status(404).json({ error: true, message: "Utilisateur introuvable" });
     }
 
     const oldHash = createHash("sha256").update(oldPinStr).digest("hex");
     if ((user as any).pinHash !== oldHash) {
-      res.status(401).json({ error: true, message: "Ancien PIN incorrect" });
-      return;
+      return res.status(401).json({ error: true, message: "Ancien PIN incorrect" });
     }
 
     const newHash = createHash("sha256").update(newPinStr).digest("hex");
@@ -325,9 +317,9 @@ router.patch("/:userId/pin", async (req, res, next) => {
       .set({ pinHash: newHash, updatedAt: new Date() })
       .where(eq(usersTable.id, req.params.userId));
 
-    res.json({ success: true, message: "PIN mis à jour" });
+    return res.json({ success: true, message: "PIN mis à jour" });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 

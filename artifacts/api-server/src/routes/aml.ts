@@ -10,9 +10,9 @@ router.get("/flags", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit ?? 20), 100);
     const flags = await db.select().from(amlFlagsTable).orderBy(desc(amlFlagsTable.createdAt)).limit(limit);
-    res.json({ flags, total: flags.length });
+    return res.json({ flags, total: flags.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch AML flags" });
+    return res.status(500).json({ error: "Failed to fetch AML flags" });
   }
 });
 
@@ -23,9 +23,9 @@ router.get("/flags/:walletId", async (req, res) => {
       .where(eq(amlFlagsTable.walletId, req.params.walletId))
       .orderBy(desc(amlFlagsTable.createdAt))
       .limit(50);
-    res.json({ flags, total: flags.length });
+    return res.json({ flags, total: flags.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch AML flags" });
+    return res.status(500).json({ error: "Failed to fetch AML flags" });
   }
 });
 
@@ -40,7 +40,7 @@ router.post("/check", async (req, res) => {
       return res.status(400).json({ error: "amount must be a positive number" });
     }
     const results = await runAmlChecks(walletId, transactionId, numAmount, currency);
-    res.json({
+    return res.json({
       checked:  true,
       flagged:  results.length > 0,
       flags:    results,
@@ -48,7 +48,7 @@ router.post("/check", async (req, res) => {
       transactionId,
     });
   } catch (err) {
-    res.status(500).json({ error: "AML check failed" });
+    return res.status(500).json({ error: "AML check failed" });
   }
 });
 
@@ -56,9 +56,9 @@ router.get("/cases", async (req, res) => {
   try {
     const limit = Math.min(Number(req.query.limit ?? 20), 100);
     const cases = await db.select().from(complianceCasesTable).orderBy(desc(complianceCasesTable.createdAt)).limit(limit);
-    res.json({ cases, total: cases.length });
+    return res.json({ cases, total: cases.length });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch compliance cases" });
+    return res.status(500).json({ error: "Failed to fetch compliance cases" });
   }
 });
 
@@ -69,9 +69,9 @@ router.patch("/cases/:id/resolve", async (req, res) => {
       .where(eq(complianceCasesTable.id, req.params.id))
       .returning();
     if (!updated) return res.status(404).json({ error: "Case not found" });
-    res.json(updated);
+    return res.json(updated);
   } catch (err) {
-    res.status(500).json({ error: "Failed to resolve case" });
+    return res.status(500).json({ error: "Failed to resolve case" });
   }
 });
 
@@ -88,14 +88,14 @@ router.get("/stats", async (req, res) => {
       cnt: sql<number>`count(*)`,
     }).from(amlFlagsTable).groupBy(amlFlagsTable.severity);
 
-    res.json({
+    return res.json({
       totalFlags:  Number(flagCount.cnt),
       totalCases:  Number(caseCount.cnt),
       openCases:   Number(openCases.cnt),
       bySeverity:  Object.fromEntries(bySeverity.map((r) => [r.severity, Number(r.cnt)])),
     });
   } catch (err) {
-    res.status(500).json({ error: "Failed to fetch AML stats" });
+    return res.status(500).json({ error: "Failed to fetch AML stats" });
   }
 });
 

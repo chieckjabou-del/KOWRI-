@@ -35,7 +35,7 @@ router.get("/kyc", async (req, res) => {
       db.select({ total: count() }).from(kycRecordsTable).where(where),
     ]);
 
-    res.json({
+    return res.json({
       records: records.map(r => ({
         id: r.id,
         userId: r.userId,
@@ -50,7 +50,7 @@ router.get("/kyc", async (req, res) => {
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    res.status(500).json({ error: "Internal server error", message: String(err) });
+    return res.status(500).json({ error: "Internal server error", message: String(err) });
   }
 });
 

@@ -104,7 +104,8 @@ export async function sendRemittance(params: {
   let amountReceived = params.amount;
   if (params.fromCurrency !== params.toCurrency) {
     try {
-      amountReceived = await convertAmount(params.amount, params.fromCurrency, params.toCurrency);
+      const { convertedAmount } = await convertAmount(params.amount, params.fromCurrency, params.toCurrency);
+      amountReceived = convertedAmount;
     } catch {
       amountReceived = params.amount;
     }

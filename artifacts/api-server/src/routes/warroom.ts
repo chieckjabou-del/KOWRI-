@@ -44,7 +44,7 @@ router.get("/status", async (_req, res, next) => {
         .where(sql`created_at > NOW() - INTERVAL '15 seconds'`),
     ]);
 
-    res.json({
+    return res.json({
       strategyMode:    getStrategyMode(),
       batchSize:       getBatchSize(),
       killSwitches:    getAllSwitches(),
@@ -59,7 +59,7 @@ router.get("/status", async (_req, res, next) => {
       activeCooldowns: getCooldownState(),
       updatedAt:       new Date().toISOString(),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── /warroom/metrics ──────────────────────────────────────────────────────────
@@ -89,8 +89,8 @@ router.get("/metrics", async (_req, res, next) => {
 
     for (const key of TRACKED_KEYS) series[key].reverse();
 
-    res.json({ series, fetchedAt: new Date().toISOString() });
-  } catch (err) { next(err); }
+    return res.json({ series, fetchedAt: new Date().toISOString() });
+  } catch (err) { return next(err); }
 });
 
 // ── /warroom/incidents ────────────────────────────────────────────────────────
@@ -112,14 +112,14 @@ router.get("/incidents", async (req, res, next) => {
       byType[inc.type] = (byType[inc.type] ?? 0) + 1;
     }
 
-    res.json({
+    return res.json({
       incidents,
       total:    Number(total),
       shown:    incidents.length,
       byType,
       fetchedAt: new Date().toISOString(),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── /warroom/live ─────────────────────────────────────────────────────────────
@@ -387,7 +387,7 @@ router.get("/live", async (_req, res, next) => {
       uptimeSinceLastManualIntervention,
     };
 
-    res.json({
+    return res.json({
       batchSize:       getBatchSize(),
       mode:            getStrategyMode(),
       confidenceMap,
@@ -404,7 +404,7 @@ router.get("/live", async (_req, res, next) => {
       agentNetwork:    agentNetworkData,
       updatedAt: new Date().toISOString(),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── /warroom/snapshot ─────────────────────────────────────────────────────────
@@ -475,13 +475,13 @@ router.get("/snapshot", async (req, res, next) => {
       })(),
     ]);
 
-    res.json({
+    return res.json({
       status:    statusData,
       metrics:   metricsData,
       incidents: incidentData,
       fetchedAt: new Date().toISOString(),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── /warroom/impact ───────────────────────────────────────────────────────────
@@ -501,10 +501,8 @@ router.get("/impact", async (_req, res, next) => {
         .then(rows => Number(rows[0]?.count ?? 0)),
     ]);
 
-    const switches = getAllSwitches() as Record<string, { state: string; updatedAt?: string }>;
-    const forcedOff = Object.entries(switches)
-      .filter(([, s]) => s.state === "FORCED_OFF")
-      .map(([name]) => name);
+    const switches = getAllSwitches();
+    const forcedOff = switches.filter((s) => s.state === "FORCED_OFF").map((s) => s.name);
 
     // Rough lower-bound: each auto-recovery prevented at least one full batch
     // worth of transactions from being blocked for the recovery window.
@@ -515,7 +513,7 @@ router.get("/impact", async (_req, res, next) => {
         ? "No manual interventions active — all switches are operator-clear"
         : `${forcedOff.length} switch(es) currently FORCED_OFF (manual lift required): ${forcedOff.join(", ")}`;
 
-    res.json({
+    return res.json({
       incidentsAutoResolved:              autoResolved,
       manualInterventionsRequired:        forcedOff.length,
       forcedOffSwitches:                  forcedOff,
@@ -524,7 +522,7 @@ router.get("/impact", async (_req, res, next) => {
       totalKillSwitchFireEvents:          totalFired,
       fetchedAt:                          new Date().toISOString(),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 export default router;

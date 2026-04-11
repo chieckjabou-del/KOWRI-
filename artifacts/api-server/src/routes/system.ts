@@ -30,7 +30,7 @@ router.get("/metrics", async (req, res, next) => {
 
     const metrics = getMetrics();
 
-    res.json({
+    return res.json({
       ...metrics,
       persistence: {
         totalEventsLogged: Number(totalEvents),
@@ -45,7 +45,7 @@ router.get("/metrics", async (req, res, next) => {
       stateMachine: STATE_MACHINE_DIAGRAM,
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -60,12 +60,12 @@ router.get("/events", async (req, res, next) => {
       db.select({ total: count() }).from(eventLogTable),
     ]);
 
-    res.json({
+    return res.json({
       events,
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -80,12 +80,12 @@ router.get("/audit", async (req, res, next) => {
       db.select({ total: count() }).from(auditLogsTable),
     ]);
 
-    res.json({
+    return res.json({
       logs,
       pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
     });
   } catch (err) {
-    next(err);
+    return next(err);
   }
 });
 
@@ -127,7 +127,7 @@ router.get("/health", async (_req, res, next) => {
 
     const status = dbLatencyMs < 500 && ledgerIntact ? "healthy" : "degraded";
 
-    res.json({
+    return res.json({
       status,
       timestamp: new Date().toISOString(),
       latencyMs: Date.now() - healthStart,
@@ -162,15 +162,15 @@ router.get("/health", async (_req, res, next) => {
         },
       },
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/replica/status", (_req, res) => {
-  res.json({ ...getReplicaStats(), stickyStore: getStickyStoreStats() });
+  return res.json({ ...getReplicaStats(), stickyStore: getStickyStoreStats() });
 });
 
 router.get("/sticky/advisor", (_req, res) => {
-  res.json(getAdvisorStats());
+  return res.json(getAdvisorStats());
 });
 
 router.get("/outbox/status", async (req, res, next) => {
@@ -182,7 +182,7 @@ router.get("/outbox/status", async (req, res, next) => {
 
     const ready = stats.pending === 0 && stats.dead === 0;
 
-    res.json({
+    return res.json({
       phase,
       ready,
       outbox: stats,
@@ -193,7 +193,7 @@ router.get("/outbox/status", async (req, res, next) => {
         ...(stats.pending > 50 ? [`outbox backlog ${stats.pending} — worker may be stalled`]     : []),
       ],
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 // ── Snapshot — batches all 4 war-room endpoints into one round-trip ───────────
@@ -233,14 +233,14 @@ router.get("/snapshot", async (_req, res, next) => {
       Promise.resolve(getAdvisorStats()),
     ]);
 
-    res.json({
+    return res.json({
       health:  health,
       outbox:  { outbox: outboxStats },
       replica: replicaStats,
       advisor: advisorStats,
       fetchedAt: new Date().toISOString(),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 router.get("/tracing", async (req, res, next) => {
@@ -252,7 +252,7 @@ router.get("/tracing", async (req, res, next) => {
     const [traceCount]  = await db.select({ cnt: count() }).from(serviceTracesTable);
     const [mqCount]     = await db.select({ cnt: count() }).from(messageQueueTable);
 
-    res.json({
+    return res.json({
       ...graph,
       services:     SERVICES,
       tracingMode:  "distributed",
@@ -260,7 +260,7 @@ router.get("/tracing", async (req, res, next) => {
       messageQueue: { ...mqStats, totalMessages: Number(mqCount.cnt) },
       totalTraces:  Number(traceCount.cnt),
     });
-  } catch (err) { next(err); }
+  } catch (err) { return next(err); }
 });
 
 export default router;

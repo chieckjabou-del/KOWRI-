@@ -30,11 +30,11 @@ export async function archiveLedger(
   const archiveRows = rows.map((tx) => ({
     id:               generateId(),
     originalTxId:     tx.id,
-    walletId:         tx.walletId,
+    walletId:         tx.toWalletId ?? tx.fromWalletId ?? "unknown",
     type:             tx.type,
     amount:           tx.amount,
     currency:         tx.currency,
-    balanceAfter:     tx.balanceAfter,
+    balanceAfter:     null as string | null,
     archiveYear:      Number(tx.createdAt.getFullYear()),
     archivedAt:       new Date(),
     originalCreatedAt: tx.createdAt,
