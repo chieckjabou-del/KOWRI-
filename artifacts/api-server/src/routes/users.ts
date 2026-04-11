@@ -281,4 +281,54 @@ router.patch("/:userId/avatar", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ── PIN: PATCH update user PIN ───────────────────────────────────────────────
+router.patch("/:userId/pin", async (req, res, next) => {
+  try {
+    const auth = await requireAuth(req.headers.authorization);
+    if (!auth) {
+      res.status(401).json({ error: true, message: "Unauthorized" });
+      return;
+    }
+    if (auth.userId !== req.params.userId) {
+      res.status(403).json({ error: true, message: "Forbidden" });
+      return;
+    }
+
+    const { oldPin, newPin } = req.body ?? {};
+    const oldPinStr = String(oldPin ?? "");
+    const newPinStr = String(newPin ?? "");
+
+    if (!/^\d{4}$/.test(oldPinStr) || !/^\d{4}$/.test(newPinStr)) {
+      res.status(400).json({ error: true, message: "Ancien et nouveau PIN (4 chiffres) requis" });
+      return;
+    }
+    if (oldPinStr === newPinStr) {
+      res.status(400).json({ error: true, message: "Le nouveau PIN doit être différent" });
+      return;
+    }
+
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.params.userId)).limit(1);
+    if (!user) {
+      res.status(404).json({ error: true, message: "Utilisateur introuvable" });
+      return;
+    }
+
+    const oldHash = createHash("sha256").update(oldPinStr).digest("hex");
+    if ((user as any).pinHash !== oldHash) {
+      res.status(401).json({ error: true, message: "Ancien PIN incorrect" });
+      return;
+    }
+
+    const newHash = createHash("sha256").update(newPinStr).digest("hex");
+    await db
+      .update(usersTable)
+      .set({ pinHash: newHash, updatedAt: new Date() })
+      .where(eq(usersTable.id, req.params.userId));
+
+    res.json({ success: true, message: "PIN mis à jour" });
+  } catch (err) {
+    next(err);
+  }
+});
+
 export default router;

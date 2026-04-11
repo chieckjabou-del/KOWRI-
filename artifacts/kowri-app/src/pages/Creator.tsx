@@ -173,7 +173,8 @@ export default function Creator() {
     },
   });
 
-  const communities: any[] = communitiesQ.data?.communities ?? [];
+  const communitiesSource = communitiesQ.data?.communities;
+  const communities: any[] = Array.isArray(communitiesSource) ? communitiesSource : [];
   const dashboard = dashboardQ.data;
 
   return (

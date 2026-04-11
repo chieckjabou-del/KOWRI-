@@ -162,7 +162,8 @@ export default function CreatorDetail({ params }: { params?: { id?: string } }) 
   });
 
   const community = communityQ.data;
-  const pools: any[] = poolsQ.data?.pools ?? poolsQ.data ?? [];
+  const poolsSource = poolsQ.data?.pools ?? poolsQ.data;
+  const pools: any[] = Array.isArray(poolsSource) ? poolsSource : [];
   const isCreator = community?.creatorId === user?.id;
 
   const creatorFeeRate = Number(community?.creatorFeeRate ?? 0.05);
