@@ -22,7 +22,12 @@ const TYPE_COLORS: Record<string, string> = {
 
 /* ─── Smart insight card ──────────────────────────────────────────── */
 interface InsightProps {
-  emoji: string; title: string; subtitle: string; href: string; color: string;
+  id: string;
+  emoji: string;
+  title: string;
+  subtitle: string;
+  href: string;
+  color: string;
 }
 function InsightCard({ emoji, title, subtitle, href, color }: InsightProps) {
   return (
@@ -82,7 +87,6 @@ const DURATIONS = [
 const INPUT_CLS = "w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 text-sm focus:outline-none focus:border-[#1A6B32] transition-colors";
 
 export default function Dashboard() {
-  console.log("[Dashboard] render");
   const { token, user } = useAuth();
   const qc = useQueryClient();
 
@@ -137,6 +141,7 @@ export default function Dashboard() {
     const days  = activeTontine.nextPayoutAt
       ? Math.max(0, Math.round((new Date(activeTontine.nextPayoutAt).getTime() - Date.now()) / 86_400_000)) : null;
     insights.push({
+      id: `tontine-${activeTontine.id}`,
       emoji: "🤝",
       title: `Ta tontine est à ${pct}%`,
       subtitle: days != null ? `Prochain paiement dans ${days}j` : activeTontine.name,
@@ -152,6 +157,7 @@ export default function Dashboard() {
   if (matureSaving) {
     const days = Math.max(0, Math.round((new Date(matureSaving.maturityDate).getTime() - Date.now()) / 86_400_000));
     insights.push({
+      id: `savings-${matureSaving.id}`,
       emoji: "💰",
       title: "Ton épargne arrive à maturité",
       subtitle: days === 0 ? "Disponible aujourd'hui !" : `Dans ${days} jour${days > 1 ? "s" : ""}`,
@@ -162,6 +168,7 @@ export default function Dashboard() {
 
   if (insights.length === 0 && tontines.length === 0) {
     insights.push({
+      id: "onboarding-tontine",
       emoji: "🚀",
       title: "Lance ta première tontine",
       subtitle: "Crée ou rejoins une tontine et débloque le crédit",
@@ -246,8 +253,8 @@ export default function Dashboard() {
 
         {/* Smart insights — always rendered (CSS hidden when empty) to avoid insertBefore */}
         <section className="space-y-2" style={{ display: insights.length > 0 ? undefined : "none" }}>
-          {insights.slice(0, 2).map((ins, i) => (
-            <InsightCard key={i} {...ins} />
+          {insights.slice(0, 2).map((ins) => (
+            <InsightCard key={ins.id} {...ins} />
           ))}
         </section>
 

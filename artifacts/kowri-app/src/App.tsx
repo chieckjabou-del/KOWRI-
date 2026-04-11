@@ -68,17 +68,19 @@ function ProtectedRoute({ component: Component, params }: { component: React.Com
   const { isAuthenticated, isHydrating } = useAuth();
   return (
     <div id="kowri-protected">
-      {isHydrating ? (
-        <LoadingScreen message="Vérification de la session…" />
-      ) : !isAuthenticated ? (
-        <Redirect to="/login" />
-      ) : (
-        <ErrorBoundary>
-          <Suspense fallback={<PageSkeleton />}>
-            <Component params={params} />
-          </Suspense>
-        </ErrorBoundary>
-      )}
+      <div data-slot="protected-content">
+        {isHydrating ? (
+          <LoadingScreen message="Vérification de la session…" />
+        ) : !isAuthenticated ? (
+          <Redirect to="/login" />
+        ) : (
+          <ErrorBoundary>
+            <Suspense fallback={<PageSkeleton />}>
+              <Component params={params} />
+            </Suspense>
+          </ErrorBoundary>
+        )}
+      </div>
     </div>
   );
 }
@@ -117,11 +119,11 @@ function AppRouter() {
 
   return (
     <div id="kowri-root">
-      {isHydrating ? (
-        <LoadingScreen message="Démarrage de KOWRI…" />
-      ) : (
-        <>
-          <AuthGate />
+      <AuthGate />
+      <div data-slot="router-content">
+        {isHydrating ? (
+          <LoadingScreen message="Démarrage de KOWRI…" />
+        ) : (
           <Switch>
         {/* Public routes — each with its own isolated Suspense */}
         <Route path="/login">
@@ -200,8 +202,8 @@ function AppRouter() {
           {() => <PublicPage Page={NotFound} />}
         </Route>
           </Switch>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }

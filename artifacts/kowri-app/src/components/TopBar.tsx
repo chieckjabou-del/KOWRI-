@@ -14,7 +14,9 @@ interface TopBarProps {
 export function TopBar({ title, showBack, onBack }: TopBarProps) {
   const { user, token } = useAuth();
   const [, setLocation] = useLocation();
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isOnline, setIsOnline] = useState(() =>
+    typeof navigator !== "undefined" ? navigator.onLine : true
+  );
   const [justReconnected, setJustReconnected] = useState(false);
 
   useEffect(() => {
