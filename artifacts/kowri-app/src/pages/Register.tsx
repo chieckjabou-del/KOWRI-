@@ -127,14 +127,14 @@ export default function Register() {
           >
             <ChevronLeft size={22} className="text-gray-700" />
           </button>
-          <Link href="/login" style={{ display: step === 0 ? "contents" : "none" }}>
-            <button
-              className="p-2 rounded-full hover:bg-gray-100"
-              aria-hidden={step > 0}
-              tabIndex={step === 0 ? 0 : -1}
-            >
-              <ChevronLeft size={22} className="text-gray-700" />
-            </button>
+          <Link
+            href="/login"
+            className="p-2 rounded-full hover:bg-gray-100"
+            style={{ display: step === 0 ? "flex" : "none" }}
+            aria-hidden={step > 0}
+            tabIndex={step === 0 ? 0 : -1}
+          >
+            <ChevronLeft size={22} className="text-gray-700" />
           </Link>
 
           <div className="flex-1">

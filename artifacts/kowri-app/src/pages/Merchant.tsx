@@ -274,9 +274,9 @@ export default function Merchant() {
 
         {/* Back to diaspora */}
         <Link href="/diaspora">
-          <button className="flex items-center gap-1.5 text-sm font-medium mb-1" style={{ color: "#1A6B32" }}>
+          <span className="inline-flex items-center gap-1.5 text-sm font-medium mb-1" style={{ color: "#1A6B32" }}>
             <ChevronLeft size={16} /> Retour Diaspora
-          </button>
+          </span>
         </Link>
 
         {merchantsQ.isLoading ? (
