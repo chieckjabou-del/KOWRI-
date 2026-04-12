@@ -21,7 +21,7 @@ export type FeeType =
   | "bid_fee"
   | "fx_margin_fee";
 
-type RevenueSource = "fees" | "bids" | "penalties" | "fx" | "subscription";
+type RevenueSource = "fees" | "bids" | "penalties" | "fx" | "loan_interest" | "subscription";
 
 const PREMIUM_FEE_DISCOUNT_BPS = 2000; // 20%
 const FX_MARGIN_BPS_DEFAULT = 150; // 1.5%
@@ -336,7 +336,7 @@ export async function applyOperationFee(params: {
       currency: params.currency ?? "XOF",
       userId: params.userId ?? null,
       reference: params.reference ?? null,
-      metadata: params.metadata ?? null,
+      metadata: params.metadata,
     });
   }
   return { feeAmount, netAmount, rateBps };

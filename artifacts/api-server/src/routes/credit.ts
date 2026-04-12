@@ -195,10 +195,10 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
               .set({ status: "disbursed" as any, disbursedAt: new Date() })
               .where(eq(loansTable.id, ctx.loanId));
             await trackRevenue({
-              source: "loan_interest",
+              source: "fees",
               amount: Number(ctx.amount) * (Number(ctx.interestRate) / 100),
               currency: ctx.currency,
-              feature: "credit",
+              feature: "loan_interest",
               userId: ctx.userId,
               metadata: { loanId: ctx.loanId, interestRate: Number(ctx.interestRate) },
             });
