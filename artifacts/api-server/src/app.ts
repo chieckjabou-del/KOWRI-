@@ -8,11 +8,19 @@ import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { stickyPrimaryRequest, stickyPrimaryResponse } from "./middleware/stickyPrimary";
 import { paymentRouter } from "./lib/paymentRouter";
 import { seedConnectors } from "./lib/connectors";
+import { apiRateLimit } from "./middleware/apiRateLimit";
 import "./services/index";
 
 const app: Express = express();
 
-app.use(cors());
+const allowedOrigins = (process.env.CORS_ORIGINS ?? "")
+  .split(",")
+  .map((v) => v.trim())
+  .filter(Boolean);
+
+app.use(cors({
+  origin: allowedOrigins.length > 0 ? allowedOrigins : true,
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -29,7 +37,8 @@ app.get("/api/health", (_req, res) => {
   return res.json({ service: "kowri-backend", status: "running" });
 });
 
-app.get("/api/debug-build", async (req, res) => {
+if (process.env.NODE_ENV !== "production") {
+  app.get("/api/debug-build", async (req, res) => {
   const fs   = await import("fs");
   const path = await import("path");
   const cwd  = process.cwd();
@@ -51,8 +60,10 @@ app.get("/api/debug-build", async (req, res) => {
     artifacts:     rootContents,
     kowriAppDist:  distContents,
   });
-});
+  });
+}
 
+app.use("/api", apiRateLimit);
 app.use("/api", router);
 
 app.use(notFoundHandler);

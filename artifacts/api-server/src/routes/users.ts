@@ -3,9 +3,9 @@ import { db } from "@workspace/db";
 import { usersTable, walletsTable, tontineMembersTable, transactionsTable, kycRecordsTable } from "@workspace/db";
 import { eq, count, sql, desc } from "drizzle-orm";
 import { generateId } from "../lib/id";
-import { createHash } from "crypto";
 import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
 import { createSession, requireAuth } from "../lib/productAuth";
+import { hashPin, isValidPin, normalizePhone, verifyPin } from "../lib/password";
 
 const router = Router();
 
@@ -28,6 +28,11 @@ router.get("/me", async (req, res) => {
 
 router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req, res, next) => {
   try {
+    const auth = await requireAuth(req.headers.authorization);
+    if (!auth) {
+      return res.status(401).json({ error: true, message: "Unauthorized" });
+    }
+
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
     const status = req.query.status as string | undefined;
@@ -71,21 +76,22 @@ router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req
 
 router.post("/", async (req, res, next) => {
   try {
-    console.log("REGISTER INPUT:", { phone: req.body?.phone, firstName: req.body?.firstName, hasPin: !!req.body?.pin });
-
     const { phone, email, firstName, lastName, country, pin } = req.body ?? {};
 
     if (!phone || !firstName || !pin) {
       return res.status(400).json({ error: "Bad request", message: "Téléphone, prénom et PIN sont requis" });
     }
+    if (!isValidPin(String(pin))) {
+      return res.status(400).json({ error: true, message: "Le PIN doit contenir 4 chiffres" });
+    }
 
     const id       = generateId();
-    const pinHash  = createHash("sha256").update(String(pin)).digest("hex");
+    const pinHash  = await hashPin(String(pin));
 
     // DB schema: last_name and country are NOT NULL — use empty string when not provided
     const [user] = await db.insert(usersTable).values({
       id,
-      phone:     String(phone).replace(/\s/g, ""),
+      phone:     normalizePhone(String(phone)),
       email:     email    ? String(email)   : null,
       firstName: String(firstName).trim(),
       lastName:  lastName ? String(lastName).trim() : "",
@@ -101,8 +107,6 @@ router.post("/", async (req, res, next) => {
       userId: user.id,
     }).onConflictDoNothing();
 
-    console.log("REGISTER OK:", user.id);
-
     return res.status(201).json({
       id:        user.id,
       phone:     user.phone,
@@ -115,7 +119,6 @@ router.post("/", async (req, res, next) => {
       createdAt: user.createdAt,
     });
   } catch (err: any) {
-    console.error("REGISTER ERROR:", err?.message, err?.code, err?.detail);
     if (err?.code === "23505") {
       return res.status(409).json({ error: true, message: "Ce numéro est déjà enregistré" });
     }
@@ -129,10 +132,10 @@ router.post("/login", async (req, res) => {
     return res.status(400).json({ error: true, message: "phone and pin required" });
   }
   try {
-    const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, normalizePhone(phone))).limit(1);
     if (!user) return res.status(401).json({ error: true, message: "Invalid credentials" });
-    const pinHash = createHash("sha256").update(String(pin)).digest("hex");
-    if ((user as any).pinHash !== pinHash) {
+    const pinOk = await verifyPin(String(pin), user.pinHash as unknown as string);
+    if (!pinOk) {
       return res.status(401).json({ error: true, message: "Invalid credentials" });
     }
     const session = await createSession(user.id, "wallet");
@@ -155,6 +158,14 @@ router.post("/login", async (req, res) => {
 
 router.get("/:userId", async (req, res, next) => {
   try {
+    const auth = await requireAuth(req.headers.authorization);
+    if (!auth) {
+      return res.status(401).json({ error: true, message: "Unauthorized" });
+    }
+    if (auth.userId !== req.params.userId) {
+      return res.status(403).json({ error: true, message: "Forbidden" });
+    }
+
     const { userId } = req.params;
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
 
@@ -197,6 +208,10 @@ router.get("/:userId/kyc", async (req, res, next) => {
   try {
     const auth = await requireAuth(req.headers.authorization);
     if (!auth) { res.status(401).json({ error: true, message: "Unauthorized" }); return; }
+    if (auth.userId !== req.params.userId) {
+      res.status(403).json({ error: true, message: "Forbidden" });
+      return;
+    }
 
     const records = await db
       .select()
@@ -231,6 +246,10 @@ router.post("/:userId/kyc", async (req, res, next) => {
   try {
     const auth = await requireAuth(req.headers.authorization);
     if (!auth) { res.status(401).json({ error: true, message: "Unauthorized" }); return; }
+    if (auth.userId !== req.params.userId) {
+      res.status(403).json({ error: true, message: "Forbidden" });
+      return;
+    }
 
     const {
       kycLevel, documentType, documentNumber,
@@ -266,6 +285,10 @@ router.patch("/:userId/avatar", async (req, res, next) => {
   try {
     const auth = await requireAuth(req.headers.authorization);
     if (!auth) { res.status(401).json({ error: true, message: "Unauthorized" }); return; }
+    if (auth.userId !== req.params.userId) {
+      res.status(403).json({ error: true, message: "Forbidden" });
+      return;
+    }
 
     const { avatarBase64 } = req.body;
     if (!avatarBase64) { res.status(400).json({ error: true, message: "avatarBase64 required" }); return; }
@@ -306,12 +329,12 @@ router.patch("/:userId/pin", async (req, res, next) => {
       return res.status(404).json({ error: true, message: "Utilisateur introuvable" });
     }
 
-    const oldHash = createHash("sha256").update(oldPinStr).digest("hex");
-    if ((user as any).pinHash !== oldHash) {
+    const oldPinOk = await verifyPin(oldPinStr, user.pinHash as unknown as string);
+    if (!oldPinOk) {
       return res.status(401).json({ error: true, message: "Ancien PIN incorrect" });
     }
 
-    const newHash = createHash("sha256").update(newPinStr).digest("hex");
+    const newHash = await hashPin(newPinStr);
     await db
       .update(usersTable)
       .set({ pinHash: newHash, updatedAt: new Date() })

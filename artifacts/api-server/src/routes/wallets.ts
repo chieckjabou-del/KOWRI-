@@ -5,6 +5,7 @@ import { eq, sql, count } from "drizzle-orm";
 import { generateId, generateReference } from "../lib/id";
 import { getWalletBalance } from "../lib/walletService";
 import { processDeposit, processTransfer } from "../lib/walletService";
+import { applyOperationFee } from "../lib/monetizationService";
 import { validatePagination, validateQueryParams, VALID_CURRENCIES } from "../middleware/validate";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
@@ -12,12 +13,14 @@ import { audit } from "../lib/auditLogger";
 import { requireAuth } from "../lib/productAuth";
 
 const router = Router();
+const authFromReq = (req: any): { userId: string } => req.auth;
 
 router.use(async (req, res, next) => {
   const auth = await requireAuth(req.headers.authorization);
   if (!auth) {
     return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
+  (req as any).auth = auth;
   return next();
 });
 
@@ -30,7 +33,12 @@ router.get(
       const page = Number(req.query.page) || 1;
       const limit = Number(req.query.limit) || 20;
       const offset = (page - 1) * limit;
-      const userId = req.query.userId as string | undefined;
+      const authUserId = (req as any).auth?.userId as string;
+      const requestedUserId = req.query.userId as string | undefined;
+      if (requestedUserId && requestedUserId !== authUserId) {
+        return res.status(403).json({ error: true, message: "Forbidden" });
+      }
+      const userId = requestedUserId ?? authUserId;
       const currency = req.query.currency as string | undefined;
 
       const conditions: any[] = [];
@@ -63,9 +71,13 @@ router.get(
 
 router.post("/", async (req, res, next) => {
   try {
+    const authUserId = (req as any).auth?.userId as string;
     const { userId, currency, walletType } = req.body;
     if (!userId || !currency || !walletType) {
       return res.status(400).json({ error: true, message: "Missing required fields: userId, currency, walletType" });
+    }
+    if (userId !== authUserId) {
+      return res.status(403).json({ error: true, message: "Forbidden" });
     }
     if (!VALID_CURRENCIES.has(currency)) {
       return res.status(400).json({ error: true, message: `Invalid currency. Must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
@@ -84,9 +96,13 @@ router.post("/", async (req, res, next) => {
 
 router.get("/:walletId", async (req, res, next) => {
   try {
+    const authUserId = (req as any).auth?.userId as string;
     const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, req.params.walletId));
     if (!wallet) {
       return res.status(404).json({ error: true, message: "Wallet not found" });
+    }
+    if (wallet.userId !== authUserId) {
+      return res.status(403).json({ error: true, message: "Forbidden" });
     }
     const derivedBalance = await getWalletBalance(req.params.walletId);
     return res.json({ ...wallet, balance: derivedBalance, availableBalance: derivedBalance, balanceSource: "ledger" });
@@ -101,6 +117,7 @@ router.post(
   checkIdempotency,
   async (req, res, next) => {
     try {
+      const authUserId = (req as any).auth?.userId as string;
       const walletId = routeParamString(req, "walletId")!;
       const { amount, currency, reference, description } = req.body;
 
@@ -114,6 +131,9 @@ router.post(
       const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, walletId));
       if (!wallet) {
         return res.status(404).json({ error: true, message: "Wallet not found" });
+      }
+      if (wallet.userId !== authUserId) {
+        return res.status(403).json({ error: true, message: "Forbidden" });
       }
 
       const tx = await processDeposit({
@@ -143,6 +163,7 @@ router.post(
   checkIdempotency,
   async (req, res, next) => {
     try {
+      const authUserId = (req as any).auth?.userId as string;
       const walletId = routeParamString(req, "walletId")!;
       const { toWalletId, amount, currency, description, reference } = req.body;
 
@@ -155,6 +176,13 @@ router.post(
       if (walletId === toWalletId) {
         return res.status(400).json({ error: true, message: "Source and destination wallets must be different" });
       }
+      const [sourceWallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, walletId));
+      if (!sourceWallet) {
+        return res.status(404).json({ error: true, message: "Source wallet not found" });
+      }
+      if (sourceWallet.userId !== authUserId) {
+        return res.status(403).json({ error: true, message: "Forbidden" });
+      }
 
       const tx = await processTransfer({
         fromWalletId: walletId,
@@ -164,6 +192,16 @@ router.post(
         description,
         reference,
         idempotencyKey: req.idempotencyKey,
+      });
+
+      await applyOperationFee({
+        operationType: "merchant_payment",
+        amount: Number(amount),
+        currency,
+        userId: authUserId,
+        feature: "wallet_transfer",
+        reference: tx.id,
+        metadata: { fromWalletId: walletId, toWalletId },
       });
 
       const body = { ...tx, amount: Number(tx.amount) };

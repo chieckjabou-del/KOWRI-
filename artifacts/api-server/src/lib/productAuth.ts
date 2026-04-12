@@ -1,9 +1,8 @@
 import { db } from "@workspace/db";
 import {
   productSessionsTable,
-  usersTable,
 } from "@workspace/db";
-import { eq, and, gt } from "drizzle-orm";
+import { eq, and, gt, or } from "drizzle-orm";
 import { randomBytes, createHash } from "crypto";
 import { generateId } from "./id";
 
@@ -21,6 +20,7 @@ export async function createSession(
   opts: { deviceId?: string; ipAddress?: string; ttlHours?: number } = {}
 ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
   const token      = generateToken();
+  const tokenHash  = hashToken(token);
   const sessionId  = generateId("sess");
   const ttl        = opts.ttlHours ?? 24;
   const expiresAt  = new Date(Date.now() + ttl * 3600_000);
@@ -28,7 +28,7 @@ export async function createSession(
   await db.insert(productSessionsTable).values({
     id:        sessionId,
     userId,
-    token,
+    token: tokenHash,
     type,
     deviceId:  opts.deviceId,
     ipAddress: opts.ipAddress,
@@ -45,14 +45,32 @@ export async function validateSession(token: string): Promise<{
   sessionId?: string;
   type?: string;
 }> {
+  const tokenHash = hashToken(token);
   const now = new Date();
-  const rows = await db.select()
+  let rows = await db.select()
     .from(productSessionsTable)
     .where(and(
-      eq(productSessionsTable.token, token),
+      eq(productSessionsTable.token, tokenHash),
       gt(productSessionsTable.expiresAt, now),
     ))
     .limit(1);
+
+  // Backward compatibility: legacy rows may still store plaintext token.
+  if (!rows[0]) {
+    rows = await db.select()
+      .from(productSessionsTable)
+      .where(and(
+        eq(productSessionsTable.token, token),
+        gt(productSessionsTable.expiresAt, now),
+      ))
+      .limit(1);
+
+    if (rows[0]) {
+      await db.update(productSessionsTable)
+        .set({ token: tokenHash, lastUsedAt: new Date() })
+        .where(eq(productSessionsTable.id, rows[0].id));
+    }
+  }
 
   if (!rows[0]) return { valid: false };
 
@@ -64,8 +82,12 @@ export async function validateSession(token: string): Promise<{
 }
 
 export async function revokeSession(token: string): Promise<boolean> {
+  const tokenHash = hashToken(token);
   const result = await db.delete(productSessionsTable)
-    .where(eq(productSessionsTable.token, token));
+    .where(or(
+      eq(productSessionsTable.token, tokenHash),
+      eq(productSessionsTable.token, token),
+    ));
   return true;
 }
 

@@ -11,6 +11,7 @@ import {
 } from "../lib/diasporaService";
 import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import { listFxTransactions } from "../lib/monetizationService";
 
 const router = Router();
 
@@ -142,6 +143,20 @@ router.post("/send", requireIdempotencyKey, checkIdempotency, async (req, res, n
     return res.status(201).json({ success: true, ...result });
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
+  }
+});
+
+router.get("/fx-transactions", async (req, res, next) => {
+  try {
+    const { fromCurrency, toCurrency, limit } = req.query;
+    const rows = await listFxTransactions({
+      fromCurrency: fromCurrency ? String(fromCurrency) : undefined,
+      toCurrency: toCurrency ? String(toCurrency) : undefined,
+      limit: Number(limit ?? 100),
+    });
+    return res.json({ fxTransactions: rows, count: rows.length });
+  } catch (err) {
+    return next(err);
   }
 });
 

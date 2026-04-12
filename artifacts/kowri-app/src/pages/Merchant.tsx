@@ -176,10 +176,14 @@ function QRSection({ merchantId, businessName }: { merchantId: string; businessN
   }
 
   function copyLink() {
-    navigator.clipboard.writeText(shareLink).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    void navigator.clipboard.writeText(shareLink)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => {
+        setCopied(false);
+      });
   }
 
   return (
@@ -273,10 +277,8 @@ export default function Merchant() {
       <main className="px-4 pt-4 pb-6 max-w-lg mx-auto space-y-4">
 
         {/* Back to diaspora */}
-        <Link href="/diaspora">
-          <button className="flex items-center gap-1.5 text-sm font-medium mb-1" style={{ color: "#1A6B32" }}>
-            <ChevronLeft size={16} /> Retour Diaspora
-          </button>
+        <Link href="/diaspora" className="inline-flex items-center gap-1.5 text-sm font-medium mb-1" style={{ color: "#1A6B32" }}>
+          <ChevronLeft size={16} /> Retour Diaspora
         </Link>
 
         {merchantsQ.isLoading ? (

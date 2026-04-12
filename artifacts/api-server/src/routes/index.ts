@@ -43,6 +43,7 @@ import notificationsRouter     from "./notifications";
 import agentsRouter            from "./agents";
 import supportRouter           from "./support";
 import authRouter              from "./auth";
+import tontineCoreRouter       from "./tontineCore";
 
 const router: IRouter = Router();
 
@@ -90,5 +91,6 @@ router.use("/notifications",       notificationsRouter);
 router.use("/agents",              agentsRouter);
 router.use("/support",             supportRouter);
 router.use("/auth",                authRouter);
+router.use("/core/tontine",        tontineCoreRouter);
 
 export default router;

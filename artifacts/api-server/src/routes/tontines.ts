@@ -4,6 +4,8 @@ import { tontinesTable, tontineMembersTable, usersTable } from "@workspace/db";
 import { eq, sql, count, and, or, inArray } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/productAuth";
+import { assignCorePositions, createCoreTontine, joinCoreTontine } from "../lib/tontineCoreService";
+import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
 
@@ -85,6 +87,7 @@ router.use(async (req, res, next) => {
   if (!auth) {
     return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
   }
+  (req as any).auth = auth;
   return next();
 });
 
@@ -132,35 +135,29 @@ router.post("/", async (req, res, next) => {
       return res.status(400).json({ error: true, message: `Invalid tontine_type. Must be one of: ${[...VALID_TONTINE_TYPES].join(", ")}` });
     }
 
-    const [tontine] = await db.insert(tontinesTable).values({
-      id:                 generateId(),
-      name,
-      description:        description        || null,
-      contributionAmount: String(contributionAmount),
-      currency,
-      frequency,
-      maxMembers:         Number(maxMembers),
-      memberCount:        1,
-      currentRound:       0,
-      totalRounds:        Number(maxMembers),
-      status:             "pending",
-      tontineType:        (tontine_type      || "classic") as any,
-      isPublic:           is_public          !== undefined ? Boolean(is_public)          : true,
-      isMultiAmount:      is_multi_amount    !== undefined ? Boolean(is_multi_amount)    : false,
-      goalDescription:    goal_description   || null,
-      goalAmount:         goal_amount        ? String(goal_amount)   : null,
-      merchantId:         merchant_id        || null,
-      adminUserId,
-    }).returning();
-
-    await db.insert(tontineMembersTable).values({
-      id: generateId(),
-      tontineId:         tontine.id,
-      userId:            adminUserId,
-      payoutOrder:       1,
-      hasReceivedPayout: 0,
-      contributionsCount: 0,
+    const authUserId = (req as any).auth?.userId as string | undefined;
+    if (authUserId && authUserId !== String(adminUserId)) {
+      return res.status(403).json({ error: true, message: "adminUserId must match authenticated user" });
+    }
+    const tontine = await createCoreTontine({
+      name: String(name),
+      contributionAmount: Number(contributionAmount),
+      currency: String(currency),
+      frequency: frequency as "weekly" | "biweekly" | "monthly",
+      maxMembers: Number(maxMembers),
+      adminUserId: String(adminUserId),
+      description: description ? String(description) : undefined,
     });
+    if (tontine_type || is_public !== undefined || is_multi_amount !== undefined || goal_description || goal_amount || merchant_id) {
+      await db.update(tontinesTable).set({
+        tontineType:        (tontine_type      || "classic") as any,
+        isPublic:           is_public          !== undefined ? Boolean(is_public)          : true,
+        isMultiAmount:      is_multi_amount    !== undefined ? Boolean(is_multi_amount)    : false,
+        goalDescription:    goal_description   || null,
+        goalAmount:         goal_amount        ? String(goal_amount)   : null,
+        merchantId:         merchant_id        || null,
+      }).where(eq(tontinesTable.id, tontine.id));
+    }
 
     return res.status(201).json({
       ...tontine,
@@ -213,6 +210,37 @@ router.get("/:tontineId", async (req, res, next) => {
       })),
       totalContributed,
     });
+  } catch (err) { return next(err); }
+});
+
+router.post("/:tontineId/join", async (req, res, next) => {
+  try {
+    const tontineId = routeParamString(req, "tontineId")!;
+    const userId = String(req.body?.userId ?? "");
+    if (!userId) return res.status(400).json({ error: true, message: "userId required" });
+    const authUserId = (req as any).auth?.userId as string | undefined;
+    if (authUserId && authUserId !== userId) {
+      return res.status(403).json({ error: true, message: "userId must match authenticated user" });
+    }
+    const member = await joinCoreTontine(tontineId, userId);
+    return res.status(201).json(member);
+  } catch (err: any) {
+    return res.status(400).json({ error: true, message: err?.message ?? "join failed" });
+  }
+});
+
+router.post("/:tontineId/assign-positions", async (req, res, next) => {
+  try {
+    const auth = await requireAuth(req.headers.authorization);
+    if (!auth) return res.status(401).json({ error: true, message: "Unauthorized" });
+    const tontineId = req.params.tontineId;
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (tontine.adminUserId !== auth.userId) {
+      return res.status(403).json({ error: true, message: "Only admin can assign positions" });
+    }
+    await assignCorePositions(tontineId);
+    return res.json({ success: true });
   } catch (err) { return next(err); }
 });
 

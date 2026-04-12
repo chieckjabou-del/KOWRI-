@@ -11,6 +11,7 @@ import { computeCreditScoreFromActivity } from "../lib/reputationEngine";
 import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
+import { getRatingContext, trackRevenue } from "../lib/monetizationService";
 
 const router = Router();
 
@@ -112,6 +113,11 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       return res.status(400).json({ error: true, message: "Missing required fields: userId, walletId, amount, currency, termDays" });
     }
 
+    const ratingCtx = await getRatingContext(userId);
+    if (!ratingCtx.eligible) {
+      return res.status(403).json({ error: true, message: "User rating below minimum threshold for credit eligibility" });
+    }
+
     const [creditScore] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, userId));
     if (!creditScore) {
       return res.status(400).json({ error: true, message: "No credit score found. Build your credit history first." });
@@ -188,6 +194,14 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
             await db.update(loansTable)
               .set({ status: "disbursed" as any, disbursedAt: new Date() })
               .where(eq(loansTable.id, ctx.loanId));
+            await trackRevenue({
+              source: "fees",
+              amount: Number(ctx.amount) * (Number(ctx.interestRate) / 100),
+              currency: ctx.currency,
+              feature: "loan_interest",
+              userId: ctx.userId,
+              metadata: { loanId: ctx.loanId, interestRate: Number(ctx.interestRate) },
+            });
             return { ...ctx, disbursed: true };
           },
           compensate: async (ctx) => {
