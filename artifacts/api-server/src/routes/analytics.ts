@@ -4,9 +4,11 @@ import {
   usersTable, walletsTable, transactionsTable, tontinesTable,
   loansTable, merchantsTable, ledgerEntriesTable, ledgerShardsTable,
   ledgerArchiveTable, amlFlagsTable, complianceCasesTable,
+  revenueLogsTable,
 } from "@workspace/db";
 import { eq, sql, count, sum } from "drizzle-orm";
 import { generateId } from "../lib/id";
+import { getRevenueSnapshot } from "../lib/monetizationService";
 
 const router = Router();
 
@@ -247,6 +249,32 @@ router.get("/aml/summary", async (_req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ error: "AML summary failed" });
+  }
+});
+
+router.get("/revenue", async (req, res) => {
+  try {
+    const period = String(req.query.period ?? "30d");
+    const days = period === "7d" ? 7 : period === "90d" ? 90 : 30;
+    const snapshot = await getRevenueSnapshot({ days });
+    const totalRevenue = snapshot.dailyRevenue.reduce((acc, p) => acc + Number(p.amount), 0);
+    const currentMonthKey = new Date().toISOString().slice(0, 7);
+    const monthlyRevenue = [{ month: currentMonthKey, amount: Number(snapshot.monthlyRevenue.toFixed(4)) }];
+    const revenuePerFeature = snapshot.revenueBySource
+      .map((x) => ({ source: x.source, amount: Number(x.amount.toFixed(4)) }))
+      .sort((a, b) => b.amount - a.amount);
+
+    return res.json({
+      period,
+      totalRevenue: Number(totalRevenue.toFixed(4)),
+      currency: "XOF",
+      dailyRevenue: snapshot.dailyRevenue.map((x) => ({ date: x.day, amount: Number(x.amount.toFixed(4)) })),
+      monthlyRevenue,
+      revenuePerFeature,
+      entries: snapshot.dailyRevenue.length,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: "Internal server error", message: String(err) });
   }
 });
 

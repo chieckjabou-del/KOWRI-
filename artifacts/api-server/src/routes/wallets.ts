@@ -5,6 +5,7 @@ import { eq, sql, count } from "drizzle-orm";
 import { generateId, generateReference } from "../lib/id";
 import { getWalletBalance } from "../lib/walletService";
 import { processDeposit, processTransfer } from "../lib/walletService";
+import { applyOperationFee } from "../lib/monetizationService";
 import { validatePagination, validateQueryParams, VALID_CURRENCIES } from "../middleware/validate";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
@@ -191,6 +192,16 @@ router.post(
         description,
         reference,
         idempotencyKey: req.idempotencyKey,
+      });
+
+      await applyOperationFee({
+        operationType: "merchant_payment",
+        amount: Number(amount),
+        currency,
+        userId: authUserId,
+        feature: "wallet_transfer",
+        reference: tx.id,
+        metadata: { fromWalletId: walletId, toWalletId },
       });
 
       const body = { ...tx, amount: Number(tx.amount) };

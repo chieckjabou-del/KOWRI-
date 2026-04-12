@@ -13,6 +13,13 @@ import { and, eq, sql } from "drizzle-orm";
 import { generateId, generateReference } from "./id";
 import { computeReputationScore } from "./reputationEngine";
 import { processTransfer } from "./walletService";
+import {
+  applyOperationFee,
+  holdFloatOperation,
+  releaseFloatOperation,
+  trackRevenue,
+  updateUserReliabilityScore,
+} from "./monetizationService";
 
 const DEFAULT_PENALTY_RATE = 0.1;
 const MIN_RELIABILITY_TO_JOIN = 35;
@@ -66,6 +73,12 @@ async function getOrCreateCycle(tontineId: string, roundNumber: number): Promise
 function isUniqueViolation(err: unknown): boolean {
   const code = (err as { code?: string } | null | undefined)?.code;
   return code === "23505";
+}
+
+function mapPaymentDelta(status: "completed" | "late" | "defaulted"): number {
+  if (status === "completed") return 10;
+  if (status === "late") return -20;
+  return -50;
 }
 
 async function updateRiskScoresAfterDefault(userId: string): Promise<void> {
@@ -263,6 +276,15 @@ export async function collectMemberPayment(input: {
   if (!fromWallet) throw new Error("Wallet membre introuvable");
 
   const reference = generateReference();
+  const floatOp = await holdFloatOperation("tontine", cycle.id, totalToPay);
+  if (floatOp) {
+    await db.update(tontineCyclesTable).set({
+      metadata: {
+        ...((cycle.metadata as Record<string, unknown> | null) ?? {}),
+        floatOperationId: floatOp.id,
+      },
+    }).where(eq(tontineCyclesTable.id, cycle.id));
+  }
   const tx = await processTransfer({
     fromWalletId: fromWallet.id,
     toWalletId: tontine.walletId,
@@ -338,6 +360,8 @@ export async function collectMemberPayment(input: {
     const [updatedPayment] = await trx.select().from(tontinePaymentsTable).where(eq(tontinePaymentsTable.id, paymentId));
     return [updatedPayment];
   });
+
+  await updateUserReliabilityScore(input.userId, mapPaymentDelta(isLate ? "late" : "completed"));
 
   return { payment, penaltyApplied: penalty };
 }
@@ -455,12 +479,26 @@ export async function finalizeCoreCycleAndPayout(tontineId: string): Promise<{
   if (amount <= 0) throw new Error("Pool collecté vide");
 
   const payoutReference = `TONTINE-PAYOUT-${freshCycle.id}`;
+  await releaseFloatOperation(freshCycle.id, {
+    releasedAmount: amount,
+    metadata: {
+      tontineId,
+      cycleId: freshCycle.id,
+      payoutUserId: recipient.userId,
+    },
+  });
+  const payoutFee = await applyOperationFee({
+    operationType: "tontine_payout",
+    amount,
+    currency: tontine.currency,
+    metadata: { tontineId, cycleId: freshCycle.id, userId: recipient.userId },
+  });
   let tx: Awaited<ReturnType<typeof processTransfer>>;
   try {
     tx = await processTransfer({
       fromWalletId: tontine.walletId,
       toWalletId: toWallet.id,
-      amount,
+      amount: amount - payoutFee.feeAmount,
       currency: tontine.currency,
       description: `Tontine payout round ${roundNumber}`,
       reference: payoutReference,
@@ -560,6 +598,16 @@ export async function applyCorePenaltySettlement(input: {
       resolutionReason: input.reason ?? null,
     },
   }).where(eq(tontinePenaltiesTable.id, penalty.id)).returning();
+
+  if (input.settle) {
+    await trackRevenue({
+      source: "penalties",
+      feature: "tontine_penalty",
+      amount: Number(updated.amount),
+      currency: updated.currency,
+      metadata: { penaltyId: updated.id, userId: updated.userId, tontineId: updated.tontineId },
+    });
+  }
 
   return updated;
 }

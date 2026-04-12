@@ -16,6 +16,7 @@ export const usersTable = pgTable("users", {
   kycLevel: integer("kyc_level").notNull().default(0),
   country: text("country").notNull(),
   pinHash: text("pin_hash").notNull(),
+  ratingScore: integer("rating_score").notNull().default(100),
   creditScore: integer("credit_score"),
   isActive: boolean("is_active").notNull().default(true),
   avatarUrl: text("avatar_url"),

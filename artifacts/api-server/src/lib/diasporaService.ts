@@ -9,6 +9,7 @@ import { processTransfer } from "./walletService";
 import { convertAmount } from "./fxEngine";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
+import { trackFxFeeRevenue } from "./monetizationService";
 
 const SEED_CORRIDORS = [
   { fromCountry: "FR", toCountry: "SN", fromCurrency: "EUR", toCurrency: "XOF", processorId: "wise_global",    flatFee: "500",    percentFee: "0.5", estimatedMins: 30  },
@@ -122,6 +123,21 @@ export async function sendRemittance(params: {
 
   await audit({ action: "remittance.sent", entity: "transaction", entityId: tx.id,
     metadata: { senderUserId: params.senderUserId, beneficiaryId: params.beneficiaryId, amount: params.amount, fee } });
+  if (fee > 0) {
+    await trackFxFeeRevenue({
+      userId: params.senderUserId,
+      fromCurrency: params.fromCurrency,
+      toCurrency: params.toCurrency,
+      rate: params.fromCurrency === params.toCurrency ? 1 : Number(amountReceived) / Number(params.amount || 1),
+      amount: Number(params.amount),
+      fee,
+      txId: tx.id,
+      metadata: {
+        corridorId: corridor?.id ?? null,
+        beneficiaryId: params.beneficiaryId,
+      },
+    });
+  }
   await eventBus.publish("remittance.sent", {
     txId: tx.id, senderUserId: params.senderUserId, beneficiaryId: params.beneficiaryId,
     amountSent: params.amount, amountReceived, fee,

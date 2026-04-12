@@ -17,6 +17,7 @@ import {
   listPositionForSale, buyTontinePosition, computeNextDate, createSchedulerJob,
 } from "../lib/tontineScheduler";
 import { computeReputationScore, getReputationScore, computeTontineAIPriority } from "../lib/reputationEngine";
+import { applyBidFeeAndLogRevenue } from "../lib/monetizationService";
 import { requireAuth } from "../lib/productAuth";
 import { routeParamString } from "../lib/routeParams";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
@@ -225,15 +226,53 @@ router.post("/tontines/:tontineId/bids", async (req, res, next) => {
 
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (tontine.status !== "pending" && tontine.status !== "active") {
+      return res.status(400).json({ error: true, message: "Tontine not open for bidding" });
+    }
+    const bidNum = Number(bidAmount);
+    if (!Number.isFinite(bidNum) || bidNum <= 0) {
+      return res.status(400).json({ error: true, message: "bidAmount must be > 0" });
+    }
+    const [member] = await db.select().from(tontineMembersTable).where(and(
+      eq(tontineMembersTable.tontineId, tontineId),
+      eq(tontineMembersTable.userId, userId),
+    ));
+    if (!member) {
+      return res.status(403).json({ error: true, message: "Only tontine members can bid" });
+    }
+    const [userWallet] = await db.select().from(walletsTable).where(and(
+      eq(walletsTable.userId, userId),
+      eq(walletsTable.status, "active"),
+    ));
+    if (!userWallet) {
+      return res.status(400).json({ error: true, message: "User wallet not found" });
+    }
+    const [poolWallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, tontine.walletId!));
+    if (!poolWallet) {
+      return res.status(400).json({ error: true, message: "Tontine pool wallet not found" });
+    }
+    const bidFee = await applyBidFeeAndLogRevenue({
+      fromWalletId: userWallet.id,
+      tontineWalletId: poolWallet.id,
+      bidAmount: bidNum,
+      currency: tontine.currency,
+      userId,
+      tontineId,
+    });
 
     const [bid] = await db.insert(tontineBidsTable).values({
       id: generateId(), tontineId, userId,
-      bidAmount: String(bidAmount),
+      bidAmount: String(bidNum),
       desiredPosition: desiredPosition ?? 1,
       roundNumber: tontine.currentRound + 1,
+      status: "pending",
     }).returning();
 
-    return res.status(201).json({ ...bid, bidAmount: Number(bid.bidAmount) });
+    return res.status(201).json({
+      ...bid,
+      bidAmount: Number(bid.bidAmount),
+      feeCharged: bidFee,
+    });
   } catch (err) { return next(err); }
 });
 
