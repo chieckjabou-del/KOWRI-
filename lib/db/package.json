@@ -3,9 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
-    "./schema": "./src/schema/index.ts"
+    ".": "./dist/index.js",
+    "./schema": "./dist/schema/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
