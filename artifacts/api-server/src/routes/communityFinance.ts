@@ -157,7 +157,7 @@ router.post("/tontines/:tontineId/collect", requireIdempotencyKey, checkIdempote
     const tontineId = routeParamString(req, "tontineId")!;
     const result = await runContributionCycle(tontineId);
     const body = { success: true, ...result };
-    await req.saveIdempotentResponse?.(body);
+    await req.saveIdempotentResponse?.(body, 200);
     return res.json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
@@ -169,7 +169,7 @@ router.post("/tontines/:tontineId/payout", requireIdempotencyKey, checkIdempoten
     const tontineId = routeParamString(req, "tontineId")!;
     const result = await runPayoutCycle(tontineId);
     const body = { success: true, ...result };
-    await req.saveIdempotentResponse?.(body);
+    await req.saveIdempotentResponse?.(body, 200);
     return res.json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });

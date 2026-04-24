@@ -5,7 +5,7 @@ import type { ReportType, ReportFormat } from "../lib/regulatoryReporting";
 const router = Router();
 
 const VALID_TYPES: ReportType[]   = ["suspicious_activity", "high_value_transactions", "daily_transaction_summary"];
-const VALID_FORMATS: ReportFormat[] = ["json", "csv"];
+const VALID_FORMATS: ReportFormat[] = ["json"];
 
 router.get("/reports", async (_req, res) => {
   try {
@@ -30,11 +30,6 @@ router.post("/reports/generate", async (req, res) => {
       periodEnd:   periodEnd   ? new Date(periodEnd)   : undefined,
     };
     const result = await generateReport(reportType as ReportType, format as ReportFormat, opts);
-    if (format === "csv" && result.content != null) {
-      res.setHeader("Content-Type", "text/csv");
-      res.setHeader("Content-Disposition", `attachment; filename="${reportType}-${Date.now()}.csv"`);
-      return res.send(result.content);
-    }
     return res.status(201).json({
       reportId:    result.reportId,
       reportType:  result.reportType,
@@ -59,21 +54,14 @@ router.get("/reports/:reportId", async (req, res) => {
 router.get("/reports/:reportId/export", async (req, res) => {
   const { format = "json" } = req.query;
   try {
+    if (format !== "json") {
+      return res.status(406).json({
+        error: true,
+        message: "Only JSON export is supported for /api routes",
+      });
+    }
     const entries = await getReportEntries(req.params.reportId);
     const data    = entries.map(e => e.data as Record<string, unknown>);
-    if (format === "csv") {
-      if (!data.length) return res.status(200).send("");
-      const headers = Object.keys(data[0]);
-      const csv     = [
-        headers.join(","),
-        ...data.map(row => headers.map(h => {
-          const v = row[h]; const s = v == null ? "" : String(v);
-          return s.includes(",") ? `"${s}"` : s;
-        }).join(",")),
-      ].join("\n");
-      res.setHeader("Content-Type", "text/csv");
-      return res.send(csv);
-    }
     return res.json({ reportId: req.params.reportId, format: "json", data, count: data.length });
   } catch (err) {
     return res.status(500).json({ error: "Export failed" });

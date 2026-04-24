@@ -9,6 +9,8 @@ const VALID_USER_STATUSES    = new Set(["active", "suspended", "pending_kyc"]);
 
 const XSS_PATTERN  = /<[^>]*>|javascript:|on\w+\s*=/i;
 const SQLI_PATTERN = /('|--|;|\/\*|\*\/|xp_|UNION\s+SELECT|DROP\s+TABLE|INSERT\s+INTO|DELETE\s+FROM)/i;
+const PHONE_PATTERN = /^\+?\d{8,15}$/;
+const PIN_PATTERN = /^\d{4}$/;
 
 function isMalicious(value: string): boolean {
   return XSS_PATTERN.test(value) || SQLI_PATTERN.test(value);
@@ -76,6 +78,53 @@ export const globalSanitizer = (req: Request, res: Response, next: NextFunction)
   }
   next();
 };
+
+export function normalizePhone(value: unknown): string | null {
+  const normalized = String(value ?? "")
+    .trim()
+    .replace(/[\s\-()]/g, "");
+
+  if (!PHONE_PATTERN.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+export function parsePin(value: unknown): string | null {
+  const pin = String(value ?? "").trim();
+  return PIN_PATTERN.test(pin) ? pin : null;
+}
+
+export function parsePositiveAmount(value: unknown): number | null {
+  const amount =
+    typeof value === "number"
+      ? value
+      : Number(String(value ?? "").trim());
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return null;
+  }
+
+  return amount;
+}
+
+export function parsePositiveInteger(
+  value: unknown,
+  options: { min?: number; max?: number } = {}
+): number | null {
+  const { min = 1, max = 100_000 } = options;
+  const parsed =
+    typeof value === "number"
+      ? value
+      : Number(String(value ?? "").trim());
+
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    return null;
+  }
+
+  return parsed;
+}
 
 export {
   VALID_CURRENCIES, VALID_WALLET_STATUSES, VALID_TX_STATUSES,

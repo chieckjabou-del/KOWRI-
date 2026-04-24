@@ -5,7 +5,12 @@ import { eq, sql, count } from "drizzle-orm";
 import { generateId, generateReference } from "../lib/id";
 import { getWalletBalance } from "../lib/walletService";
 import { processDeposit, processTransfer } from "../lib/walletService";
-import { validatePagination, validateQueryParams, VALID_CURRENCIES } from "../middleware/validate";
+import {
+  validatePagination,
+  validateQueryParams,
+  VALID_CURRENCIES,
+  parsePositiveAmount,
+} from "../middleware/validate";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
 import { audit } from "../lib/auditLogger";
@@ -103,8 +108,9 @@ router.post(
     try {
       const walletId = routeParamString(req, "walletId")!;
       const { amount, currency, reference, description } = req.body;
+      const parsedAmount = parsePositiveAmount(amount);
 
-      if (!amount || Number(amount) <= 0 || !currency) {
+      if (parsedAmount === null || !currency) {
         return res.status(400).json({ error: true, message: "Invalid deposit: amount (>0) and currency are required" });
       }
       if (!VALID_CURRENCIES.has(currency)) {
@@ -118,7 +124,7 @@ router.post(
 
       const tx = await processDeposit({
         walletId,
-        amount: Number(amount),
+        amount: parsedAmount,
         currency,
         reference: reference ?? generateReference(),
         description,
@@ -126,7 +132,7 @@ router.post(
       });
 
       const body = { ...tx, amount: Number(tx.amount) };
-      await req.saveIdempotentResponse?.(body);
+      await req.saveIdempotentResponse?.(body, 200);
       return res.json(body);
     } catch (err: any) {
       if (err.message === "Wallet not found") {
@@ -145,8 +151,9 @@ router.post(
     try {
       const walletId = routeParamString(req, "walletId")!;
       const { toWalletId, amount, currency, description, reference } = req.body;
+      const parsedAmount = parsePositiveAmount(amount);
 
-      if (!toWalletId || !amount || Number(amount) <= 0 || !currency) {
+      if (!toWalletId || parsedAmount === null || !currency) {
         return res.status(400).json({ error: true, message: "Invalid transfer: toWalletId, amount (>0), and currency are required" });
       }
       if (!VALID_CURRENCIES.has(currency)) {
@@ -159,7 +166,7 @@ router.post(
       const tx = await processTransfer({
         fromWalletId: walletId,
         toWalletId,
-        amount: Number(amount),
+        amount: parsedAmount,
         currency,
         description,
         reference,
@@ -167,7 +174,7 @@ router.post(
       });
 
       const body = { ...tx, amount: Number(tx.amount) };
-      await req.saveIdempotentResponse?.(body);
+      await req.saveIdempotentResponse?.(body, 200);
       return res.json(body);
     } catch (err: any) {
       if (err.message === "Insufficient funds") {

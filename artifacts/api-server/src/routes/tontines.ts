@@ -4,6 +4,11 @@ import { tontinesTable, tontineMembersTable, usersTable } from "@workspace/db";
 import { eq, sql, count, and, or, inArray } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/productAuth";
+import {
+  VALID_CURRENCIES,
+  parsePositiveAmount,
+  parsePositiveInteger,
+} from "../middleware/validate";
 
 const router = Router();
 
@@ -127,6 +132,21 @@ router.post("/", async (req, res, next) => {
     if (!name || !contributionAmount || !currency || !frequency || !maxMembers || !adminUserId) {
       return res.status(400).json({ error: true, message: "Missing required fields: name, contributionAmount, currency, frequency, maxMembers, adminUserId" });
     }
+    const parsedContribution = parsePositiveAmount(contributionAmount);
+    const parsedMaxMembers = parsePositiveInteger(maxMembers, { min: 2, max: 1000 });
+    const parsedGoalAmount = goal_amount == null ? null : parsePositiveAmount(goal_amount);
+    if (parsedContribution === null) {
+      return res.status(400).json({ error: true, message: "contributionAmount must be a positive number" });
+    }
+    if (parsedMaxMembers === null) {
+      return res.status(400).json({ error: true, message: "maxMembers must be an integer between 2 and 1000" });
+    }
+    if (!VALID_CURRENCIES.has(String(currency))) {
+      return res.status(400).json({ error: true, message: `Invalid currency. Must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
+    }
+    if (goal_amount != null && parsedGoalAmount === null) {
+      return res.status(400).json({ error: true, message: "goal_amount must be a positive number when provided" });
+    }
 
     if (tontine_type && !VALID_TONTINE_TYPES.has(tontine_type)) {
       return res.status(400).json({ error: true, message: `Invalid tontine_type. Must be one of: ${[...VALID_TONTINE_TYPES].join(", ")}` });
@@ -136,19 +156,19 @@ router.post("/", async (req, res, next) => {
       id:                 generateId(),
       name,
       description:        description        || null,
-      contributionAmount: String(contributionAmount),
+      contributionAmount: String(parsedContribution),
       currency,
       frequency,
-      maxMembers:         Number(maxMembers),
+      maxMembers:         parsedMaxMembers,
       memberCount:        1,
       currentRound:       0,
-      totalRounds:        Number(maxMembers),
+      totalRounds:        parsedMaxMembers,
       status:             "pending",
       tontineType:        (tontine_type      || "classic") as any,
       isPublic:           is_public          !== undefined ? Boolean(is_public)          : true,
       isMultiAmount:      is_multi_amount    !== undefined ? Boolean(is_multi_amount)    : false,
       goalDescription:    goal_description   || null,
-      goalAmount:         goal_amount        ? String(goal_amount)   : null,
+      goalAmount:         parsedGoalAmount === null ? null : String(parsedGoalAmount),
       merchantId:         merchant_id        || null,
       adminUserId,
     }).returning();
