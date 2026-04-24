@@ -2,12 +2,15 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { usersTable, walletsTable, tontineMembersTable, transactionsTable, kycRecordsTable } from "@workspace/db";
 import { eq, count, sql, desc } from "drizzle-orm";
+import type { InferSelectModel } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { createHash } from "crypto";
 import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
 import { createSession, requireAuth } from "../lib/productAuth";
 
 const router = Router();
+type UserRow = InferSelectModel<typeof usersTable>;
+type KycRow = InferSelectModel<typeof kycRecordsTable>;
 
 router.get("/me", async (req, res) => {
   const auth = await requireAuth(req.headers.authorization);
@@ -45,7 +48,7 @@ router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req
     ]);
 
     return res.json({
-      users: users.map(u => ({
+      users: users.map((u: UserRow) => ({
         id: u.id,
         phone: u.phone,
         email: u.email,
@@ -219,7 +222,7 @@ router.get("/:userId/kyc", async (req, res, next) => {
         submittedAt: latest.submittedAt,
         verifiedAt: latest.verifiedAt,
       } : null,
-      history: records.map(r => ({
+      history: records.map((r: KycRow) => ({
         id: r.id, kycLevel: r.kycLevel, status: r.status, submittedAt: r.submittedAt,
       })),
     });

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "NODE_ENV=development tsx ./src/index.ts",
     "build:frontends": "pnpm --filter @workspace/kowri-app run build && pnpm --filter @workspace/kowri-dashboard run build",
-    "build": "pnpm run build:frontends && tsx ./build.ts",
+    "build": "pnpm --filter @workspace/db run build && pnpm run build:frontends && tsx ./build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
