@@ -69,17 +69,10 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   const colorConfig = Object.entries(config).filter(
     ([, config]) => config.theme || config.color
   )
-
-  if (!colorConfig.length) {
-    return null
-  }
-
-  return (
-    <style
-      dangerouslySetInnerHTML={{
-        __html: Object.entries(THEMES)
-          .map(
-            ([theme, prefix]) => `
+  const cssVars = colorConfig.length
+    ? Object.entries(THEMES)
+        .map(
+          ([theme, prefix]) => `
 ${prefix} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
@@ -91,8 +84,14 @@ ${colorConfig
   .join("\n")}
 }
 `
-          )
-          .join("\n"),
+        )
+        .join("\n")
+    : ""
+
+  return (
+    <style
+      dangerouslySetInnerHTML={{
+        __html: cssVars,
       }}
     />
   )
@@ -293,7 +292,7 @@ const ChartLegendContent = React.forwardRef<
 
             return (
               <div
-                key={item.value}
+                key={String(item.dataKey ?? item.value)}
                 className={cn(
                   "flex items-center gap-1.5 [&>svg]:h-3 [&>svg]:w-3 [&>svg]:text-muted-foreground"
                 )}

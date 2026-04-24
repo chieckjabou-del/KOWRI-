@@ -117,7 +117,7 @@ export default function Login() {
 
         <p className="mt-6 text-center text-sm text-gray-500">
           Pas encore de compte ?{" "}
-          <a href="/app/register" className="font-semibold" style={{ color: "#1A6B32" }}>
+          <a href="/register" className="font-semibold" style={{ color: "#1A6B32" }}>
             Créer un compte
           </a>
         </p>

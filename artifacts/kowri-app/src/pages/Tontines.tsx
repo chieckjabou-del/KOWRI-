@@ -109,10 +109,12 @@ function MesTontines() {
         </div>
         <p className="font-semibold text-gray-900 mb-1">Aucune tontine</p>
         <p className="text-sm text-gray-500 mb-5">Rejoignez une tontine ou créez la vôtre</p>
-        <Link href="/tontines/create">
-          <button className="inline-flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-white text-sm" style={{ background: "#1A6B32", minHeight: 44 }}>
-            <Plus size={16} /> Nouvelle Tontine
-          </button>
+        <Link
+          href="/tontines/create"
+          className="inline-flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-white text-sm"
+          style={{ background: "#1A6B32", minHeight: 44 }}
+        >
+          <Plus size={16} /> Nouvelle Tontine
         </Link>
       </div>
     );
@@ -414,13 +416,12 @@ export default function Tontines() {
             <div>
               <div className="flex items-center justify-between mb-4">
                 <h1 className="text-xl font-bold text-gray-900">Mes Tontines</h1>
-                <Link href="/tontines/create">
-                  <button
-                    className="flex items-center gap-2 px-3 py-2 rounded-xl font-semibold text-white text-sm"
-                    style={{ background: "#1A6B32", minHeight: 40 }}
-                  >
-                    <Plus size={15} /> Créer
-                  </button>
+                <Link
+                  href="/tontines/create"
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl font-semibold text-white text-sm"
+                  style={{ background: "#1A6B32", minHeight: 40 }}
+                >
+                  <Plus size={15} /> Créer
                 </Link>
               </div>
               <MesTontines />

@@ -483,7 +483,7 @@ export default function Profile() {
             ) : (
               <div className="px-4 py-3 flex gap-3 overflow-x-auto hide-scrollbar">
                 {badges.map((b: any, i: number) => (
-                  <BadgeChip key={b.badge ?? i} badge={b} />
+                  <BadgeChip key={b.id ?? b.badgeId ?? `${b.badge ?? "badge"}-${i}`} badge={b} />
                 ))}
               </div>
             )}

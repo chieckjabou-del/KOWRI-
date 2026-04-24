@@ -34,7 +34,6 @@ export async function apiFetch<T = unknown>(
   if (res.status === 401) {
     let msg = "Session expirée. Reconnectez-vous.";
     try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
-    console.log("[AUTH] 401 intercepted →", path, "| firing unauthorizedHandler");
     _unauthorizedHandler?.();
     throw new ApiError(401, msg);
   }
