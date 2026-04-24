@@ -1,18 +1,27 @@
-import { Router, type IRouter } from "express";
-import { HealthCheckResponse } from "@workspace/api-zod";
+import { Router, type Request, type Response } from "express";
 
-const router: IRouter = Router();
+const router = Router();
 
-router.get("/healthz", (_req, res) => {
-  const data = HealthCheckResponse.parse({ status: "ok" });
-  return res.json(data);
+type HealthPayload = {
+  status: "ok";
+  service: "kowri-backend";
+  timestamp: string;
+};
+
+function buildHealthPayload(): HealthPayload {
+  return {
+    status: "ok",
+    service: "kowri-backend",
+    timestamp: new Date().toISOString(),
+  };
+}
+
+router.get("/healthz", (_req: Request, res: Response) => {
+  return res.status(200).json(buildHealthPayload());
 });
 
-router.get("/health", (_req, res) => {
-  return res.json({
-    service: "kowri-backend",
-    status: "running"
-  });
+router.get("/health", (_req: Request, res: Response) => {
+  return res.status(200).json(buildHealthPayload());
 });
 
 export default router;
