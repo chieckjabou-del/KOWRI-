@@ -18,6 +18,12 @@ interface WebhookPayload {
   data: Record<string, unknown>;
 }
 
+function extractHttpStatus(value: unknown): number | null {
+  if (!value || typeof value !== "object") return null;
+  const status = (value as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
+}
+
 function signPayload(payload: string, secret: string): string {
   return "sha256=" + createHmac("sha256", secret).update(payload).digest("hex");
 }
@@ -36,7 +42,7 @@ async function sendWebhook(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
 
-    const res = await fetch(url, {
+    const response = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -50,7 +56,8 @@ async function sendWebhook(
     });
 
     clearTimeout(timer);
-    console.log(`[Webhook] Delivered ${eventType} → ${url} (HTTP ${res.status})`);
+    const httpStatus = extractHttpStatus(response);
+    console.log(`[Webhook] Delivered ${eventType} → ${url} (HTTP ${httpStatus ?? "unknown"})`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     if (attempt < 3) {
