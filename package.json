@@ -5,7 +5,8 @@
   "license": "MIT",
   "scripts": {
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "build": "pnpm -r build",
+    "build": "pnpm --filter @workspace/api-server run build",
+    "start": "pnpm --filter @workspace/api-server run start",
     "build:api-server": "pnpm --filter @workspace/api-server run build",
     "start:api-server": "pnpm --filter @workspace/api-server run start",
     "railway-build": "pnpm run build:api-server",

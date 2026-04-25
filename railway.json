@@ -4,6 +4,6 @@
     "buildCommand": "pnpm run railway-build"
   },
   "deploy": {
-    "startCommand": "pnpm run start:api-server"
+    "startCommand": "pnpm run start"
   }
 }
