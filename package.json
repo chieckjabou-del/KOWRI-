@@ -1,1 +1,10 @@
-"packageManager": "pnpm@10.33.0"
+{
+  "name": "kowri",
+  "private": true,
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build:api-server": "pnpm --filter @workspace/api-server run build",
+    "railway-build": "pnpm run build:api-server",
+    "start:api-server": "node artifacts/api-server/dist/index.cjs"
+  }
+}
