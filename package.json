@@ -1,10 +1,25 @@
 {
-  "name": "kowri",
+  "name": "workspace",
+  "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
+    "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
+
+    "build": "pnpm -r build",
+    "typecheck:libs": "tsc --build",
+    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
+
     "build:api-server": "pnpm --filter @workspace/api-server run build",
     "railway-build": "pnpm run build:api-server",
     "start:api-server": "node artifacts/api-server/dist/index.cjs"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.2",
+    "prettier": "^3.8.1"
   }
 }
