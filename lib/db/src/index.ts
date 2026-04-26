@@ -4,19 +4,56 @@ import * as schema from "./schema";
 
 const { Pool } = pg;
 
-if (!process.env.DATABASE_URL) {
-  throw new Error(
-    "DATABASE_URL must be set. Did you forget to provision a database?",
-  );
+type DbInstance = ReturnType<typeof drizzle>;
+
+let cachedPool: pg.Pool | null = null;
+let cachedDb: DbInstance | null = null;
+
+function getRuntimeDatabaseUrl(): string {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    throw new Error(
+      "DATABASE_URL must be set at runtime before database access.",
+    );
+  }
+  return databaseUrl;
 }
 
-export const pool = new Pool({
-  connectionString:     process.env.DATABASE_URL,
-  max:                  25,
-  idleTimeoutMillis:    30_000,
-  connectionTimeoutMillis: 5_000,
+function getPool(): pg.Pool {
+  if (!cachedPool) {
+    cachedPool = new Pool({
+      connectionString: getRuntimeDatabaseUrl(),
+      max: 25,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+    });
+  }
+  return cachedPool;
+}
+
+function getDb(): DbInstance {
+  if (!cachedDb) {
+    cachedDb = drizzle(getPool(), { schema });
+  }
+  return cachedDb;
+}
+
+function bindProxyMember(instance: object, prop: PropertyKey) {
+  const value = Reflect.get(instance, prop);
+  return typeof value === "function" ? value.bind(instance) : value;
+}
+
+export const pool = new Proxy({} as pg.Pool, {
+  get(_target, prop) {
+    return bindProxyMember(getPool(), prop);
+  },
 });
-export const db = drizzle(pool, { schema });
+
+export const db = new Proxy({} as DbInstance, {
+  get(_target, prop) {
+    return bindProxyMember(getDb() as object, prop);
+  },
+});
 
 /**
  * Creates a second Drizzle client pointed at a replica (or any alternate URL).
