@@ -76,13 +76,16 @@ export async function processDeposit(params: {
   idempotencyKey?: string;
 }): Promise<typeof transactionsTable.$inferSelect> {
   const { walletId, amount, currency, reference, description, idempotencyKey } = params;
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid amount");
+  }
   const start = Date.now();
   const txId = generateId();
   const now = new Date();
 
   let newBalanceAfterDeposit: number | undefined;
 
-  await db.transaction(async (tx) => {
+  await withDeadlockRetry(() => db.transaction(async (tx) => {
     const lockResult = await tx.execute(
       sql`SELECT id FROM wallets WHERE id = ${walletId} FOR UPDATE`
     );
@@ -146,7 +149,7 @@ export async function processDeposit(params: {
       .update(transactionsTable)
       .set({ status: "completed", completedAt: now })
       .where(eq(transactionsTable.id, txId));
-  });
+  }));
 
   const [finalTx] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, txId));
   const newBalance = newBalanceAfterDeposit;
@@ -223,6 +226,9 @@ export async function processTransfer(params: {
   skipKycCheck?: boolean;
 }): Promise<typeof transactionsTable.$inferSelect> {
   const { fromWalletId, toWalletId, amount, currency, description, reference, idempotencyKey, skipRateLimitCheck, skipFraudCheck, skipKycCheck } = params;
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid amount");
+  }
   const start = Date.now();
 
   // ── INTERNAL TRANSFERS ARE ALWAYS FREE ────────────────────────────────────
@@ -246,7 +252,7 @@ export async function processTransfer(params: {
   const ref = reference ?? generateReference();
   const now = new Date();
 
-  await db.transaction(async (tx) => {
+  await withDeadlockRetry(() => db.transaction(async (tx) => {
     const lockResult = await tx.execute(
       sql`SELECT id FROM wallets WHERE id IN (${fromWalletId}, ${toWalletId}) ORDER BY id FOR UPDATE`
     );
@@ -324,7 +330,7 @@ export async function processTransfer(params: {
       .update(transactionsTable)
       .set({ status: "completed", completedAt: now })
       .where(eq(transactionsTable.id, txId));
-  });
+  }));
 
   const [finalTx] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, txId));
 
@@ -369,6 +375,9 @@ export async function processWithdrawal(params: {
   idempotencyKey?: string;
 }): Promise<{ transaction: typeof transactionsTable.$inferSelect; feeAmount: number; netAmount: number; rateBps: number }> {
   const { walletId, amount, currency, description, idempotencyKey, userTier = "bronze" } = params;
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error("Invalid amount");
+  }
   const start = Date.now();
 
   guard("outbound_transfers");
@@ -380,7 +389,7 @@ export async function processWithdrawal(params: {
   const ref  = params.reference ?? generateReference();
   const now  = new Date();
 
-  await db.transaction(async (tx) => {
+  await withDeadlockRetry(() => db.transaction(async (tx) => {
     const lockResult = await tx.execute(
       sql`SELECT id FROM wallets WHERE id = ${walletId} FOR UPDATE`
     );
@@ -473,7 +482,7 @@ export async function processWithdrawal(params: {
       .update(transactionsTable)
       .set({ status: "completed", completedAt: now })
       .where(eq(transactionsTable.id, txId));
-  });
+  }));
 
   const [finalTx] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, txId));
 

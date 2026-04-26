@@ -10,6 +10,11 @@ import {
 import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
+import {
+  VALID_CURRENCIES,
+  parsePositiveAmount,
+  parsePositiveInteger,
+} from "../middleware/validate";
 
 const router = Router();
 
@@ -51,8 +56,24 @@ router.get("/plans", async (req, res, next) => {
 router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { userId, walletId, name, amount, currency = "XOF", termDays, earlyBreakPenalty } = req.body;
-    if (!userId || !walletId || !name || !amount || !termDays) {
+    if (!userId || !walletId || !name || amount == null || termDays == null) {
       return res.status(400).json({ error: true, message: "userId, walletId, name, amount, termDays required" });
+    }
+    const parsedAmount = parsePositiveAmount(amount);
+    const parsedTermDays = parsePositiveInteger(termDays, { min: 1, max: 3650 });
+    const parsedEarlyBreakPenalty =
+      earlyBreakPenalty == null ? undefined : parsePositiveAmount(earlyBreakPenalty);
+    if (parsedAmount === null) {
+      return res.status(400).json({ error: true, message: "amount must be a positive number" });
+    }
+    if (parsedTermDays === null) {
+      return res.status(400).json({ error: true, message: "termDays must be an integer between 1 and 3650" });
+    }
+    if (!VALID_CURRENCIES.has(String(currency))) {
+      return res.status(400).json({ error: true, message: `currency must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
+    }
+    if (earlyBreakPenalty != null && parsedEarlyBreakPenalty === null) {
+      return res.status(400).json({ error: true, message: "earlyBreakPenalty must be a positive number when provided" });
     }
 
     const savingsWalletId = generateId();
@@ -65,9 +86,9 @@ router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, 
 
     const plan = await createSavingsPlan({
       userId, walletId, savingsWalletId,
-      name, amount: Number(amount), currency,
-      termDays: Number(termDays),
-      earlyBreakPenalty: earlyBreakPenalty ? Number(earlyBreakPenalty) : undefined,
+      name, amount: parsedAmount, currency,
+      termDays: parsedTermDays,
+      earlyBreakPenalty: parsedEarlyBreakPenalty ?? undefined,
     });
 
     const body = {
@@ -77,9 +98,9 @@ router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       accruedYield:      Number(plan.accruedYield),
       earlyBreakPenalty: Number(plan.earlyBreakPenalty),
       isMatured:         false,
-      daysRemaining:     Number(termDays),
+      daysRemaining:     parsedTermDays,
     };
-    await req.saveIdempotentResponse?.(body);
+    await req.saveIdempotentResponse?.(body, 201);
     return res.status(201).json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
@@ -109,7 +130,9 @@ router.post("/plans/:planId/accrue", requireIdempotencyKey, checkIdempotency, as
   try {
     const planId = routeParamString(req, "planId")!;
     const yieldAmount = await accrueYield(planId);
-    return res.json({ success: true, yieldAmount, message: `Accrued ${yieldAmount.toFixed(4)} yield` });
+    const body = { success: true, yieldAmount, message: `Accrued ${yieldAmount.toFixed(4)} yield` };
+    await req.saveIdempotentResponse?.(body, 200);
+    return res.json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
   }
@@ -123,14 +146,16 @@ router.post("/plans/:planId/break", requireIdempotencyKey, checkIdempotency, asy
     }
     const planId = routeParamString(req, "planId")!;
     const result = await matureSavingsPlan(planId, targetWalletId);
-    return res.json({
+    const body = {
       success: true,
       ...result,
       isEarlyBreak: result.penalty > 0,
       message: result.penalty > 0
         ? `Early break executed. Penalty: ${result.penalty.toFixed(2)}`
         : "Plan matured successfully",
-    });
+    };
+    await req.saveIdempotentResponse?.(body, 200);
+    return res.json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
   }
