@@ -157,11 +157,8 @@ importers:
 
   .:
     devDependencies:
-      prettier:
-        specifier: ^3.8.1
-        version: 3.8.3
       typescript:
-        specifier: ~5.9.2
+        specifier: ^5.9.3
         version: 5.9.3
 
   artifacts/api-server:
@@ -791,7 +788,7 @@ importers:
     devDependencies:
       orval:
         specifier: ^8.5.2
-        version: 8.8.1(prettier@3.8.3)(typescript@5.9.3)
+        version: 8.8.1(typescript@5.9.3)
 
   lib/api-zod:
     dependencies:
@@ -2803,11 +2800,6 @@ packages:
   postgres-interval@1.2.0:
     resolution: {integrity: sha512-9ZhXKM/rw350N1ovuWHbGxnGh/SNJ4cnxHiM0rxE4VN41wsg8P8zWn9hv/buK00RP4WvlOyr/RBDiptyxVbkZQ==}
     engines: {node: '>=0.10.0'}
-
-  prettier@3.8.3:
-    resolution: {integrity: sha512-7igPTM53cGHMW8xWuVTydi2KO233VFiTNyF5hLJqpilHfmn8C8gPf+PS7dUT64YcXFbiMGZxS9pCSxL/Dxm/Jw==}
-    engines: {node: '>=14'}
-    hasBin: true
 
   pretty-ms@9.3.0:
     resolution: {integrity: sha512-gjVS5hOP+M3wMm5nmNOucbIrqudzs9v/57bWRHQWLYklXqoXKrVfYW2W9+glfGsqtPgpiz5WwyEEB+ksXIx3gQ==}
@@ -5207,7 +5199,7 @@ snapshots:
     dependencies:
       wrappy: 1.0.2
 
-  orval@8.8.1(prettier@3.8.3)(typescript@5.9.3):
+  orval@8.8.1(typescript@5.9.3):
     dependencies:
       '@commander-js/extra-typings': 14.0.0(commander@14.0.3)
       '@orval/angular': 8.8.1(typescript@5.9.3)
@@ -5238,8 +5230,6 @@ snapshots:
       typedoc: 0.28.19(typescript@5.9.3)
       typedoc-plugin-coverage: 4.0.3(typedoc@0.28.19(typescript@5.9.3))
       typedoc-plugin-markdown: 4.11.0(typedoc@0.28.19(typescript@5.9.3))
-    optionalDependencies:
-      prettier: 3.8.3
     transitivePeerDependencies:
       - '@faker-js/faker'
       - supports-color
@@ -5326,8 +5316,6 @@ snapshots:
   postgres-interval@1.2.0:
     dependencies:
       xtend: 4.0.2
-
-  prettier@3.8.3: {}
 
   pretty-ms@9.3.0:
     dependencies:
