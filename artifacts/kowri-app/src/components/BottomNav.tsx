@@ -1,17 +1,18 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import {
-  Home, Users, Send, Globe, User,
+  Home, Users, Send, User,
   MoreHorizontal, BarChart3, Shield, Star, PiggyBank,
   TrendingUp, Store, ShieldCheck, X, MessageSquare,
+  Wallet,
 } from "lucide-react";
 
 const PRIMARY_TABS = [
-  { href: "/dashboard",  label: "Accueil",  Icon: Home  },
-  { href: "/tontines",   label: "Tontines", Icon: Users },
-  { href: "/send",       label: "Envoyer",  Icon: Send  },
-  { href: "/diaspora",   label: "Diaspora", Icon: Globe },
-  { href: "/profile",    label: "Profil",   Icon: User  },
+  { href: "/dashboard",  label: "Accueil",  Icon: Home   },
+  { href: "/wallet",     label: "Wallet",   Icon: Wallet },
+  { href: "/send",       label: "Envoyer",  Icon: Send   },
+  { href: "/tontine",    label: "Tontine",  Icon: Users  },
+  { href: "/profile",    label: "Profil",   Icon: User   },
 ];
 
 const MORE_ITEMS = [
@@ -27,7 +28,7 @@ const MORE_ITEMS = [
 
 const MORE_ACTIVE_PREFIXES = [
   "/invest", "/insurance", "/creator", "/merchant", "/agent", "/support",
-  "/credit", "/savings",
+  "/credit", "/savings", "/diaspora",
 ];
 
 export function BottomNav() {

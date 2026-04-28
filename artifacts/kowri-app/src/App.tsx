@@ -28,9 +28,13 @@ function PageSkeleton() {
 const Login         = lazy(() => import("@/pages/Login"));
 const Register      = lazy(() => import("@/pages/Register"));
 const Dashboard     = lazy(() => import("@/pages/Dashboard"));
+const DashboardHome = lazy(() => import("@/pages/DashboardHome"));
+const WalletHome    = lazy(() => import("@/pages/WalletHome"));
 const Tontines      = lazy(() => import("@/pages/Tontines"));
+const TontineHome   = lazy(() => import("@/pages/TontineHome"));
 const TontineCreate = lazy(() => import("@/pages/TontineCreate"));
 const TontineDetail = lazy(() => import("@/pages/TontineDetail"));
+const TontineDetailModern = lazy(() => import("@/pages/TontineDetailModern"));
 const Send          = lazy(() => import("@/pages/Send"));
 const Profile       = lazy(() => import("@/pages/Profile"));
 const Credit        = lazy(() => import("@/pages/Credit"));
@@ -135,6 +139,18 @@ function AppRouter() {
 
         {/* Protected routes — Suspense lives inside ProtectedRoute */}
         <Route path="/dashboard">
+          {() => <ProtectedRoute component={DashboardHome} />}
+        </Route>
+        <Route path="/wallet">
+          {() => <ProtectedRoute component={WalletHome} />}
+        </Route>
+        <Route path="/tontine/:id">
+          {(params) => <ProtectedRoute component={TontineDetailModern} params={params} />}
+        </Route>
+        <Route path="/tontine">
+          {() => <ProtectedRoute component={TontineHome} />}
+        </Route>
+        <Route path="/legacy/dashboard">
           {() => <ProtectedRoute component={Dashboard} />}
         </Route>
         <Route path="/tontines/create">
