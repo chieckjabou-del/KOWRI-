@@ -32,6 +32,7 @@ export default function TontineHome() {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [showExplorer, setShowExplorer] = useState(false);
+  const [showFlexibleInfo, setShowFlexibleInfo] = useState(false);
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("50000");
   const [maxMembers, setMaxMembers] = useState("10");

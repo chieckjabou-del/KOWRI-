@@ -225,11 +225,11 @@ export default function Creator() {
               <div className="grid grid-cols-3 gap-2 text-xs">
                 <div className="rounded-xl p-2.5 text-center" style={{ background: "#F0FDF4" }}>
                   <p className="text-gray-500">Membres</p>
-                  <p className="font-bold text-gray-900">{dashboard.stats.totalMembers ?? 0}</p>
+                  <p className="font-bold text-gray-900">{dashboard?.stats.totalMembers ?? 0}</p>
                 </div>
                 <div className="rounded-xl p-2.5 text-center" style={{ background: "#FFFBEB" }}>
                   <p className="text-gray-500">Gains</p>
-                  <p className="font-bold" style={{ color: "#D97706" }}>{formatXOF(dashboard.stats.totalEarnings ?? 0)}</p>
+                  <p className="font-bold" style={{ color: "#D97706" }}>{formatXOF(dashboard?.stats.totalEarnings ?? 0)}</p>
                 </div>
                 <div className="rounded-xl p-2.5 text-center" style={{ background: "#EFF6FF" }}>
                   <p className="text-gray-500">Commission</p>
