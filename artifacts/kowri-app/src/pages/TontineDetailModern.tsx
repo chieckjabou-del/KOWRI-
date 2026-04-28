@@ -89,6 +89,26 @@ export default function TontineDetailModern({ params }: Props) {
                     {nextReceiverLabel(tontine.nextReceiver?.userName)}
                   </p>
                 </div>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <MetricCard
+                    label="Type backend"
+                    value={tontine.tontineType}
+                  />
+                  <MetricCard
+                    label="Mode cotisation"
+                    value={tontine.members.some((member) => member.personalContribution != null) ? "Personnalisee" : "Egale"}
+                  />
+                  <MetricCard
+                    label="Ordre tours"
+                    value="Selon payoutOrder"
+                  />
+                </div>
+                {tontine.description ? (
+                  <div className="rounded-2xl border border-gray-100 bg-white px-4 py-3">
+                    <p className="text-xs font-medium text-gray-500">Description</p>
+                    <p className="mt-1 text-sm text-gray-700">{tontine.description}</p>
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap gap-2">
                   <Button
                     className="rounded-xl bg-black text-white hover:bg-black/90"
@@ -128,6 +148,11 @@ export default function TontineDetailModern({ params }: Props) {
                       <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${paymentBadge(member.paymentStatus)}`}>
                         {member.paymentStatus === "paid" ? "Paye" : "En retard"}
                       </span>
+                      {member.personalContribution != null ? (
+                        <span className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700">
+                          {formatXOF(member.personalContribution)}
+                        </span>
+                      ) : null}
                     </div>
                   </div>
                 ))}

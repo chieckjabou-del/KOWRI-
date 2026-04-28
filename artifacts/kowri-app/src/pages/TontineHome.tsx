@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
-import { ArrowRight, Loader2, Plus, Sparkles, Users } from "lucide-react";
+import { ArrowRight, Loader2, Plus, Search, Sparkles, Users } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,9 @@ import {
   joinTontine,
   listPublicTontines,
   listUserTontines,
+  searchPublicTontines,
 } from "@/services/api/tontineService";
-import type { TontineFrequency } from "@/types/akwe";
+import type { RotationModel, TontineFrequency } from "@/types/akwe";
 
 const FREQUENCIES: TontineFrequency[] = ["weekly", "biweekly", "monthly"];
 const FREQ_LABEL: Record<TontineFrequency, string> = {
@@ -30,10 +31,17 @@ export default function TontineHome() {
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
+  const [showExplorer, setShowExplorer] = useState(false);
   const [name, setName] = useState("");
   const [amount, setAmount] = useState("50000");
   const [maxMembers, setMaxMembers] = useState("10");
   const [frequency, setFrequency] = useState<TontineFrequency>("monthly");
+  const [tontineType, setTontineType] = useState<"classic" | "solidarity" | "project">("classic");
+  const [rotationMode, setRotationMode] = useState<RotationModel>("fixed");
+  const [isCustomContribution, setIsCustomContribution] = useState(false);
+  const [customRows, setCustomRows] = useState<Array<{ userId: string; amount: string }>>([
+    { userId: "", amount: "" },
+  ]);
   const [createError, setCreateError] = useState("");
 
   const userTontinesQuery = useQuery({
@@ -71,18 +79,29 @@ export default function TontineHome() {
     mutationFn: async () => {
       if (!user) return { tontineId: "", usingMock: false };
       const payloadName = name.trim() || "Nouvelle tontine";
+      const customContributions = customRows
+        .map((row) => ({ userId: row.userId.trim(), personalContribution: Number(row.amount) }))
+        .filter((row) => row.userId && Number.isFinite(row.personalContribution) && row.personalContribution > 0);
+      const effectiveType = tontineType === "solidarity" ? "classic" : tontineType;
       const result = await createTontine(token, user.id, {
         name: payloadName,
         contributionAmount: Number(amount),
         maxMembers: Number(maxMembers),
         frequency,
-        tontineType: "classic",
+        tontineType: effectiveType,
+        isPublic: true,
+        isMultiAmount: isCustomContribution,
+        rotationModel: rotationMode,
+        isFlexibleOrder: rotationMode !== "fixed",
+        customContributions,
       });
       return result;
     },
     onSuccess: async (result) => {
       setShowCreate(false);
       setName("");
+      setCustomRows([{ userId: "", amount: "" }]);
+      setIsCustomContribution(false);
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
       if (result.tontineId) {
         navigate(`/tontine/${result.tontineId}`);
@@ -108,7 +127,7 @@ export default function TontineHome() {
             <CardTitle className="text-base font-semibold">Mes tontines</CardTitle>
             <Button className="rounded-xl bg-black text-white hover:bg-black/90" onClick={() => setShowCreate(true)}>
               <Plus className="h-4 w-4" />
-              Creer
+                Cree ta tontine
             </Button>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -154,7 +173,13 @@ export default function TontineHome() {
 
         <Card className="rounded-3xl border-black/5 shadow-sm">
           <CardHeader>
-            <CardTitle className="text-base font-semibold">Rejoindre une tontine</CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="text-base font-semibold">Trouver une tontine pres de toi</CardTitle>
+              <Button variant="outline" className="rounded-xl" onClick={() => setShowExplorer(true)}>
+                <Search className="h-4 w-4" />
+                Explorer
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-3">
             {publicTontinesQuery.isLoading ? (
@@ -172,6 +197,14 @@ export default function TontineHome() {
                       <p className="mt-1 text-xs text-gray-500">
                         {formatXOF(item.contributionAmount)} - {FREQ_LABEL[item.frequency]}
                       </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-700">
+                          {item.tontineType}
+                        </span>
+                        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-700">
+                          {item.maxMembers} membres max
+                        </span>
+                      </div>
                     </div>
                     <Button
                       variant="outline"
@@ -218,7 +251,7 @@ export default function TontineHome() {
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent className="max-w-md rounded-2xl border-black/10">
           <DialogHeader>
-            <DialogTitle>Creer une tontine</DialogTitle>
+            <DialogTitle>Cree ta tontine et organise ton cercle</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
             <Input
@@ -242,6 +275,104 @@ export default function TontineHome() {
                 placeholder="Nb membres"
                 className="h-11 rounded-xl"
               />
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Type visible</p>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: "classic", label: "Classique" },
+                  { id: "solidarity", label: "Libre" },
+                  { id: "project", label: "Personnalisee" },
+                ].map((item) => (
+                  <Button
+                    key={item.id}
+                    type="button"
+                    variant={tontineType === item.id ? "default" : "outline"}
+                    className="rounded-xl text-xs"
+                    onClick={() => setTontineType(item.id as typeof tontineType)}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Ordre de rotation</p>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: "fixed", label: "Fixe" },
+                  { id: "random", label: "Flexible" },
+                  { id: "auction", label: "Libre" },
+                ].map((item) => (
+                  <Button
+                    key={item.id}
+                    type="button"
+                    variant={rotationMode === item.id ? "default" : "outline"}
+                    className="rounded-xl text-xs"
+                    onClick={() => setRotationMode(item.id as RotationModel)}
+                  >
+                    {item.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-xl border border-gray-100 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-sm font-medium text-gray-800">Cotisations flexibles</p>
+                <Button
+                  type="button"
+                  variant={isCustomContribution ? "default" : "outline"}
+                  className="h-8 rounded-lg text-xs"
+                  onClick={() => setIsCustomContribution((value) => !value)}
+                >
+                  {isCustomContribution ? "Personnalisee" : "Egale"}
+                </Button>
+              </div>
+              {isCustomContribution ? (
+                <div className="space-y-2">
+                  {customRows.map((row, index) => (
+                    <div key={`row-${index}`} className="grid grid-cols-2 gap-2">
+                      <Input
+                        value={row.userId}
+                        onChange={(event) =>
+                          setCustomRows((prev) =>
+                            prev.map((item, itemIndex) =>
+                              itemIndex === index ? { ...item, userId: event.target.value } : item,
+                            ),
+                          )
+                        }
+                        placeholder="userId membre"
+                        className="h-10 rounded-xl"
+                      />
+                      <Input
+                        value={row.amount}
+                        inputMode="numeric"
+                        onChange={(event) =>
+                          setCustomRows((prev) =>
+                            prev.map((item, itemIndex) =>
+                              itemIndex === index ? { ...item, amount: event.target.value } : item,
+                            ),
+                          )
+                        }
+                        placeholder="Montant XOF"
+                        className="h-10 rounded-xl"
+                      />
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full rounded-xl"
+                    onClick={() => setCustomRows((rows) => [...rows, { userId: "", amount: "" }])}
+                  >
+                    Ajouter un membre
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500">
+                  Cotisation egale active: chaque membre cotise le meme montant de base.
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-3 gap-2">
               {FREQUENCIES.map((freq) => (
@@ -275,6 +406,27 @@ export default function TontineHome() {
                   setCreateError("Le nombre de membres doit etre >= 2.");
                   return;
                 }
+                if (!Number.isInteger(membersValue)) {
+                  setCreateError("Le nombre de membres doit etre un entier.");
+                  return;
+                }
+                if (isCustomContribution) {
+                  const hasInvalidRow = customRows.some((row) => {
+                    if (!row.userId.trim() && !row.amount.trim()) return false;
+                    const parsed = Number(row.amount);
+                    return !row.userId.trim() || !Number.isFinite(parsed) || parsed <= 0;
+                  });
+                  if (hasInvalidRow) {
+                    setCreateError("Verifier le tableau des cotisations personnalisees.");
+                    return;
+                  }
+                  if (customRows.length > 1) {
+                    setCreateError(
+                      "Info backend: les cotisations personnalisees seront configurees apres creation via les routes existantes " +
+                      "(la creation backend conserve is_multi_amount=true).",
+                    );
+                  }
+                }
                 createMutation.mutate();
               }}
               disabled={createMutation.isPending}
@@ -286,7 +438,143 @@ export default function TontineHome() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={showFlexibleInfo} onOpenChange={setShowFlexibleInfo}>
+        <DialogContent className="max-w-lg rounded-2xl border-black/10">
+          <DialogHeader>
+            <DialogTitle>Tontine libre (ordre flexible)</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 text-sm text-gray-600">
+            <p>
+              Backend existant: l'ordre flexible est gere par <strong>rotationModel=random</strong> ou{" "}
+              <strong>rotationModel=auction</strong> via <code>/community/tontines/:id/activate</code>.
+            </p>
+            <p>
+              Cette configuration est appliquee automatiquement dans ce frontend lors de la creation.
+            </p>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <ExplorerDialog
+        open={showExplorer}
+        onOpenChange={setShowExplorer}
+        token={token}
+        onOpenTontine={(id) => navigate(`/tontine/${id}`)}
+      />
+
       <BottomNav />
     </div>
+  );
+}
+
+function ExplorerDialog({
+  open,
+  onOpenChange,
+  token,
+  onOpenTontine,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  token: string | null;
+  onOpenTontine: (id: string) => void;
+}) {
+  const [zoneQuery, setZoneQuery] = useState("");
+  const [type, setType] = useState<string>("all");
+  const [minAmount, setMinAmount] = useState("");
+  const [maxAmount, setMaxAmount] = useState("");
+  const [minMembers, setMinMembers] = useState("");
+
+  const explorerQuery = useQuery({
+    queryKey: ["akwe-explorer", zoneQuery, type, minAmount, maxAmount, minMembers],
+    enabled: open,
+    queryFn: () =>
+      searchPublicTontines(token, {
+        zoneQuery,
+        type:
+          type === "all"
+            ? undefined
+            : type === "solidarity"
+              ? "classic"
+              : type,
+        minAmount: minAmount ? Number(minAmount) : undefined,
+        maxAmount: maxAmount ? Number(maxAmount) : undefined,
+        minMembers: minMembers ? Number(minMembers) : undefined,
+      }),
+  });
+
+  const rows = explorerQuery.data?.tontines ?? [];
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-xl rounded-2xl border-black/10">
+        <DialogHeader>
+          <DialogTitle>Explorer les tontines</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <Input
+            value={zoneQuery}
+            onChange={(event) => setZoneQuery(event.target.value)}
+            placeholder="Recherche par zone (ville / pays)"
+            className="h-11 rounded-xl"
+          />
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Input
+              value={minAmount}
+              inputMode="numeric"
+              onChange={(event) => setMinAmount(event.target.value)}
+              placeholder="Montant min"
+              className="h-10 rounded-xl"
+            />
+            <Input
+              value={maxAmount}
+              inputMode="numeric"
+              onChange={(event) => setMaxAmount(event.target.value)}
+              placeholder="Montant max"
+              className="h-10 rounded-xl"
+            />
+            <Input
+              value={minMembers}
+              inputMode="numeric"
+              onChange={(event) => setMinMembers(event.target.value)}
+              placeholder="Membres min"
+              className="h-10 rounded-xl"
+            />
+            <select
+              value={type}
+              onChange={(event) => setType(event.target.value)}
+              className="h-10 rounded-xl border border-gray-200 bg-gray-50 px-3 text-sm"
+            >
+              <option value="all">Type</option>
+              <option value="classic">Classique</option>
+              <option value="solidarity">Libre</option>
+              <option value="project">Personnalisee</option>
+              <option value="investment">Investissement</option>
+            </select>
+          </div>
+          {explorerQuery.isLoading ? (
+            <div className="py-4 text-sm text-gray-500">Chargement...</div>
+          ) : rows.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-500">
+              Aucune tontine trouvee.
+            </div>
+          ) : (
+            <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
+              {rows.map((item) => (
+                <button
+                  key={item.id}
+                  className="w-full rounded-xl border border-gray-100 px-3 py-3 text-left transition hover:border-black/15"
+                  onClick={() => onOpenTontine(item.id)}
+                >
+                  <p className="text-sm font-semibold text-black">{item.name}</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {formatXOF(item.contributionAmount)} - {item.memberCount}/{item.maxMembers} membres
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }

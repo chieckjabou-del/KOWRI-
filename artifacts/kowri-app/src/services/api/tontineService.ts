@@ -5,6 +5,7 @@ import type {
   TontineOverview,
   TontineTimelineEvent,
   TontineFrequency,
+  RotationModel,
 } from "@/types/akwe";
 
 interface CreateTontineInput {
@@ -14,6 +15,19 @@ interface CreateTontineInput {
   frequency: TontineFrequency;
   tontineType: string;
   description?: string;
+  isPublic?: boolean;
+  isMultiAmount?: boolean;
+  rotationModel?: RotationModel;
+  isFlexibleOrder?: boolean;
+  customContributions?: Array<{
+    userId: string;
+    personalContribution: number;
+  }>;
+}
+
+export interface CustomContributionPlanRow {
+  memberLabel: string;
+  amount: number;
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -61,6 +75,8 @@ function reliabilityFromMember(raw: Record<string, unknown>, currentRound: numbe
     payoutOrder,
     contributionsCount: contributions,
     hasReceivedPayout: hasReceived,
+    personalContribution:
+      raw.personalContribution != null ? asNumber(raw.personalContribution, 0) : null,
     reliabilityScore,
     reliabilityLabel,
     paymentStatus,
@@ -219,6 +235,7 @@ function mapTontineList(rawRows: unknown[]): TontineListItem[] {
     return {
       id: asString(raw.id, `tontine-${index}`),
       name: asString(raw.name, "Tontine"),
+      description: raw.description ? asString(raw.description) : null,
       status: (asString(raw.status, "pending") as TontineListItem["status"]) ?? "pending",
       frequency: (asString(raw.frequency, "monthly") as TontineFrequency) ?? "monthly",
       tontineType: asString(raw.tontineType, "classic"),
@@ -227,6 +244,10 @@ function mapTontineList(rawRows: unknown[]): TontineListItem[] {
       maxMembers: asNumber(raw.maxMembers, 0),
       currentRound: asNumber(raw.currentRound, 0),
       totalRounds: asNumber(raw.totalRounds, asNumber(raw.maxMembers, 0)),
+      isPublic: raw.isPublic != null ? Boolean(raw.isPublic) : undefined,
+      isMultiAmount: raw.isMultiAmount != null ? Boolean(raw.isMultiAmount) : undefined,
+      adminUserId: raw.adminUserId ? asString(raw.adminUserId) : undefined,
+      createdAt: raw.createdAt ? asString(raw.createdAt) : undefined,
       nextPayoutDate: raw.nextPayoutDate ? asString(raw.nextPayoutDate) : null,
     };
   });
@@ -268,6 +289,63 @@ export async function listPublicTontines(
   }
 }
 
+export async function searchPublicTontines(
+  token: string | null,
+  params: {
+    type?: string;
+    frequency?: TontineFrequency;
+    minAmount?: number;
+    maxAmount?: number;
+    minMembers?: number;
+    maxMembers?: number;
+    zoneQuery?: string;
+  },
+): Promise<{ tontines: TontineListItem[]; usingMock: boolean }> {
+  try {
+    const queryParts: string[] = ["limit=50"];
+    if (params.type && params.type !== "all") {
+      queryParts.push(`type=${encodeURIComponent(params.type)}`);
+    }
+    if (params.frequency && params.frequency !== "monthly") {
+      queryParts.push(`frequency=${encodeURIComponent(params.frequency)}`);
+    }
+    const query = queryParts.join("&");
+    const data = await apiFetch<{ tontines?: unknown[] }>(`/tontines/public?${query}`, token);
+    let tontines = mapTontineList(data.tontines ?? []);
+
+    if (params.zoneQuery && params.zoneQuery.trim()) {
+      const zone = params.zoneQuery.trim().toLowerCase();
+      tontines = tontines.filter((item) => {
+        const text = `${item.name} ${item.description ?? ""}`.toLowerCase();
+        return text.includes(zone);
+      });
+    }
+
+    if (params.minAmount != null) {
+      tontines = tontines.filter((item) => item.contributionAmount >= params.minAmount!);
+    }
+    if (params.maxAmount != null) {
+      tontines = tontines.filter((item) => item.contributionAmount <= params.maxAmount!);
+    }
+    if (params.minMembers != null) {
+      tontines = tontines.filter((item) => item.maxMembers >= params.minMembers!);
+    }
+    if (params.maxMembers != null) {
+      tontines = tontines.filter((item) => item.maxMembers <= params.maxMembers!);
+    }
+
+    if (tontines.length === 0) {
+      return { tontines: buildMockTontines(), usingMock: true };
+    }
+    return { tontines, usingMock: false };
+  } catch (error) {
+    if (error instanceof ApiError) {
+      return { tontines: buildMockTontines(), usingMock: true };
+    }
+    throw error;
+  }
+}
+
 export async function getTontineOverview(
   token: string | null,
   tontineId: string,
@@ -292,6 +370,7 @@ export async function getTontineOverview(
     const overview: TontineOverview = {
       id: asString(detail.id, tontineId),
       name: asString(detail.name, "Tontine"),
+      description: detail.description ? asString(detail.description) : null,
       status: (asString(detail.status, "pending") as TontineOverview["status"]) ?? "pending",
       frequency: (asString(detail.frequency, "monthly") as TontineFrequency) ?? "monthly",
       tontineType: asString(detail.tontineType, "classic"),
@@ -368,7 +447,8 @@ export async function createTontine(
         maxMembers: input.maxMembers,
         adminUserId: userId,
         tontine_type: input.tontineType,
-        is_public: true,
+        is_public: input.isPublic ?? true,
+        is_multi_amount: input.isMultiAmount ?? false,
       }),
     });
 
@@ -376,7 +456,9 @@ export async function createTontine(
 
     await apiFetch(`/community/tontines/${encodeURIComponent(tontineId)}/activate`, token, {
       method: "POST",
-      body: JSON.stringify({ rotationModel: "fixed" }),
+      body: JSON.stringify({
+        rotationModel: input.rotationModel ?? (input.isFlexibleOrder ? "random" : "fixed"),
+      }),
     }).catch(() => undefined);
 
     return { tontineId, usingMock: false };
@@ -385,6 +467,39 @@ export async function createTontine(
       return { tontineId: `mock-${Date.now()}`, usingMock: true };
     }
     throw error;
+  }
+}
+
+function customContributionStorageKey(tontineId: string): string {
+  return `akwe-custom-contrib-plan-${tontineId}`;
+}
+
+export function saveCustomContributionPlan(
+  tontineId: string,
+  rows: CustomContributionPlanRow[],
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(customContributionStorageKey(tontineId), JSON.stringify(rows));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function loadCustomContributionPlan(tontineId: string): CustomContributionPlanRow[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(customContributionStorageKey(tontineId));
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Array<Record<string, unknown>>;
+    return parsed
+      .map((entry) => ({
+        memberLabel: asString(entry.memberLabel, ""),
+        amount: asNumber(entry.amount, 0),
+      }))
+      .filter((entry) => entry.memberLabel && entry.amount > 0);
+  } catch {
+    return [];
   }
 }
 

@@ -1,5 +1,6 @@
 export type TontineStatus = "pending" | "active" | "completed" | "cancelled";
 export type TontineFrequency = "weekly" | "biweekly" | "monthly";
+export type RotationModel = "fixed" | "random" | "auction" | "admin";
 
 export interface WalletSummary {
   id: string;
@@ -25,6 +26,7 @@ export interface WalletTransaction {
 export interface TontineListItem {
   id: string;
   name: string;
+  description?: string | null;
   status: TontineStatus;
   frequency: TontineFrequency;
   tontineType: string;
@@ -33,6 +35,10 @@ export interface TontineListItem {
   maxMembers: number;
   currentRound: number;
   totalRounds: number;
+  isPublic?: boolean;
+  isMultiAmount?: boolean;
+  adminUserId?: string;
+  createdAt?: string;
   nextPayoutDate?: string | null;
 }
 
@@ -42,6 +48,7 @@ export interface TontineMember {
   payoutOrder: number;
   contributionsCount: number;
   hasReceivedPayout: boolean;
+  personalContribution?: number | null;
   reliabilityScore: number;
   reliabilityLabel: "excellent" | "good" | "watch";
   paymentStatus: "paid" | "late";
@@ -58,6 +65,7 @@ export interface TontineTimelineEvent {
 export interface TontineOverview {
   id: string;
   name: string;
+  description?: string | null;
   status: TontineStatus;
   frequency: TontineFrequency;
   tontineType: string;
@@ -72,4 +80,30 @@ export interface TontineOverview {
   timeline: TontineTimelineEvent[];
   history: TontineTimelineEvent[];
   notifications: string[];
+}
+
+export interface CreatorCommunity {
+  id: string;
+  name: string;
+  description?: string | null;
+  creatorId: string;
+  handle: string;
+  memberCount: number;
+  walletId?: string | null;
+  platformFeeRate: number;
+  creatorFeeRate: number;
+  totalVolume: number;
+  status: string;
+}
+
+export interface CreatorDashboardStats {
+  totalCommunities: number;
+  totalMembers: number;
+  totalVolume: number;
+  totalEarnings: number;
+}
+
+export interface CreatorDashboard {
+  communities: CreatorCommunity[];
+  stats: CreatorDashboardStats;
 }
