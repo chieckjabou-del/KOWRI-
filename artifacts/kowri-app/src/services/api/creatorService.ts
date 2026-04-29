@@ -245,6 +245,11 @@ export interface CreatorReputationProfile {
   badges: CreatorReputationBadge[];
 }
 
+export interface CreatorReputationSnapshot {
+  score: number;
+  tier: string;
+}
+
 export async function getCreatorReputationProfile(
   token: string | null,
   userId: string,
@@ -301,5 +306,62 @@ export async function getCreatorReputationProfile(
       };
     }
     throw error;
+  }
+}
+
+export async function getCreatorReputationSnapshot(
+  token: string | null,
+  userId: string,
+): Promise<CreatorReputationSnapshot | null> {
+  try {
+    const data = await apiFetch<Record<string, unknown>>(
+      `/community/reputation/${encodeURIComponent(userId)}`,
+      token,
+    );
+    return {
+      score: asNumber(data.score, 0),
+      tier: asString(data.tier, "new"),
+    };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+    return null;
+  }
+}
+
+function creatorDailyEarningsKey(): string {
+  return "akwe-creator-daily-earnings";
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+export function recordCreatorDailyEarning(amount: number): void {
+  if (typeof window === "undefined") return;
+  const safeAmount = Number.isFinite(amount) ? Math.max(0, amount) : 0;
+  if (safeAmount <= 0) return;
+  try {
+    const raw = window.localStorage.getItem(creatorDailyEarningsKey());
+    const parsed = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    const date = todayIsoDate();
+    const previous = asNumber(parsed[date], 0);
+    parsed[date] = previous + safeAmount;
+    window.localStorage.setItem(creatorDailyEarningsKey(), JSON.stringify(parsed));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function readCreatorDailyEarning(): number {
+  if (typeof window === "undefined") return 0;
+  try {
+    const raw = window.localStorage.getItem(creatorDailyEarningsKey());
+    if (!raw) return 0;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return asNumber(parsed[todayIsoDate()], 0);
+  } catch {
+    return 0;
   }
 }

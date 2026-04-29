@@ -9,7 +9,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth";
 import { formatXOF } from "@/lib/api";
 import { collectContribution, getTontineOverview } from "@/services/api/tontineService";
-import { distributeCommunityEarnings, loadCreatorModeLink } from "@/services/api/creatorService";
+import {
+  distributeCommunityEarnings,
+  loadCreatorModeLink,
+  recordCreatorDailyEarning,
+} from "@/services/api/creatorService";
 import { nextReceiverLabel, timelineBulletColor, tontineHealthColor } from "@/features/tontine/tontine-ui";
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
@@ -40,7 +44,12 @@ export default function TontineDetailModern({ params }: Props) {
   const usingMock = tontineQuery.data?.usingMock ?? false;
   const creatorLink = loadCreatorModeLink(params.id);
   const urlSearch = useMemo(() => {
-    const queryString = location.includes("?") ? location.slice(location.indexOf("?")) : "";
+    const queryString =
+      typeof window !== "undefined"
+        ? window.location.search
+        : location.includes("?")
+          ? location.slice(location.indexOf("?"))
+          : "";
     return new URLSearchParams(queryString);
   }, [location]);
   const isDemoFlow = urlSearch.get("demo") === "1";
@@ -60,25 +69,35 @@ export default function TontineDetailModern({ params }: Props) {
       const collectResult = await collectContribution(token, params.id);
       let creatorEarningsApplied = false;
       let creatorEarningsError: string | null = null;
+      let creatorFeeApplied = 0;
       if (creatorLink && collectResult.totalCollected > 0) {
         try {
-          await distributeCommunityEarnings(
+          const earnings = await distributeCommunityEarnings(
             token,
             creatorLink.communityId,
             collectResult.totalCollected,
             creatorLink.creatorFeeRate,
           );
           creatorEarningsApplied = true;
+          creatorFeeApplied = earnings.creatorFee;
         } catch (error) {
           creatorEarningsError =
             error instanceof Error ? error.message : "Distribution createur indisponible.";
         }
       }
-      return { ...collectResult, creatorEarningsApplied, creatorEarningsError };
+      return {
+        ...collectResult,
+        creatorEarningsApplied,
+        creatorEarningsError,
+        creatorFeeApplied,
+      };
     },
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontine-detail", params.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
+      if (result.creatorEarningsApplied && result.creatorFeeApplied > 0) {
+        recordCreatorDailyEarning(result.creatorFeeApplied);
+      }
       toast({
         title: "Collecte terminee",
         description: creatorLink
