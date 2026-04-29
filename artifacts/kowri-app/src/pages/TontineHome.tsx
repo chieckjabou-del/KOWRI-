@@ -15,10 +15,9 @@ import {
   joinTontine,
   listPublicTontines,
   listUserTontines,
-  saveCreatorModeLink,
   searchPublicTontines,
 } from "@/services/api/tontineService";
-import { getCreatorDashboard } from "@/services/api/creatorService";
+import { getCreatorDashboard, saveCreatorModeLink } from "@/services/api/creatorService";
 import type { RotationModel, TontineFrequency } from "@/types/akwe";
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
