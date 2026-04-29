@@ -27,86 +27,43 @@ function mapCommunity(row: Record<string, unknown>): CreatorCommunity {
   };
 }
 
-function mockDashboard(): CreatorDashboard {
-  return {
-    communities: [
-      {
-        id: "mock-community",
-        name: "Akwé Leaders",
-        description: "Communaute demo connectee au mode fallback",
-        creatorId: "mock-creator",
-        handle: "akweleaders",
-        memberCount: 38,
-        walletId: "mock-wallet",
-        platformFeeRate: 2,
-        creatorFeeRate: 5,
-        totalVolume: 2500000,
-        status: "active",
-      },
-    ],
-    stats: {
-      totalCommunities: 1,
-      totalMembers: 38,
-      totalVolume: 2500000,
-      totalEarnings: 125000,
-    },
-  };
-}
-
 export async function getCreatorDashboard(
   token: string | null,
   creatorId: string,
 ): Promise<{ dashboard: CreatorDashboard; usingMock: boolean }> {
-  try {
-    const data = await apiFetch<{ communities?: unknown[]; stats?: unknown }>(
-      `/creator/dashboard/${encodeURIComponent(creatorId)}`,
-      token,
-    );
-    const communities = (data.communities ?? []).map((row) =>
-      mapCommunity(row as Record<string, unknown>),
-    );
-    const statsRaw = (data.stats ?? {}) as Record<string, unknown>;
-    return {
-      dashboard: {
-        communities,
-        stats: {
-          totalCommunities: asNumber(statsRaw.totalCommunities, communities.length),
-          totalMembers: asNumber(statsRaw.totalMembers, 0),
-          totalVolume: asNumber(statsRaw.totalVolume, 0),
-          totalEarnings: asNumber(statsRaw.totalEarnings, 0),
-        },
+  const data = await apiFetch<{ communities?: unknown[]; stats?: unknown }>(
+    `/creator/dashboard/${encodeURIComponent(creatorId)}`,
+    token,
+  );
+  const communities = (data.communities ?? []).map((row) =>
+    mapCommunity(row as Record<string, unknown>),
+  );
+  const statsRaw = (data.stats ?? {}) as Record<string, unknown>;
+  return {
+    dashboard: {
+      communities,
+      stats: {
+        totalCommunities: asNumber(statsRaw.totalCommunities, communities.length),
+        totalMembers: asNumber(statsRaw.totalMembers, 0),
+        totalVolume: asNumber(statsRaw.totalVolume, 0),
+        totalEarnings: asNumber(statsRaw.totalEarnings, 0),
       },
-      usingMock: false,
-    };
-  } catch (error) {
-    if (error instanceof ApiError) {
-      return { dashboard: mockDashboard(), usingMock: true };
-    }
-    throw error;
-  }
+    },
+    usingMock: false,
+  };
 }
 
 export async function listCreatorCommunities(
   token: string | null,
 ): Promise<{ communities: CreatorCommunity[]; usingMock: boolean }> {
-  try {
-    const data = await apiFetch<{ communities?: unknown[] }>(
-      "/creator/communities?limit=50",
-      token,
-    );
-    const communities = (data.communities ?? []).map((row) =>
-      mapCommunity(row as Record<string, unknown>),
-    );
-    if (communities.length === 0) {
-      return { communities: mockDashboard().communities, usingMock: true };
-    }
-    return { communities, usingMock: false };
-  } catch (error) {
-    if (error instanceof ApiError) {
-      return { communities: mockDashboard().communities, usingMock: true };
-    }
-    throw error;
-  }
+  const data = await apiFetch<{ communities?: unknown[] }>(
+    "/creator/communities?limit=50",
+    token,
+  );
+  const communities = (data.communities ?? []).map((row) =>
+    mapCommunity(row as Record<string, unknown>),
+  );
+  return { communities, usingMock: false };
 }
 
 export async function distributeCommunityEarnings(
@@ -119,32 +76,20 @@ export async function distributeCommunityEarnings(
   creatorFee: number;
   usingMock: boolean;
 }> {
-  try {
-    const data = await apiFetch<Record<string, unknown>>(
-      `/creator/communities/${encodeURIComponent(communityId)}/earnings`,
-      token,
-      {
-        method: "POST",
-        body: JSON.stringify({ transactionAmount, currency: "XOF" }),
-      },
-    );
-    const creatorRate = creatorFeeRatePercent / 100;
-    return {
-      platformFee: asNumber(data.platformFee, transactionAmount * 0.02),
-      creatorFee: asNumber(data.creatorFee, transactionAmount * creatorRate),
-      usingMock: false,
-    };
-  } catch (error) {
-    if (error instanceof ApiError) {
-      const creatorRate = creatorFeeRatePercent / 100;
-      return {
-        platformFee: transactionAmount * 0.02,
-        creatorFee: transactionAmount * creatorRate,
-        usingMock: true,
-      };
-    }
-    throw error;
-  }
+  const data = await apiFetch<Record<string, unknown>>(
+    `/creator/communities/${encodeURIComponent(communityId)}/earnings`,
+    token,
+    {
+      method: "POST",
+      body: JSON.stringify({ transactionAmount, currency: "XOF" }),
+    },
+  );
+  const creatorRate = creatorFeeRatePercent / 100;
+  return {
+    platformFee: asNumber(data.platformFee, transactionAmount * 0.02),
+    creatorFee: asNumber(data.creatorFee, transactionAmount * creatorRate),
+    usingMock: false,
+  };
 }
 
 export async function createCommunity(
@@ -158,40 +103,18 @@ export async function createCommunity(
     platformFeeRate?: number;
   },
 ): Promise<{ community: CreatorCommunity; usingMock: boolean }> {
-  try {
-    const data = await apiFetch<Record<string, unknown>>("/creator/communities", token, {
-      method: "POST",
-      body: JSON.stringify({
-        name: input.name,
-        handle: input.handle,
-        description: input.description ?? null,
-        creatorId: input.creatorId,
-        creatorFeeRate: input.creatorFeeRate,
-        platformFeeRate: input.platformFeeRate ?? 2,
-      }),
-    });
-    return { community: mapCommunity(data), usingMock: false };
-  } catch (error) {
-    if (error instanceof ApiError) {
-      return {
-        community: {
-          id: `mock-community-${Date.now()}`,
-          name: input.name,
-          description: input.description ?? null,
-          creatorId: input.creatorId,
-          handle: input.handle,
-          memberCount: 1,
-          walletId: "mock-wallet",
-          platformFeeRate: 2,
-          creatorFeeRate: input.creatorFeeRate,
-          totalVolume: 0,
-          status: "active",
-        },
-        usingMock: true,
-      };
-    }
-    throw error;
-  }
+  const data = await apiFetch<Record<string, unknown>>("/creator/communities", token, {
+    method: "POST",
+    body: JSON.stringify({
+      name: input.name,
+      handle: input.handle,
+      description: input.description ?? null,
+      creatorId: input.creatorId,
+      creatorFeeRate: input.creatorFeeRate,
+      platformFeeRate: input.platformFeeRate ?? 2,
+    }),
+  });
+  return { community: mapCommunity(data), usingMock: false };
 }
 
 export async function joinCommunity(
@@ -199,17 +122,10 @@ export async function joinCommunity(
   communityId: string,
   userId: string,
 ): Promise<void> {
-  try {
-    await apiFetch(`/creator/communities/${encodeURIComponent(communityId)}/join`, token, {
-      method: "POST",
-      body: JSON.stringify({ userId }),
-    });
-  } catch (error) {
-    if (error instanceof ApiError) {
-      return;
-    }
-    throw error;
-  }
+  await apiFetch(`/creator/communities/${encodeURIComponent(communityId)}/join`, token, {
+    method: "POST",
+    body: JSON.stringify({ userId }),
+  });
 }
 
 export async function getCommunityDetail(
@@ -223,23 +139,8 @@ export async function getCommunityDetail(
     );
     return { community: mapCommunity(data), usingMock: false };
   } catch (error) {
-    if (error instanceof ApiError) {
-      return {
-        community: {
-          id: `mock-${idOrHandle || "community"}`,
-          name: "Communaute Akwé (simulation)",
-          description: "Fallback frontend quand le endpoint detail est indisponible.",
-          creatorId: "mock-creator",
-          handle: idOrHandle || "akwe-community",
-          memberCount: 24,
-          walletId: "mock-wallet",
-          platformFeeRate: 2,
-          creatorFeeRate: 5,
-          totalVolume: 1800000,
-          status: "active",
-        },
-        usingMock: true,
-      };
+    if (error instanceof ApiError && error.status === 404) {
+      return { community: null, usingMock: false };
     }
     throw error;
   }
@@ -249,24 +150,83 @@ export async function getCommunityPools(
   token: string | null,
   communityId: string,
 ): Promise<{ investmentPools: Record<string, unknown>[]; tontines: Record<string, unknown>[]; usingMock: boolean }> {
+  const data = await apiFetch<Record<string, unknown>>(
+    `/creator/communities/${encodeURIComponent(communityId)}/pools`,
+    token,
+  );
+  return {
+    investmentPools: (data.investmentPools as Record<string, unknown>[] | undefined) ?? [],
+    tontines: (data.tontines as Record<string, unknown>[] | undefined) ?? [],
+    usingMock: false,
+  };
+}
+
+export interface TontineContributionSnapshot {
+  id: string;
+  name: string;
+  status: string;
+  tontineType: string;
+  memberCount: number;
+  maxMembers: number;
+  currentRound: number;
+  contributionAmount: number;
+  totalContributed: number;
+}
+
+export async function getTontineContributionSnapshot(
+  token: string | null,
+  tontineId: string,
+): Promise<TontineContributionSnapshot> {
+  const row = await apiFetch<Record<string, unknown>>(
+    `/tontines/${encodeURIComponent(tontineId)}`,
+    token,
+  );
+  return {
+    id: asString(row.id, tontineId),
+    name: asString(row.name, "Tontine"),
+    status: asString(row.status, "pending"),
+    tontineType: asString(row.tontineType, "classic"),
+    memberCount: asNumber(row.memberCount, 0),
+    maxMembers: asNumber(row.maxMembers, 0),
+    currentRound: asNumber(row.currentRound, 0),
+    contributionAmount: asNumber(row.contributionAmount, 0),
+    totalContributed: asNumber(row.totalContributed, 0),
+  };
+}
+
+export interface CreatorModeLink {
+  communityId: string;
+  creatorFeeRate: number;
+  communityName?: string;
+}
+
+function creatorModeLinkKey(tontineId: string): string {
+  return `akwe-creator-mode-link-${tontineId}`;
+}
+
+export function saveCreatorModeLink(tontineId: string, link: CreatorModeLink): void {
+  if (typeof window === "undefined") return;
   try {
-    const data = await apiFetch<Record<string, unknown>>(
-      `/creator/communities/${encodeURIComponent(communityId)}/pools`,
-      token,
-    );
+    window.localStorage.setItem(creatorModeLinkKey(tontineId), JSON.stringify(link));
+  } catch {
+    // ignore storage failures
+  }
+}
+
+export function loadCreatorModeLink(tontineId: string): CreatorModeLink | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(creatorModeLinkKey(tontineId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const communityId = asString(parsed.communityId);
+    if (!communityId) return null;
     return {
-      investmentPools: (data.investmentPools as Record<string, unknown>[] | undefined) ?? [],
-      tontines: (data.tontines as Record<string, unknown>[] | undefined) ?? [],
-      usingMock: false,
+      communityId,
+      creatorFeeRate: asNumber(parsed.creatorFeeRate, 5),
+      communityName: parsed.communityName ? asString(parsed.communityName) : undefined,
     };
-  } catch (error) {
-    if (error instanceof ApiError) {
-      return {
-        investmentPools: [],
-        tontines: [],
-        usingMock: true,
-      };
-    }
-    throw error;
+  } catch {
+    return null;
   }
 }

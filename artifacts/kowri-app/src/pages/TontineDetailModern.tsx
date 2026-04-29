@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth";
 import { formatXOF } from "@/lib/api";
-import { collectContribution, getTontineOverview } from "@/services/api/tontineService";
+import { collectContribution, getTontineOverview, loadCreatorModeLink } from "@/services/api/tontineService";
+import { distributeCommunityEarnings } from "@/services/api/creatorService";
 import { nextReceiverLabel, timelineBulletColor, tontineHealthColor } from "@/features/tontine/tontine-ui";
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
@@ -37,17 +38,29 @@ export default function TontineDetailModern({ params }: Props) {
 
   const tontine = tontineQuery.data?.tontine;
   const usingMock = tontineQuery.data?.usingMock ?? false;
+  const creatorLink = loadCreatorModeLink(params.id);
 
   const collectMutation = useMutation({
     mutationFn: async () => {
-      await collectContribution(token, params.id);
+      const collectResult = await collectContribution(token, params.id);
+      if (creatorLink && collectResult.totalCollected > 0) {
+        await distributeCommunityEarnings(
+          token,
+          creatorLink.communityId,
+          collectResult.totalCollected,
+          creatorLink.creatorFeeRate,
+        );
+      }
+      return collectResult;
     },
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontine-detail", params.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
       toast({
         title: "Collecte terminee",
-        description: "La progression de la tontine est mise a jour.",
+        description: creatorLink
+          ? `Collecte backend: ${formatXOF(result.totalCollected)}. Commission createur distribuee automatiquement.`
+          : "La progression de la tontine est mise a jour.",
       });
     },
     onError: (error: unknown) => {

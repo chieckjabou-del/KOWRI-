@@ -212,12 +212,20 @@ export default function Creator() {
           title="Ton espace createur"
           subtitle="Visualise tes revenus, ta base membres et tes opportunites de croissance."
           actions={
-            <button
-              onClick={() => setShowCreate(true)}
-              className="press-feedback rounded-xl bg-black px-3 py-2 text-xs font-semibold text-white"
-            >
-              Nouvelle communaute
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowCreate(true)}
+                className="press-feedback rounded-xl bg-black px-3 py-2 text-xs font-semibold text-white"
+              >
+                Nouvelle communaute
+              </button>
+              <button
+                onClick={() => navigate("/creator-dashboard")}
+                className="press-feedback rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700"
+              >
+                Machine a argent
+              </button>
+            </div>
           }
         />
         {usingMock && (

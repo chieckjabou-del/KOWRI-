@@ -506,10 +506,21 @@ export function loadCustomContributionPlan(tontineId: string): CustomContributio
 export async function collectContribution(
   token: string | null,
   tontineId: string,
-): Promise<void> {
-  await apiFetch(`/community/tontines/${encodeURIComponent(tontineId)}/collect`, token, {
+): Promise<{ collected: number; failed: string[]; totalCollected: number }> {
+  const data = await apiFetch<Record<string, unknown>>(
+    `/community/tontines/${encodeURIComponent(tontineId)}/collect`,
+    token,
+    {
     method: "POST",
     headers: { "Idempotency-Key": generateIdempotencyKey() },
-  });
+    },
+  );
+  return {
+    collected: asNumber(data.collected, 0),
+    failed: Array.isArray(data.failed)
+      ? data.failed.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    totalCollected: asNumber(data.totalCollected, 0),
+  };
 }
 

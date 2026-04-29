@@ -49,6 +49,7 @@ const InvestDetail  = lazy(() => import("@/pages/InvestDetail"));
 const Insurance     = lazy(() => import("@/pages/Insurance"));
 const Creator       = lazy(() => import("@/pages/Creator"));
 const CreatorDetail = lazy(() => import("@/pages/CreatorDetail"));
+const CreatorDashboard = lazy(() => import("@/pages/CreatorDashboard"));
 const Support       = lazy(() => import("@/pages/Support"));
 const NotFound      = lazy(() => import("@/pages/not-found"));
 
@@ -197,6 +198,9 @@ function AppRouter() {
         </Route>
         <Route path="/insurance">
           {() => <ProtectedRoute component={Insurance} />}
+        </Route>
+        <Route path="/creator-dashboard">
+          {() => <ProtectedRoute component={CreatorDashboard} />}
         </Route>
         <Route path="/creator/:id">
           {(params) => <ProtectedRoute component={CreatorDetail} params={params} />}

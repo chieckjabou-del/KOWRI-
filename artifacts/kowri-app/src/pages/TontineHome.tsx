@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { ArrowRight, CheckCircle2, CircleHelp, Loader2, Plus, Search, Sparkles, Users } from "lucide-react";
@@ -15,8 +15,10 @@ import {
   joinTontine,
   listPublicTontines,
   listUserTontines,
+  saveCreatorModeLink,
   searchPublicTontines,
 } from "@/services/api/tontineService";
+import { getCreatorDashboard } from "@/services/api/creatorService";
 import type { RotationModel, TontineFrequency } from "@/types/akwe";
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
@@ -43,6 +45,8 @@ export default function TontineHome() {
   const [tontineType, setTontineType] = useState<"classic" | "solidarity" | "project">("classic");
   const [rotationMode, setRotationMode] = useState<RotationModel>("fixed");
   const [isCustomContribution, setIsCustomContribution] = useState(false);
+  const [creatorModeEnabled, setCreatorModeEnabled] = useState(false);
+  const [creatorCommunityId, setCreatorCommunityId] = useState("");
   const [customRows, setCustomRows] = useState<Array<{ userId: string; amount: string }>>([
     { userId: "", amount: "" },
   ]);
@@ -59,6 +63,21 @@ export default function TontineHome() {
     enabled: Boolean(user?.id),
     queryFn: () => listPublicTontines(token),
   });
+
+  const creatorDashboardQuery = useQuery({
+    queryKey: ["akwe-tontine-create-creator-dashboard", user?.id],
+    enabled: Boolean(showCreate && user?.id),
+    queryFn: () => getCreatorDashboard(token, user!.id),
+    retry: false,
+  });
+  const creatorCommunities = creatorDashboardQuery.data?.dashboard.communities ?? [];
+
+  useEffect(() => {
+    if (!creatorModeEnabled) return;
+    if (!creatorCommunityId && creatorCommunities.length > 0) {
+      setCreatorCommunityId(creatorCommunities[0].id);
+    }
+  }, [creatorModeEnabled, creatorCommunityId, creatorCommunities]);
 
   const myTontines = userTontinesQuery.data?.tontines ?? [];
   const discoverTontines = useMemo(() => {
@@ -112,15 +131,30 @@ export default function TontineHome() {
       });
     },
     onSuccess: async (result) => {
+      const selectedCommunity = creatorCommunities.find(
+        (community) => community.id === creatorCommunityId,
+      );
+      if (creatorModeEnabled && result.tontineId && selectedCommunity) {
+        saveCreatorModeLink(result.tontineId, {
+          communityId: selectedCommunity.id,
+          creatorFeeRate: selectedCommunity.creatorFeeRate,
+          communityName: selectedCommunity.name,
+        });
+      }
       setShowCreate(false);
       setName("");
       setCustomRows([{ userId: "", amount: "" }]);
       setIsCustomContribution(false);
+      setCreatorModeEnabled(false);
+      setCreatorCommunityId("");
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-public-tontines"] });
       toast({
         title: "Tontine creee",
-        description: "Ta tontine est visible. Tu peux inviter ou suivre les tours.",
+        description:
+          creatorModeEnabled && selectedCommunity
+            ? `Mode createur active avec ${selectedCommunity.name}: ${selectedCommunity.creatorFeeRate.toFixed(0)}% sur chaque contribution collecte.`
+            : "Ta tontine est visible. Tu peux inviter ou suivre les tours.",
       });
       if (result.tontineId) {
         navigate(`/tontine/${result.tontineId}`);
@@ -148,6 +182,10 @@ export default function TontineHome() {
     }
     if (!Number.isInteger(membersValue)) {
       setCreateError("Le nombre de membres doit etre un entier.");
+      return;
+    }
+    if (creatorModeEnabled && !creatorCommunityId) {
+      setCreateError("Active d'abord une communaute createur pour continuer.");
       return;
     }
     if (isCustomContribution) {
@@ -355,6 +393,12 @@ export default function TontineHome() {
               <p className="font-medium text-gray-800">Parcours demo sans friction</p>
               <p className="mt-0.5">Nom, montant, membres, type et ordre. Le reste se fait automatiquement.</p>
             </div>
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+              <p className="font-semibold">Activer mode createur</p>
+              <p className="mt-0.5">
+                Tu gagneras X% sur chaque contribution selon le creatorFeeRate de ta communaute backend.
+              </p>
+            </div>
 
             <Input
               value={name}
@@ -430,6 +474,59 @@ export default function TontineHome() {
                   </Button>
                 ))}
               </div>
+            </div>
+
+            <div className="rounded-xl border border-gray-100 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-sm font-medium text-gray-800">Mode createur</p>
+                <Button
+                  type="button"
+                  variant={creatorModeEnabled ? "default" : "outline"}
+                  className="h-8 rounded-lg text-xs"
+                  onClick={() => setCreatorModeEnabled((value) => !value)}
+                >
+                  {creatorModeEnabled ? "Active" : "Desactive"}
+                </Button>
+              </div>
+              {!creatorModeEnabled ? (
+                <p className="text-xs text-gray-500">
+                  Active ce mode pour monétiser chaque collecte de ta tontine via ta communaute createur.
+                </p>
+              ) : creatorDashboardQuery.isLoading ? (
+                <p className="text-xs text-gray-500">Chargement des communautes createur...</p>
+              ) : creatorCommunities.length === 0 ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-gray-500">
+                    Aucune communaute createur trouvee pour ton compte.
+                  </p>
+                  <Link href="/creator">
+                    <Button type="button" variant="outline" className="press-feedback w-full rounded-xl text-xs">
+                      Creer ma communaute
+                    </Button>
+                  </Link>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <select
+                    value={creatorCommunityId}
+                    onChange={(event) => setCreatorCommunityId(event.target.value)}
+                    className="h-10 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 text-sm"
+                  >
+                    {creatorCommunities.map((community) => (
+                      <option key={community.id} value={community.id}>
+                        {community.name} ({community.creatorFeeRate.toFixed(0)}%)
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-emerald-700">
+                    {(() => {
+                      const current = creatorCommunities.find((item) => item.id === creatorCommunityId);
+                      const feeRate = current?.creatorFeeRate ?? creatorCommunities[0]?.creatorFeeRate ?? 0;
+                      return `Tu gagneras ${feeRate.toFixed(0)}% sur chaque contribution.`;
+                    })()}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="rounded-xl border border-gray-100 p-3">
