@@ -1,7 +1,7 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { Coins, Loader2, TrendingUp, Users } from "lucide-react";
+import { Coins, Copy, Loader2, Share2, TrendingUp, Trophy, Users } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { Button } from "@/components/ui/button";
@@ -11,13 +11,16 @@ import { formatXOF } from "@/lib/api";
 import {
   getCommunityPools,
   getCreatorDashboard,
+  getCreatorReputationProfile,
   getTontineContributionSnapshot,
 } from "@/services/api/creatorService";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
+import { useToast } from "@/hooks/use-toast";
 
 interface CreatorTontineRevenueRow {
   id: string;
   name: string;
+  communityId: string;
   communityName: string;
   memberCount: number;
   contributionAmount: number;
@@ -29,6 +32,8 @@ interface CreatorTontineRevenueRow {
 
 export default function CreatorDashboard() {
   const { token, user } = useAuth();
+  const { toast } = useToast();
+  const [selectedTontineId, setSelectedTontineId] = useState("");
 
   const dashboardQuery = useQuery({
     queryKey: ["creator-dashboard-machine", user?.id],
@@ -60,6 +65,7 @@ export default function CreatorDashboard() {
           rows.push({
             id: tontineId,
             name: typeof rawTontine.name === "string" ? rawTontine.name : `Tontine ${tontineId.slice(0, 6)}`,
+            communityId: community.id,
             communityName: community.name,
             memberCount,
             contributionAmount,
@@ -73,6 +79,13 @@ export default function CreatorDashboard() {
       }
       return rows;
     },
+  });
+
+  const reputationQuery = useQuery({
+    queryKey: ["creator-reputation-profile", user?.id],
+    enabled: Boolean(user?.id),
+    queryFn: () => getCreatorReputationProfile(token, user!.id),
+    retry: false,
   });
 
   const rows = poolsQuery.data ?? [];
@@ -92,6 +105,19 @@ export default function CreatorDashboard() {
     () => [...rows].sort((a, b) => b.estimatedCreatorRevenue - a.estimatedCreatorRevenue),
     [rows],
   );
+  const inviteTarget = topRows.find((item) => item.id === selectedTontineId) ?? topRows[0];
+
+  const inviteLink = useMemo(() => {
+    if (!inviteTarget) return "";
+    const params = new URLSearchParams({
+      tontine: inviteTarget.id,
+      community: inviteTarget.communityId,
+    });
+    if (typeof window === "undefined") {
+      return `/tontine/${inviteTarget.id}?${params.toString()}`;
+    }
+    return `${window.location.origin}/tontine/${inviteTarget.id}?${params.toString()}`;
+  }, [communities, inviteTarget]);
 
   return (
     <div className="min-h-screen bg-[#fcfcfb] pb-24">
@@ -148,6 +174,50 @@ export default function CreatorDashboard() {
 
         <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base font-semibold">Gamification performance</CardTitle>
+            <Trophy className="h-4 w-4 text-amber-500" />
+          </CardHeader>
+          <CardContent>
+            {reputationQuery.isLoading ? (
+              <SkeletonCard rows={2} className="bg-transparent px-0 py-0 shadow-none border-none" />
+            ) : (
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="rounded-xl border border-gray-100 bg-white px-3 py-2.5 text-center">
+                    <p className="text-gray-500">Score</p>
+                    <p className="font-bold text-gray-900">{reputationQuery.data?.score ?? 0}</p>
+                  </div>
+                  <div className="rounded-xl border border-gray-100 bg-white px-3 py-2.5 text-center">
+                    <p className="text-gray-500">Tier</p>
+                    <p className="font-bold text-gray-900">{reputationQuery.data?.tier ?? "new"}</p>
+                  </div>
+                  <div className="rounded-xl border border-gray-100 bg-white px-3 py-2.5 text-center">
+                    <p className="text-gray-500">Badges</p>
+                    <p className="font-bold text-gray-900">{reputationQuery.data?.badgeCount ?? 0}</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(reputationQuery.data?.badges ?? []).slice(0, 4).map((badge) => (
+                    <span
+                      key={badge.badge}
+                      className="rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700"
+                    >
+                      {badge.label}
+                    </span>
+                  ))}
+                  {(reputationQuery.data?.badges ?? []).length === 0 ? (
+                    <span className="text-xs text-gray-500">
+                      Les badges apparaîtront après progression continue des cycles.
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base font-semibold">
               Revenus generes par tontine
             </CardTitle>
@@ -201,6 +271,69 @@ export default function CreatorDashboard() {
                   </div>
                 </Link>
               ))
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base font-semibold">Inviter des membres</CardTitle>
+            <Share2 className="h-4 w-4 text-gray-500" />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {topRows.length === 0 ? (
+              <EmptyHint
+                title="Aucune tontine à partager"
+                description="Crée une tontine puis active le mode créateur pour lancer ta boucle virale."
+              />
+            ) : (
+              <>
+                <p className="text-xs text-gray-500">
+                  Chaque personne que tu ajoutes te rapporte {inviteTarget?.creatorFeeRate.toFixed(0)}% sur les collectes.
+                </p>
+                <select
+                  value={inviteTarget?.id ?? ""}
+                  onChange={(event) => setSelectedTontineId(event.target.value)}
+                  className="h-11 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 text-sm"
+                >
+                  {topRows.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.name} ({row.memberCount} membres)
+                    </option>
+                  ))}
+                </select>
+                <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600 break-all">
+                  {inviteLink}
+                </div>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div className="rounded-xl border border-gray-100 bg-white px-3 py-2 text-center">
+                    <p className="text-gray-500">Membres</p>
+                    <p className="font-bold text-gray-900">{inviteTarget?.memberCount ?? 0}</p>
+                  </div>
+                  <div className="rounded-xl border border-gray-100 bg-white px-3 py-2 text-center">
+                    <p className="text-gray-500">Gains estimes</p>
+                    <p className="font-bold text-emerald-700">{formatXOF(inviteTarget?.estimatedCreatorRevenue ?? 0)}</p>
+                  </div>
+                  <div className="rounded-xl border border-gray-100 bg-white px-3 py-2 text-center">
+                    <p className="text-gray-500">Gains reels</p>
+                    <p className="font-bold text-gray-900">{formatXOF(inviteTarget?.estimatedCreatorRevenue ?? 0)}</p>
+                  </div>
+                </div>
+                <Button
+                  className="press-feedback w-full rounded-xl bg-black text-white hover:bg-black/90"
+                  onClick={async () => {
+                    if (!inviteLink) return;
+                    await navigator.clipboard.writeText(inviteLink).catch(() => undefined);
+                    toast({
+                      title: "Lien copie",
+                      description: "Partage ta tontine pour accélérer la croissance.",
+                    });
+                  }}
+                >
+                  <Copy className="h-4 w-4" />
+                  Partager ma tontine
+                </Button>
+              </>
             )}
           </CardContent>
         </Card>

@@ -17,7 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useAuth } from "@/lib/auth";
-import { formatXOF, relativeTime } from "@/lib/api";
+import { buildApiUrl, formatXOF, relativeTime } from "@/lib/api";
 import {
   depositToWallet,
   getPrimaryWallet,
@@ -39,7 +39,7 @@ async function sendTransfer(
   token: string | null,
   payload: SendTransferPayload,
 ): Promise<void> {
-  const response = await fetch("/api/wallet/transfer", {
+  const response = await fetch(buildApiUrl("/wallet/transfer"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

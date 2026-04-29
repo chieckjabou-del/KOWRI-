@@ -1,4 +1,11 @@
-const API_BASE = "/api";
+function resolveApiBase(): string {
+  const raw = import.meta.env.VITE_API_BASE?.trim();
+  if (!raw) return "/api";
+  const normalized = raw.replace(/\/$/, "");
+  return normalized.endsWith("/api") ? normalized : `${normalized}/api`;
+}
+
+const API_BASE = resolveApiBase();
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -11,6 +18,10 @@ let _unauthorizedHandler: (() => void) | null = null;
 
 export function setUnauthorizedHandler(cb: () => void): void {
   _unauthorizedHandler = cb;
+}
+
+export function buildApiUrl(path: string): string {
+  return `${API_BASE}${path}`;
 }
 
 export async function apiFetch<T = unknown>(
@@ -26,7 +37,7 @@ export async function apiFetch<T = unknown>(
 
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+    res = await fetch(buildApiUrl(path), { ...options, headers });
   } catch (networkErr: any) {
     throw new ApiError(0, "Connexion impossible. Vérifiez votre réseau.");
   }

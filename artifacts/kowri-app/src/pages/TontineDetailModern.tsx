@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
-import { BellRing, Loader2, MessageCircleMore, Sparkles, Users } from "lucide-react";
+import { BellRing, Copy, Loader2, MessageCircleMore, Sparkles, Users } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,7 @@ function paymentBadge(status: "paid" | "late"): string {
 export default function TontineDetailModern({ params }: Props) {
   const { token, user } = useAuth();
   const { toast } = useToast();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const queryClient = useQueryClient();
 
   const tontineQuery = useQuery({
@@ -39,19 +39,42 @@ export default function TontineDetailModern({ params }: Props) {
   const tontine = tontineQuery.data?.tontine;
   const usingMock = tontineQuery.data?.usingMock ?? false;
   const creatorLink = loadCreatorModeLink(params.id);
+  const urlSearch = useMemo(() => {
+    const queryString = location.includes("?") ? location.slice(location.indexOf("?")) : "";
+    return new URLSearchParams(queryString);
+  }, [location]);
+  const isDemoFlow = urlSearch.get("demo") === "1";
+  const inviteLink = useMemo(() => {
+    const query = new URLSearchParams({
+      tontine: params.id,
+      community: creatorLink?.communityId ?? "",
+    });
+    if (typeof window === "undefined") {
+      return `/tontine/${params.id}?${query.toString()}`;
+    }
+    return `${window.location.origin}/tontine/${params.id}?${query.toString()}`;
+  }, [creatorLink?.communityId, params.id]);
 
   const collectMutation = useMutation({
     mutationFn: async () => {
       const collectResult = await collectContribution(token, params.id);
+      let creatorEarningsApplied = false;
+      let creatorEarningsError: string | null = null;
       if (creatorLink && collectResult.totalCollected > 0) {
-        await distributeCommunityEarnings(
-          token,
-          creatorLink.communityId,
-          collectResult.totalCollected,
-          creatorLink.creatorFeeRate,
-        );
+        try {
+          await distributeCommunityEarnings(
+            token,
+            creatorLink.communityId,
+            collectResult.totalCollected,
+            creatorLink.creatorFeeRate,
+          );
+          creatorEarningsApplied = true;
+        } catch (error) {
+          creatorEarningsError =
+            error instanceof Error ? error.message : "Distribution createur indisponible.";
+        }
       }
-      return collectResult;
+      return { ...collectResult, creatorEarningsApplied, creatorEarningsError };
     },
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontine-detail", params.id] });
@@ -59,9 +82,14 @@ export default function TontineDetailModern({ params }: Props) {
       toast({
         title: "Collecte terminee",
         description: creatorLink
-          ? `Collecte backend: ${formatXOF(result.totalCollected)}. Commission createur distribuee automatiquement.`
+          ? result.creatorEarningsApplied
+            ? `Collecte backend: ${formatXOF(result.totalCollected)}. Commission createur distribuee automatiquement.`
+            : `Collecte backend: ${formatXOF(result.totalCollected)}. Distribution createur non appliquee (${result.creatorEarningsError ?? "indisponible"}).`
           : "La progression de la tontine est mise a jour.",
       });
+      if (creatorLink && isDemoFlow) {
+        navigate("/creator-dashboard?from=tontine");
+      }
     },
     onError: (error: unknown) => {
       toast({
@@ -152,6 +180,22 @@ export default function TontineDetailModern({ params }: Props) {
                       Aller au wallet
                     </Button>
                   </Link>
+                  {creatorLink ? (
+                    <Button
+                      variant="outline"
+                      className="press-feedback rounded-xl"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(inviteLink).catch(() => undefined);
+                        toast({
+                          title: "Lien de partage copie",
+                          description: "Partage ta tontine pour booster les contributions.",
+                        });
+                      }}
+                    >
+                      <Copy className="h-4 w-4" />
+                      Partager ma tontine
+                    </Button>
+                  ) : null}
                 </div>
               </CardContent>
             </Card>

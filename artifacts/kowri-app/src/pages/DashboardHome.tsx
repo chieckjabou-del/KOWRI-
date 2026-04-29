@@ -59,7 +59,7 @@ export default function DashboardHome() {
           title="Ton espace Akwé"
           subtitle="Solde, tontines et activité récente. Tout est prêt pour agir en moins de 60 secondes."
           actions={
-            <Link href="/tontine">
+            <Link href="/tontine?create=1&demo=1&creator=1">
               <Button className="press-feedback rounded-xl bg-black text-white hover:bg-black/90">
                 Lancer une tontine
               </Button>

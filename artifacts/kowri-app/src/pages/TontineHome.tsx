@@ -31,7 +31,7 @@ const FREQ_LABEL: Record<TontineFrequency, string> = {
 
 export default function TontineHome() {
   const { token, user } = useAuth();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
@@ -50,6 +50,16 @@ export default function TontineHome() {
     { userId: "", amount: "" },
   ]);
   const [createError, setCreateError] = useState("");
+  const urlSearch = useMemo(() => {
+    const queryString =
+      typeof window !== "undefined"
+        ? window.location.search
+        : location.includes("?")
+          ? location.slice(location.indexOf("?"))
+          : "";
+    return new URLSearchParams(queryString);
+  }, [location]);
+  const isDemoFlow = urlSearch.get("demo") === "1";
 
   const userTontinesQuery = useQuery({
     queryKey: ["akwe-tontines", user?.id],
@@ -77,6 +87,15 @@ export default function TontineHome() {
       setCreatorCommunityId(creatorCommunities[0].id);
     }
   }, [creatorModeEnabled, creatorCommunityId, creatorCommunities]);
+
+  useEffect(() => {
+    if (!showCreate && (urlSearch.get("create") === "1" || isDemoFlow)) {
+      setShowCreate(true);
+    }
+    if (urlSearch.get("creator") === "1") {
+      setCreatorModeEnabled(true);
+    }
+  }, [showCreate, urlSearch, isDemoFlow]);
 
   const myTontines = userTontinesQuery.data?.tontines ?? [];
   const discoverTontines = useMemo(() => {
@@ -156,7 +175,11 @@ export default function TontineHome() {
             : "Ta tontine est visible. Tu peux inviter ou suivre les tours.",
       });
       if (result.tontineId) {
-        navigate(`/tontine/${result.tontineId}`);
+        navigate(
+          isDemoFlow
+            ? `/tontine/${result.tontineId}?demo=1`
+            : `/tontine/${result.tontineId}`,
+        );
       }
     },
     onError: (error: unknown) => {
@@ -392,6 +415,11 @@ export default function TontineHome() {
               <p className="font-medium text-gray-800">Parcours demo sans friction</p>
               <p className="mt-0.5">Nom, montant, membres, type et ordre. Le reste se fait automatiquement.</p>
             </div>
+            {isDemoFlow ? (
+              <div className="rounded-xl border border-black/10 bg-black px-3 py-2 text-xs text-white">
+                Mode demo 60s actif: creation simplifiee, mode createur pre-active, puis collecte et redirection dashboard.
+              </div>
+            ) : null}
             <div className="rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
               <p className="font-semibold">Activer mode createur</p>
               <p className="mt-0.5">

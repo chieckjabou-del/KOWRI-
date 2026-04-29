@@ -230,3 +230,76 @@ export function loadCreatorModeLink(tontineId: string): CreatorModeLink | null {
     return null;
   }
 }
+
+export interface CreatorReputationBadge {
+  badge: string;
+  label: string;
+  description: string;
+  earnedAt?: string;
+}
+
+export interface CreatorReputationProfile {
+  score: number;
+  tier: string;
+  badgeCount: number;
+  badges: CreatorReputationBadge[];
+}
+
+export async function getCreatorReputationProfile(
+  token: string | null,
+  userId: string,
+): Promise<CreatorReputationProfile> {
+  async function loadBadges(): Promise<Record<string, unknown>> {
+    return apiFetch<Record<string, unknown>>(
+      `/community/reputation/${encodeURIComponent(userId)}/badges`,
+      token,
+    );
+  }
+
+  try {
+    const data = await loadBadges();
+    return {
+      score: asNumber(data.score, 0),
+      tier: asString(data.tier, "new"),
+      badgeCount: asNumber(data.badgeCount, 0),
+      badges: Array.isArray(data.badges)
+        ? data.badges
+            .map((row) => row as Record<string, unknown>)
+            .map((row) => ({
+              badge: asString(row.badge),
+              label: asString(row.label, asString(row.badge, "Badge")),
+              description: asString(row.description, ""),
+              earnedAt: row.earnedAt ? asString(row.earnedAt) : undefined,
+            }))
+            .filter((row) => row.badge)
+        : [],
+    };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      // If reputation wasn't computed yet, trigger existing backend computation then retry badges.
+      await apiFetch(
+        `/community/reputation/${encodeURIComponent(userId)}/compute`,
+        token,
+        { method: "POST" },
+      ).catch(() => undefined);
+      const data = await loadBadges().catch(() => ({} as Record<string, unknown>));
+      return {
+        score: asNumber(data.score, 0),
+        tier: asString(data.tier, "new"),
+        badgeCount: asNumber(data.badgeCount, 0),
+        badges: Array.isArray(data.badges)
+          ? data.badges
+              .map((row) => row as Record<string, unknown>)
+              .map((row) => ({
+                badge: asString(row.badge),
+                label: asString(row.label, asString(row.badge, "Badge")),
+                description: asString(row.description, ""),
+                earnedAt: row.earnedAt ? asString(row.earnedAt) : undefined,
+              }))
+              .filter((row) => row.badge)
+          : [],
+      };
+    }
+    throw error;
+  }
+}
