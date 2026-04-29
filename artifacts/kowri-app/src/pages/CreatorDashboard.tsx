@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "wouter";
-import { Coins, Copy, Loader2, Share2, Sparkles, TrendingUp, Trophy, Users } from "lucide-react";
+import { CheckCircle2, Coins, Copy, Flame, Loader2, Share2, Sparkles, TrendingUp, Trophy, Users } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { Button } from "@/components/ui/button";
@@ -89,6 +89,55 @@ const BADGE_PRIORITY = [
   "bronze",
 ];
 
+const RETENTION_STATE_KEY = "akwe-retention-loop-state";
+const SHARE_DAILY_COUNT_KEY = "akwe-share-daily-counts";
+
+interface RetentionState {
+  lastActiveDate: string;
+  streak: number;
+}
+
+function todayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function yesterdayIsoDate(): string {
+  const date = new Date();
+  date.setDate(date.getDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function readRetentionState(): RetentionState {
+  if (typeof window === "undefined") {
+    return { lastActiveDate: "", streak: 0 };
+  }
+  try {
+    const raw = window.localStorage.getItem(RETENTION_STATE_KEY);
+    if (!raw) return { lastActiveDate: "", streak: 0 };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      lastActiveDate: typeof parsed.lastActiveDate === "string" ? parsed.lastActiveDate : "",
+      streak: Number.isFinite(Number(parsed.streak)) ? Number(parsed.streak) : 0,
+    };
+  } catch {
+    return { lastActiveDate: "", streak: 0 };
+  }
+}
+
+function readShareDailyCounts(): Record<string, number> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(SHARE_DAILY_COUNT_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, value]) => [key, Number.isFinite(Number(value)) ? Number(value) : 0]),
+    );
+  } catch {
+    return {};
+  }
+}
+
 function levelFromScore(score: number): LevelConfig {
   return LEVELS.find((item) => score >= item.minScore && score <= item.maxScore) ?? LEVELS[0];
 }
@@ -137,6 +186,10 @@ export default function CreatorDashboard() {
       return 0;
     }
   });
+  const [retentionState, setRetentionState] = useState<RetentionState>(() => readRetentionState());
+  const [shareDailyCountMap, setShareDailyCountMap] = useState<Record<string, number>>(() =>
+    readShareDailyCounts(),
+  );
 
   const dashboardQuery = useQuery({
     queryKey: ["creator-dashboard-machine", user?.id],
@@ -328,6 +381,56 @@ export default function CreatorDashboard() {
       : currentLevel.key === "silver"
         ? "Encore une poussee et tu passes Gold pour augmenter ta traction."
         : "Passe Silver rapidement pour accelerer ta credibilite createur.";
+  const today = todayIsoDate();
+  const yesterday = yesterdayIsoDate();
+  const shareToday = shareDailyCountMap[today] ?? 0;
+  const targetShares = 3;
+  const targetMembers = 5;
+  const targetTodayGain = 10000;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const current = readRetentionState();
+    let nextStreak = current.streak;
+    if (current.lastActiveDate === today) return;
+    if (current.lastActiveDate === yesterday) {
+      nextStreak = Math.max(1, current.streak + 1);
+    } else {
+      nextStreak = 1;
+    }
+    const nextState: RetentionState = { lastActiveDate: today, streak: nextStreak };
+    setRetentionState(nextState);
+    try {
+      window.localStorage.setItem(RETENTION_STATE_KEY, JSON.stringify(nextState));
+    } catch {
+      // ignore storage failures
+    }
+  }, [today, yesterday]);
+
+  const dailyGoals = [
+    {
+      id: "share",
+      label: "Partager 3 fois ta tontine",
+      progress: shareToday,
+      target: targetShares,
+      done: shareToday >= targetShares,
+    },
+    {
+      id: "members",
+      label: "Atteindre 5 membres invites",
+      progress: invitedCount,
+      target: targetMembers,
+      done: invitedCount >= targetMembers,
+    },
+    {
+      id: "earnings",
+      label: "Generer 10 000 XOF aujourd'hui",
+      progress: mainMoneyValue,
+      target: targetTodayGain,
+      done: mainMoneyValue >= targetTodayGain,
+    },
+  ];
+  const goalsCompleted = dailyGoals.filter((goal) => goal.done).length;
 
   return (
     <div className="min-h-screen bg-[#fcfcfb] pb-24">
@@ -356,6 +459,50 @@ export default function CreatorDashboard() {
               Simulation visuelle: si tu ajoutes 100 personnes sur un tour de reference,
               tu peux generer {formatXOF(hundredMembersVisual)} de commission createur.
             </p>
+          </CardContent>
+        </Card>
+
+        <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base font-semibold">Boucle de retour journaliere</CardTitle>
+            <div className="flex items-center gap-1.5 rounded-full border border-orange-100 bg-orange-50 px-2.5 py-1 text-xs font-semibold text-orange-700">
+              <Flame className="h-3.5 w-3.5" />
+              Streak {retentionState.streak}j
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="rounded-2xl border border-gray-100 bg-gray-50 px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Objectifs du jour</p>
+              <p className="mt-1 text-sm font-semibold text-black">
+                {goalsCompleted}/3 completes. Reviens demain pour prolonger ta serie.
+              </p>
+            </div>
+            <div className="space-y-2">
+              {dailyGoals.map((goal) => (
+                <div key={goal.id} className="rounded-xl border border-gray-100 bg-white px-3 py-2.5">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-medium text-black">{goal.label}</p>
+                    {goal.done ? (
+                      <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        OK
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 h-1.5 rounded-full bg-gray-100">
+                    <div
+                      className={`h-1.5 rounded-full ${goal.done ? "bg-emerald-600" : "bg-black"}`}
+                      style={{ width: `${clamp((goal.progress / Math.max(goal.target, 1)) * 100, 0, 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    {goal.progress >= goal.target
+                      ? `Objectif atteint (${goal.progress}/${goal.target}).`
+                      : `Encore ${Math.max(goal.target - goal.progress, 0)} pour valider.`}
+                  </p>
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
 
@@ -656,7 +803,23 @@ export default function CreatorDashboard() {
                       }
                       return nextValue;
                     });
-                    window.setTimeout(() => setShareBurst(false), 900);
+                    setShareDailyCountMap((currentMap) => {
+                      const nextValue = (currentMap[today] ?? 0) + 1;
+                      const nextMap = { ...currentMap, [today]: nextValue };
+                      if (typeof window !== "undefined") {
+                        try {
+                          window.localStorage.setItem(SHARE_DAILY_COUNT_KEY, JSON.stringify(nextMap));
+                        } catch {
+                          // ignore storage failures
+                        }
+                      }
+                      return nextMap;
+                    });
+                    if (typeof window !== "undefined") {
+                      window.setTimeout(() => setShareBurst(false), 900);
+                    } else {
+                      setShareBurst(false);
+                    }
                     toast({
                       title: "Lien copie",
                       description: "Partage ta tontine pour accelerer la croissance.",
