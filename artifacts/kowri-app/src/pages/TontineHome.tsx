@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
-import { ArrowRight, Loader2, Plus, Search, Sparkles, Users } from "lucide-react";
+import { ArrowRight, CheckCircle2, CircleHelp, Loader2, Plus, Search, Sparkles, Users } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,8 @@ import {
   searchPublicTontines,
 } from "@/services/api/tontineService";
 import type { RotationModel, TontineFrequency } from "@/types/akwe";
+import { useToast } from "@/hooks/use-toast";
+import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 
 const FREQUENCIES: TontineFrequency[] = ["weekly", "biweekly", "monthly"];
 const FREQ_LABEL: Record<TontineFrequency, string> = {
@@ -30,6 +32,7 @@ export default function TontineHome() {
   const { token, user } = useAuth();
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [showCreate, setShowCreate] = useState(false);
   const [showExplorer, setShowExplorer] = useState(false);
   const [showFlexibleInfo, setShowFlexibleInfo] = useState(false);
@@ -73,6 +76,17 @@ export default function TontineHome() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-public-tontines"] });
+      toast({
+        title: "Demande envoyee",
+        description: "Tu viens de rejoindre la tontine. Mise a jour en cours.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Impossible de rejoindre",
+        description: error instanceof Error ? error.message : "Reessaie dans un instant.",
+      });
     },
   });
 
@@ -84,7 +98,7 @@ export default function TontineHome() {
         .map((row) => ({ userId: row.userId.trim(), personalContribution: Number(row.amount) }))
         .filter((row) => row.userId && Number.isFinite(row.personalContribution) && row.personalContribution > 0);
       const effectiveType = tontineType === "solidarity" ? "classic" : tontineType;
-      const result = await createTontine(token, user.id, {
+      return createTontine(token, user.id, {
         name: payloadName,
         contributionAmount: Number(amount),
         maxMembers: Number(maxMembers),
@@ -96,7 +110,6 @@ export default function TontineHome() {
         isFlexibleOrder: rotationMode !== "fixed",
         customContributions,
       });
-      return result;
     },
     onSuccess: async (result) => {
       setShowCreate(false);
@@ -104,44 +117,118 @@ export default function TontineHome() {
       setCustomRows([{ userId: "", amount: "" }]);
       setIsCustomContribution(false);
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
+      await queryClient.invalidateQueries({ queryKey: ["akwe-public-tontines"] });
+      toast({
+        title: "Tontine creee",
+        description: "Ta tontine est visible. Tu peux inviter ou suivre les tours.",
+      });
       if (result.tontineId) {
         navigate(`/tontine/${result.tontineId}`);
       }
     },
     onError: (error: unknown) => {
-      setCreateError(error instanceof Error ? error.message : "Creation impossible");
+      const message = error instanceof Error ? error.message : "Creation impossible";
+      setCreateError(message);
+      toast({ variant: "destructive", title: "Creation bloquee", description: message });
     },
   });
+
+  function handleCreate() {
+    setCreateError("");
+    const amountValue = Number(amount);
+    const membersValue = Number(maxMembers);
+
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      setCreateError("Le montant de cotisation doit etre superieur a 0.");
+      return;
+    }
+    if (!Number.isFinite(membersValue) || membersValue < 2) {
+      setCreateError("Le nombre de membres doit etre superieur ou egal a 2.");
+      return;
+    }
+    if (!Number.isInteger(membersValue)) {
+      setCreateError("Le nombre de membres doit etre un entier.");
+      return;
+    }
+    if (isCustomContribution) {
+      const hasInvalidRow = customRows.some((row) => {
+        if (!row.userId.trim() && !row.amount.trim()) return false;
+        const parsed = Number(row.amount);
+        return !row.userId.trim() || !Number.isFinite(parsed) || parsed <= 0;
+      });
+      if (hasInvalidRow) {
+        setCreateError("Verifie la liste des cotisations personnalisees avant de continuer.");
+        return;
+      }
+
+      if (customRows.length > 1) {
+        toast({
+          title: "Info backend conservee",
+          description:
+            "Les montants personnalises seront ajustes apres creation. La creation part bien avec is_multi_amount=true.",
+        });
+      }
+    }
+
+    createMutation.mutate();
+  }
 
   return (
     <div className="min-h-screen bg-[#fcfcfb] pb-24">
       <TopBar title="Tontine" />
-      <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 pt-5">
+      <ScreenContainer>
+        <SectionIntro
+          title="Lance ta tontine sans friction"
+          subtitle="Creer, rejoindre et piloter une tontine premium avec une lecture claire des tours."
+          actions={
+            <Button variant="outline" className="press-feedback rounded-xl" onClick={() => setShowExplorer(true)}>
+              <Search className="h-4 w-4" />
+              Explorer
+            </Button>
+          }
+        />
+
         {usingMock && (
           <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
             Mode simulation active: fallback visuel active pour garantir la demo.
           </div>
         )}
 
-        <Card className="rounded-3xl border-black/5 shadow-sm">
+        <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base font-semibold">Mes tontines</CardTitle>
-            <Button className="rounded-xl bg-black text-white hover:bg-black/90" onClick={() => setShowCreate(true)}>
+            <Button
+              className="press-feedback rounded-xl bg-black text-white hover:bg-black/90"
+              onClick={() => setShowCreate(true)}
+            >
               <Plus className="h-4 w-4" />
-                Cree ta tontine
+              Lancer en 30s
             </Button>
           </CardHeader>
           <CardContent className="space-y-3">
             {userTontinesQuery.isLoading ? (
-              <p className="text-sm text-gray-500">Chargement des tontines...</p>
+              <SkeletonCard rows={4} className="bg-transparent px-0 py-0 shadow-none border-none" />
             ) : myTontines.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-500">
-                Aucune tontine active. Creez votre premiere tontine pour demarrer.
-              </div>
+              <EmptyHint
+                title="Aucune tontine active"
+                description="Lance la tienne pour demarrer un cycle clair et attirer tes membres."
+                action={
+                  <Button className="press-feedback rounded-xl bg-black text-white hover:bg-black/90" onClick={() => setShowCreate(true)}>
+                    Creer maintenant
+                  </Button>
+                }
+              />
             ) : (
-              myTontines.map((item) => (
+              myTontines.map((item, index) => (
                 <Link key={item.id} href={`/tontine/${item.id}`}>
-                  <div className="cursor-pointer rounded-2xl border border-gray-100 px-4 py-4 transition hover:border-black/15">
+                  <div
+                    className="premium-hover cursor-pointer rounded-2xl border border-gray-100 bg-white px-4 py-4 transition hover:border-black/15"
+                    style={{
+                      animation: "premium-page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+                      animationDelay: `${Math.min(index * 45, 220)}ms`,
+                      animationFillMode: "both",
+                    }}
+                  >
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <p className="text-sm font-semibold text-black">{item.name}</p>
@@ -153,6 +240,14 @@ export default function TontineHome() {
                         {FREQ_LABEL[item.frequency]}
                         <ArrowRight className="h-4 w-4" />
                       </div>
+                    </div>
+                    <div className="mt-2.5 flex flex-wrap gap-1.5">
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-700">
+                        {item.tontineType}
+                      </span>
+                      <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold text-gray-700">
+                        Tour {item.currentRound}/{item.totalRounds}
+                      </span>
                     </div>
                     <div className="mt-3 h-1.5 rounded-full bg-gray-100">
                       <div
@@ -172,11 +267,11 @@ export default function TontineHome() {
           </CardContent>
         </Card>
 
-        <Card className="rounded-3xl border-black/5 shadow-sm">
+        <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="text-base font-semibold">Trouver une tontine pres de toi</CardTitle>
-              <Button variant="outline" className="rounded-xl" onClick={() => setShowExplorer(true)}>
+              <Button variant="outline" className="press-feedback rounded-xl" onClick={() => setShowExplorer(true)}>
                 <Search className="h-4 w-4" />
                 Explorer
               </Button>
@@ -184,14 +279,15 @@ export default function TontineHome() {
           </CardHeader>
           <CardContent className="space-y-3">
             {publicTontinesQuery.isLoading ? (
-              <p className="text-sm text-gray-500">Chargement des tontines publiques...</p>
+              <SkeletonCard rows={3} className="bg-transparent px-0 py-0 shadow-none border-none" />
             ) : discoverTontines.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-500">
-                Aucune tontine publique disponible.
-              </div>
+              <EmptyHint
+                title="Aucune tontine publique"
+                description="Aucune opportunite visible maintenant. Utilise Explorer pour filtrer plus finement."
+              />
             ) : (
               discoverTontines.slice(0, 6).map((item) => (
-                <div key={item.id} className="rounded-2xl border border-gray-100 px-4 py-4">
+                <div key={item.id} className="premium-hover rounded-2xl border border-gray-100 bg-white px-4 py-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-sm font-semibold text-black">{item.name}</p>
@@ -209,7 +305,7 @@ export default function TontineHome() {
                     </div>
                     <Button
                       variant="outline"
-                      className="rounded-xl"
+                      className="press-feedback rounded-xl"
                       onClick={() => joinMutation.mutate(item.id)}
                       disabled={joinMutation.isPending}
                     >
@@ -224,37 +320,42 @@ export default function TontineHome() {
         </Card>
 
         <section className="grid gap-3 sm:grid-cols-2">
-          <Card className="rounded-2xl border-black/5 shadow-sm">
+          <Card className="premium-card premium-hover rounded-2xl border-black/5 shadow-sm">
             <CardContent className="flex items-start gap-3 p-5">
               <Users className="mt-0.5 h-5 w-5 text-black" />
               <div>
                 <p className="text-sm font-semibold text-black">Suivi des cotisations</p>
                 <p className="mt-1 text-xs text-gray-500">
-                  Badge paye/en retard et indicateurs de fiabilite membre.
+                  Badges de paiement et indicateurs de fiabilite membre visibles instantanement.
                 </p>
               </div>
             </CardContent>
           </Card>
-          <Card className="rounded-2xl border-black/5 shadow-sm">
+          <Card className="premium-card premium-hover rounded-2xl border-black/5 shadow-sm">
             <CardContent className="flex items-start gap-3 p-5">
               <Sparkles className="mt-0.5 h-5 w-5 text-black" />
               <div>
                 <p className="text-sm font-semibold text-black">Timeline intelligente</p>
                 <p className="mt-1 text-xs text-gray-500">
-                  Vision claire des tours passes, en cours et a venir.
+                  Une progression claire des tours passes, en cours et a venir.
                 </p>
               </div>
             </CardContent>
           </Card>
         </section>
-      </main>
+      </ScreenContainer>
 
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent className="max-w-md rounded-2xl border-black/10">
           <DialogHeader>
-            <DialogTitle>Cree ta tontine et organise ton cercle</DialogTitle>
+            <DialogTitle>Lance ta tontine en 30 secondes</DialogTitle>
           </DialogHeader>
           <div className="space-y-3">
+            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+              <p className="font-medium text-gray-800">Parcours demo sans friction</p>
+              <p className="mt-0.5">Nom, montant, membres, type et ordre. Le reste se fait automatiquement.</p>
+            </div>
+
             <Input
               value={name}
               onChange={(event) => setName(event.target.value)}
@@ -277,6 +378,7 @@ export default function TontineHome() {
                 className="h-11 rounded-xl"
               />
             </div>
+
             <div>
               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Type visible</p>
               <div className="grid grid-cols-3 gap-2">
@@ -289,7 +391,7 @@ export default function TontineHome() {
                     key={item.id}
                     type="button"
                     variant={tontineType === item.id ? "default" : "outline"}
-                    className="rounded-xl text-xs"
+                    className="press-feedback rounded-xl text-xs"
                     onClick={() => setTontineType(item.id as typeof tontineType)}
                   >
                     {item.label}
@@ -297,8 +399,20 @@ export default function TontineHome() {
                 ))}
               </div>
             </div>
+
             <div>
-              <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-gray-500">Ordre de rotation</p>
+              <div className="mb-1.5 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Ordre de rotation</p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-7 rounded-lg px-2 text-[11px] text-gray-500"
+                  onClick={() => setShowFlexibleInfo(true)}
+                >
+                  <CircleHelp className="h-3.5 w-3.5" />
+                  Voir logique backend
+                </Button>
+              </div>
               <div className="grid grid-cols-3 gap-2">
                 {[
                   { id: "fixed", label: "Fixe" },
@@ -309,7 +423,7 @@ export default function TontineHome() {
                     key={item.id}
                     type="button"
                     variant={rotationMode === item.id ? "default" : "outline"}
-                    className="rounded-xl text-xs"
+                    className="press-feedback rounded-xl text-xs"
                     onClick={() => setRotationMode(item.id as RotationModel)}
                   >
                     {item.label}
@@ -317,6 +431,7 @@ export default function TontineHome() {
                 ))}
               </div>
             </div>
+
             <div className="rounded-xl border border-gray-100 p-3">
               <div className="mb-2 flex items-center justify-between">
                 <p className="text-sm font-medium text-gray-800">Cotisations flexibles</p>
@@ -363,7 +478,7 @@ export default function TontineHome() {
                   <Button
                     type="button"
                     variant="outline"
-                    className="w-full rounded-xl"
+                    className="press-feedback w-full rounded-xl"
                     onClick={() => setCustomRows((rows) => [...rows, { userId: "", amount: "" }])}
                   >
                     Ajouter un membre
@@ -375,65 +490,34 @@ export default function TontineHome() {
                 </p>
               )}
             </div>
+
             <div className="grid grid-cols-3 gap-2">
               {FREQUENCIES.map((freq) => (
                 <Button
                   key={freq}
                   type="button"
                   variant={frequency === freq ? "default" : "outline"}
-                  className="rounded-xl"
+                  className="press-feedback rounded-xl"
                   onClick={() => setFrequency(freq)}
                 >
                   {FREQ_LABEL[freq]}
                 </Button>
               ))}
             </div>
+
             {createError ? (
               <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
                 {createError}
               </div>
             ) : null}
+
             <Button
-              className="w-full rounded-xl bg-black text-white hover:bg-black/90"
-              onClick={() => {
-                setCreateError("");
-                const amountValue = Number(amount);
-                const membersValue = Number(maxMembers);
-                if (!Number.isFinite(amountValue) || amountValue <= 0) {
-                  setCreateError("Montant de cotisation invalide.");
-                  return;
-                }
-                if (!Number.isFinite(membersValue) || membersValue < 2) {
-                  setCreateError("Le nombre de membres doit etre >= 2.");
-                  return;
-                }
-                if (!Number.isInteger(membersValue)) {
-                  setCreateError("Le nombre de membres doit etre un entier.");
-                  return;
-                }
-                if (isCustomContribution) {
-                  const hasInvalidRow = customRows.some((row) => {
-                    if (!row.userId.trim() && !row.amount.trim()) return false;
-                    const parsed = Number(row.amount);
-                    return !row.userId.trim() || !Number.isFinite(parsed) || parsed <= 0;
-                  });
-                  if (hasInvalidRow) {
-                    setCreateError("Verifier le tableau des cotisations personnalisees.");
-                    return;
-                  }
-                  if (customRows.length > 1) {
-                    setCreateError(
-                      "Info backend: les cotisations personnalisees seront configurees apres creation via les routes existantes " +
-                      "(la creation backend conserve is_multi_amount=true).",
-                    );
-                  }
-                }
-                createMutation.mutate();
-              }}
+              className="press-feedback w-full rounded-xl bg-black text-white hover:bg-black/90"
+              onClick={handleCreate}
               disabled={createMutation.isPending}
             >
-              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Creer maintenant
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              {createMutation.isPending ? "Creation..." : "Creer maintenant"}
             </Button>
           </div>
         </DialogContent>
@@ -491,12 +575,7 @@ function ExplorerDialog({
     queryFn: () =>
       searchPublicTontines(token, {
         zoneQuery,
-        type:
-          type === "all"
-            ? undefined
-            : type === "solidarity"
-              ? "classic"
-              : type,
+        type: type === "all" ? undefined : type === "solidarity" ? "classic" : type,
         minAmount: minAmount ? Number(minAmount) : undefined,
         maxAmount: maxAmount ? Number(maxAmount) : undefined,
         minMembers: minMembers ? Number(minMembers) : undefined,
@@ -515,7 +594,7 @@ function ExplorerDialog({
           <Input
             value={zoneQuery}
             onChange={(event) => setZoneQuery(event.target.value)}
-            placeholder="Recherche par zone (ville / pays)"
+            placeholder="Trouve une tontine proche de toi (ville / pays)"
             className="h-11 rounded-xl"
           />
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -552,19 +631,26 @@ function ExplorerDialog({
               <option value="investment">Investissement</option>
             </select>
           </div>
+
           {explorerQuery.isLoading ? (
-            <div className="py-4 text-sm text-gray-500">Chargement...</div>
+            <SkeletonCard rows={4} className="bg-transparent px-0 py-0 shadow-none border-none" />
           ) : rows.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-500">
-              Aucune tontine trouvee.
-            </div>
+            <EmptyHint
+              title="Aucune tontine trouvee"
+              description="Essaie avec une zone differente ou des filtres plus larges."
+            />
           ) : (
             <div className="max-h-[360px] space-y-2 overflow-y-auto pr-1">
-              {rows.map((item) => (
+              {rows.map((item, index) => (
                 <button
                   key={item.id}
-                  className="w-full rounded-xl border border-gray-100 px-3 py-3 text-left transition hover:border-black/15"
+                  className="premium-hover w-full rounded-xl border border-gray-100 bg-white px-3 py-3 text-left transition hover:border-black/15"
                   onClick={() => onOpenTontine(item.id)}
+                  style={{
+                    animation: "premium-page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+                    animationDelay: `${Math.min(index * 40, 220)}ms`,
+                    animationFillMode: "both",
+                  }}
                 >
                   <p className="text-sm font-semibold text-black">{item.name}</p>
                   <p className="mt-1 text-xs text-gray-500">

@@ -10,6 +10,8 @@ import { useAuth } from "@/lib/auth";
 import { formatXOF } from "@/lib/api";
 import { collectContribution, getTontineOverview } from "@/services/api/tontineService";
 import { nextReceiverLabel, timelineBulletColor, tontineHealthColor } from "@/features/tontine/tontine-ui";
+import { useToast } from "@/hooks/use-toast";
+import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 
 interface Props {
   params: { id: string };
@@ -23,6 +25,7 @@ function paymentBadge(status: "paid" | "late"): string {
 
 export default function TontineDetailModern({ params }: Props) {
   const { token, user } = useAuth();
+  const { toast } = useToast();
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
 
@@ -42,6 +45,17 @@ export default function TontineDetailModern({ params }: Props) {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontine-detail", params.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
+      toast({
+        title: "Collecte terminee",
+        description: "La progression de la tontine est mise a jour.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Collecte impossible",
+        description: error instanceof Error ? error.message : "Reessaie dans quelques secondes.",
+      });
     },
   });
 
@@ -54,11 +68,13 @@ export default function TontineDetailModern({ params }: Props) {
   return (
     <div className="min-h-screen bg-[#fcfcfb] pb-24">
       <TopBar title="Detail tontine" showBack onBack={() => navigate("/tontine")} />
-      <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 pt-5">
+      <ScreenContainer>
+        <SectionIntro
+          title="Vue complete de ta tontine"
+          subtitle="Membres, tours, fiabilite et timeline dans une seule lecture."
+        />
         {tontineQuery.isLoading ? (
-          <div className="rounded-2xl border border-gray-100 bg-white px-5 py-8 text-center text-sm text-gray-500">
-            Chargement de la tontine...
-          </div>
+          <SkeletonCard rows={6} />
         ) : null}
 
         {usingMock ? (
@@ -69,7 +85,7 @@ export default function TontineDetailModern({ params }: Props) {
 
         {!tontineQuery.isLoading && tontine ? (
           <>
-            <Card className="rounded-3xl border-black/5 shadow-sm">
+            <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
               <CardHeader className="gap-2">
                 <CardTitle className="text-xl font-bold">{tontine.name}</CardTitle>
                 <p className="text-xs text-gray-500">
@@ -111,15 +127,15 @@ export default function TontineDetailModern({ params }: Props) {
                 ) : null}
                 <div className="flex flex-wrap gap-2">
                   <Button
-                    className="rounded-xl bg-black text-white hover:bg-black/90"
+                    className="press-feedback rounded-xl bg-black text-white hover:bg-black/90"
                     onClick={() => collectMutation.mutate()}
                     disabled={collectMutation.isPending}
                   >
                     {collectMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                    Simuler collecte
+                    {collectMutation.isPending ? "Collecte..." : "Simuler collecte"}
                   </Button>
                   <Link href="/wallet">
-                    <Button variant="outline" className="rounded-xl">
+                    <Button variant="outline" className="press-feedback rounded-xl">
                       Aller au wallet
                     </Button>
                   </Link>
@@ -127,15 +143,20 @@ export default function TontineDetailModern({ params }: Props) {
               </CardContent>
             </Card>
 
-            <Card className="rounded-3xl border-black/5 shadow-sm">
+            <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">Membres et fiabilite</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                {tontine.members.map((member) => (
+                {tontine.members.map((member, index) => (
                   <div
                     key={member.userId}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-100 px-4 py-3"
+                    className="premium-hover flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-gray-100 px-4 py-3"
+                    style={{
+                      animation: "premium-page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+                      animationDelay: `${Math.min(index * 40, 240)}ms`,
+                      animationFillMode: "both",
+                    }}
                   >
                     <div>
                       <p className="text-sm font-semibold text-black">{member.userName}</p>
@@ -159,18 +180,27 @@ export default function TontineDetailModern({ params }: Props) {
               </CardContent>
             </Card>
 
-            <Card className="rounded-3xl border-black/5 shadow-sm">
+            <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">Timeline de la tontine</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
                 {tontine.timeline.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-500">
-                    Timeline en preparation.
-                  </div>
+                  <EmptyHint
+                    title="Timeline en preparation"
+                    description="Les prochains evenements apparaitront ici automatiquement."
+                  />
                 ) : (
-                  tontine.timeline.map((item) => (
-                    <div key={item.id} className="flex items-start gap-3">
+                  tontine.timeline.map((item, index) => (
+                    <div
+                      key={item.id}
+                      className="flex items-start gap-3"
+                      style={{
+                        animation: "premium-page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+                        animationDelay: `${Math.min(index * 50, 260)}ms`,
+                        animationFillMode: "both",
+                      }}
+                    >
                       <span className={`mt-1 h-2.5 w-2.5 rounded-full ${timelineBulletColor(item.status)}`} />
                       <div className="rounded-xl border border-gray-100 px-3 py-3">
                         <p className="text-sm font-semibold text-black">{item.title}</p>
@@ -184,7 +214,7 @@ export default function TontineDetailModern({ params }: Props) {
             </Card>
 
             <section className="grid gap-3 sm:grid-cols-2">
-              <Card className="rounded-2xl border-black/5 shadow-sm">
+              <Card className="premium-card premium-hover rounded-2xl border-black/5 shadow-sm">
                 <CardContent className="flex items-start gap-3 p-5">
                   <MessageCircleMore className="mt-0.5 h-5 w-5 text-black" />
                   <div>
@@ -195,7 +225,7 @@ export default function TontineDetailModern({ params }: Props) {
                   </div>
                 </CardContent>
               </Card>
-              <Card className="rounded-2xl border-black/5 shadow-sm">
+              <Card className="premium-card premium-hover rounded-2xl border-black/5 shadow-sm">
                 <CardContent className="flex items-start gap-3 p-5">
                   <BellRing className="mt-0.5 h-5 w-5 text-black" />
                   <div>
@@ -208,7 +238,7 @@ export default function TontineDetailModern({ params }: Props) {
               </Card>
             </section>
 
-            <Card className="rounded-3xl border-black/5 shadow-sm">
+            <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
               <CardHeader>
                 <CardTitle className="text-base font-semibold">Historique & notifications</CardTitle>
               </CardHeader>
@@ -230,15 +260,15 @@ export default function TontineDetailModern({ params }: Props) {
         ) : null}
 
         {!tontineQuery.isLoading && !tontine ? (
-          <Card className="rounded-3xl border-black/5 shadow-sm">
-            <CardContent className="space-y-4 p-6 text-center">
-              <Users className="mx-auto h-6 w-6 text-gray-400" />
-              <p className="text-sm text-gray-600">Tontine introuvable.</p>
+          <EmptyHint
+            title="Tontine introuvable"
+            description="Retourne a la liste pour ouvrir une tontine active."
+            action={
               <Link href="/tontine">
-                <Button className="rounded-xl bg-black text-white hover:bg-black/90">Retour a la liste</Button>
+                <Button className="press-feedback rounded-xl bg-black text-white hover:bg-black/90">Retour a la liste</Button>
               </Link>
-            </CardContent>
-          </Card>
+            }
+          />
         ) : null}
 
         <div className="rounded-2xl border border-gray-100 bg-white px-4 py-3 text-xs text-gray-500">
@@ -247,7 +277,7 @@ export default function TontineDetailModern({ params }: Props) {
             Frontend adapte au backend existant, sans modification de logique metier.
           </div>
         </div>
-      </main>
+      </ScreenContainer>
       <BottomNav />
     </div>
   );

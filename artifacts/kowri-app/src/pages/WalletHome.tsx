@@ -1,7 +1,15 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowUpRight, Copy, CreditCard, Landmark, Loader2 } from "lucide-react";
-import { Link } from "wouter";
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  CheckCircle2,
+  Copy,
+  CreditCard,
+  Landmark,
+  Loader2,
+  SendHorizontal,
+} from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { Button } from "@/components/ui/button";
@@ -16,6 +24,8 @@ import {
   getWalletTransactions,
 } from "@/services/api/walletService";
 import { transactionDirection } from "@/features/wallet/wallet-ui";
+import { useToast } from "@/hooks/use-toast";
+import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 
 type SendTransferPayload = {
   fromWalletId: string;
@@ -29,7 +39,7 @@ async function sendTransfer(
   token: string | null,
   payload: SendTransferPayload,
 ): Promise<void> {
-  await fetch("/api/wallet/transfer", {
+  const response = await fetch("/api/wallet/transfer", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -38,14 +48,21 @@ async function sendTransfer(
     },
     body: JSON.stringify(payload),
   });
+  if (!response.ok) {
+    throw new Error("Transfert refuse. Verifie le montant ou le destinataire.");
+  }
 }
 
 export default function WalletHome() {
   const { token, user } = useAuth();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [showReceive, setShowReceive] = useState(false);
   const [showDeposit, setShowDeposit] = useState(false);
+  const [showSend, setShowSend] = useState(false);
   const [depositAmount, setDepositAmount] = useState("50000");
+  const [sendAmount, setSendAmount] = useState("10000");
+  const [recipientWalletId, setRecipientWalletId] = useState("");
   const [copied, setCopied] = useState(false);
 
   const walletQuery = useQuery({
@@ -73,13 +90,66 @@ export default function WalletHome() {
     mutationFn: async () => {
       if (!wallet) return;
       const amount = Number(depositAmount);
-      if (!Number.isFinite(amount) || amount <= 0) return;
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new Error("Montant de depot invalide.");
+      }
       await depositToWallet(token, wallet.id, amount);
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet-transactions", wallet?.id] });
       setShowDeposit(false);
+      toast({
+        title: "Depot enregistre",
+        description: "Le wallet a recu ta demande de depot.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Depot impossible",
+        description: error instanceof Error ? error.message : "Reessaie dans un instant.",
+      });
+    },
+  });
+
+  const sendMutation = useMutation({
+    mutationFn: async () => {
+      if (!wallet) {
+        throw new Error("Wallet principal introuvable.");
+      }
+      const amount = Number(sendAmount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new Error("Montant a envoyer invalide.");
+      }
+      if (!recipientWalletId.trim()) {
+        throw new Error("Ajoute un identifiant wallet destinataire.");
+      }
+      await sendTransfer(token, {
+        fromWalletId: wallet.id,
+        toWalletId: recipientWalletId.trim(),
+        amount,
+        currency: "XOF",
+        description: "Transfert Wallet Akwe",
+      });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["akwe-wallet", user?.id] });
+      await queryClient.invalidateQueries({ queryKey: ["akwe-wallet-transactions", wallet?.id] });
+      setShowSend(false);
+      setRecipientWalletId("");
+      setSendAmount("10000");
+      toast({
+        title: "Transfert envoye",
+        description: "Ton envoi a ete lance avec succes.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Transfert bloque",
+        description: error instanceof Error ? error.message : "Verifie les informations et reessaie.",
+      });
     },
   });
 
@@ -88,20 +158,24 @@ export default function WalletHome() {
   return (
     <div className="min-h-screen bg-[#fcfcfb] pb-24">
       <TopBar title="Wallet" />
-      <main className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 pt-5">
+      <ScreenContainer>
+        <SectionIntro
+          title="Ton wallet instantane"
+          subtitle="Envoie, recois, depose et suis chaque mouvement avec une lecture claire."
+        />
         {(usingMockWallet || usingMockTransactions) && (
           <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
             Mode simulation active: certaines donnees wallet sont affichees en fallback UI.
           </div>
         )}
 
-        <Card className="rounded-3xl border-black/5 shadow-sm">
+        <Card className="premium-card premium-hover rounded-3xl border-black/5 shadow-sm">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-gray-500">Solde principal</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
             {loading ? (
-              <div className="py-8 text-sm text-gray-500">Chargement du wallet...</div>
+              <SkeletonCard rows={4} />
             ) : (
               <>
                 <div>
@@ -114,38 +188,31 @@ export default function WalletHome() {
                 </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <Button
-                    className="h-12 w-full rounded-xl bg-black text-white hover:bg-black/90"
-                    onClick={async () => {
-                      if (!wallet) return;
-                      const recipient = prompt("Identifiant wallet destinataire");
-                      if (!recipient) return;
-                      const rawAmount = prompt("Montant a envoyer (XOF)");
-                      const amount = Number(rawAmount ?? "0");
-                      if (!Number.isFinite(amount) || amount <= 0) return;
-                      await sendTransfer(token, {
-                        fromWalletId: wallet.id,
-                        toWalletId: recipient,
-                        amount,
-                        currency: "XOF",
-                        description: "Transfert Wallet Akwé",
-                      });
-                      await queryClient.invalidateQueries({ queryKey: ["akwe-wallet", user?.id] });
-                      await queryClient.invalidateQueries({ queryKey: ["akwe-wallet-transactions", wallet.id] });
-                    }}
+                    className="press-feedback h-12 w-full rounded-xl bg-black text-white hover:bg-black/90"
+                    onClick={() => setShowSend(true)}
                   >
                     Envoyer
                   </Button>
                   <Button
                     variant="outline"
-                    className="h-12 rounded-xl"
+                    className="press-feedback h-12 rounded-xl"
                     onClick={() => setShowDeposit(true)}
                   >
                     Deposer
                   </Button>
-                  <Button variant="outline" className="h-12 rounded-xl" onClick={() => setShowReceive(true)}>
+                  <Button variant="outline" className="press-feedback h-12 rounded-xl" onClick={() => setShowReceive(true)}>
                     Recevoir
                   </Button>
-                  <Button variant="outline" className="h-12 rounded-xl" onClick={() => alert("Retrait bientot disponible")}>
+                  <Button
+                    variant="outline"
+                    className="press-feedback h-12 rounded-xl"
+                    onClick={() =>
+                      toast({
+                        title: "Retrait bientot disponible",
+                        description: "Cette action sera active dans une prochaine version.",
+                      })
+                    }
+                  >
                     Retirer
                   </Button>
                 </div>
@@ -155,7 +222,7 @@ export default function WalletHome() {
         </Card>
 
         <section className="grid gap-3 sm:grid-cols-2">
-          <Card className="rounded-2xl border-black/5 shadow-sm">
+          <Card className="premium-card premium-hover rounded-2xl border-black/5 shadow-sm">
             <CardContent className="flex items-start gap-3 p-5">
               <CreditCard className="mt-0.5 h-5 w-5 text-black" />
               <div>
@@ -166,7 +233,7 @@ export default function WalletHome() {
               </div>
             </CardContent>
           </Card>
-          <Card className="rounded-2xl border-black/5 shadow-sm">
+          <Card className="premium-card premium-hover rounded-2xl border-black/5 shadow-sm">
             <CardContent className="flex items-start gap-3 p-5">
               <Landmark className="mt-0.5 h-5 w-5 text-black" />
               <div>
@@ -179,25 +246,31 @@ export default function WalletHome() {
           </Card>
         </section>
 
-        <Card className="rounded-3xl border-black/5 shadow-sm">
+        <Card className="premium-card rounded-3xl border-black/5 shadow-sm">
           <CardHeader>
             <CardTitle className="text-base font-semibold text-black">Historique des transactions</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
             {transactionsQuery.isLoading ? (
-              <div className="py-5 text-sm text-gray-500">Chargement des transactions...</div>
+              <SkeletonCard rows={5} className="bg-transparent px-0 py-0 shadow-none border-none" />
             ) : transactions.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-500">
-                Aucune transaction pour le moment.
-              </div>
+              <EmptyHint
+                title="Aucune transaction pour l'instant"
+                description="Ton historique va se remplir automatiquement apres ton premier mouvement."
+              />
             ) : (
-              transactions.map((tx) => {
+              transactions.map((tx, index) => {
                 const direction = transactionDirection(tx, wallet?.id ?? "");
                 const incoming = direction === "incoming";
                 return (
                   <div
                     key={tx.id}
-                    className="flex items-center justify-between rounded-xl border border-gray-100 px-3 py-3"
+                    className="premium-hover flex items-center justify-between rounded-xl border border-gray-100 bg-white px-3 py-3"
+                    style={{
+                      animation: "premium-page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+                      animationDelay: `${Math.min(index * 45, 260)}ms`,
+                      animationFillMode: "both",
+                    }}
                   >
                     <div className="flex items-center gap-3">
                       <div
@@ -220,7 +293,7 @@ export default function WalletHome() {
             )}
           </CardContent>
         </Card>
-      </main>
+      </ScreenContainer>
 
       <Dialog open={showReceive} onOpenChange={setShowReceive}>
         <DialogContent className="max-w-sm rounded-2xl border-black/10">
@@ -241,6 +314,7 @@ export default function WalletHome() {
                 await navigator.clipboard.writeText(wallet.id).catch(() => undefined);
                 setCopied(true);
                 setTimeout(() => setCopied(false), 1600);
+                toast({ title: "Identifiant copie", description: "Tu peux maintenant le partager." });
               }}
             >
               <Copy className="h-4 w-4" />
@@ -264,16 +338,57 @@ export default function WalletHome() {
               className="h-11 rounded-xl"
             />
             <Button
-              className="w-full rounded-xl bg-black text-white hover:bg-black/90"
+              className="press-feedback w-full rounded-xl bg-black text-white hover:bg-black/90"
               onClick={() => depositMutation.mutate()}
               disabled={depositMutation.isPending}
             >
               {depositMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Confirmer le depot
+              {depositMutation.isPending ? "Traitement..." : "Confirmer le depot"}
             </Button>
             <p className="text-xs text-gray-500">
               Cette action enverra une demande de depot vers l'API wallet existante.
             </p>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showSend} onOpenChange={setShowSend}>
+        <DialogContent className="max-w-sm rounded-2xl border-black/10">
+          <DialogHeader>
+            <DialogTitle>Envoyer de l'argent</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              value={recipientWalletId}
+              onChange={(event) => setRecipientWalletId(event.target.value)}
+              placeholder="Identifiant wallet destinataire"
+              className="h-11 rounded-xl"
+            />
+            <Input
+              inputMode="numeric"
+              value={sendAmount}
+              onChange={(event) => setSendAmount(event.target.value)}
+              placeholder="Montant en XOF"
+              className="h-11 rounded-xl"
+            />
+            <Button
+              className="press-feedback w-full rounded-xl bg-black text-white hover:bg-black/90"
+              onClick={() => sendMutation.mutate()}
+              disabled={sendMutation.isPending}
+            >
+              {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+              {sendMutation.isPending ? "Envoi en cours..." : "Confirmer l'envoi"}
+            </Button>
+            <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+              <p className="font-medium text-gray-700">Retour visuel instantane</p>
+              <p className="mt-0.5">Tu recevras une confirmation juste apres validation.</p>
+            </div>
+            {sendMutation.isSuccess ? (
+              <div className="flex items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                <CheckCircle2 className="h-4 w-4" />
+                Envoi confirme.
+              </div>
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>

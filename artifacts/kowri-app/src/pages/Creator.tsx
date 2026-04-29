@@ -14,6 +14,8 @@ import {
   joinCommunity,
   listCreatorCommunities,
 } from "@/services/api/creatorService";
+import { useToast } from "@/hooks/use-toast";
+import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 
 function initials(name: string) {
   return name
@@ -157,6 +159,7 @@ export default function Creator() {
   const [, navigate] = useLocation();
   const [showCreate, setShowCreate] = useState(false);
   const qc = useQueryClient();
+  const { toast } = useToast();
 
   const communitiesQ = useQuery({
     queryKey: ["creator-communities"],
@@ -179,6 +182,17 @@ export default function Creator() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["creator-communities"] });
+      toast({
+        title: "Communauté rejointe",
+        description: "Tu fais maintenant partie de cette communauté.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Rejoindre impossible",
+        description: error instanceof Error ? error.message : "Reessaie dans un instant.",
+      });
     },
   });
 
@@ -193,8 +207,19 @@ export default function Creator() {
   return (
     <div className="min-h-screen pb-24" style={{ background: "#FAFAF8" }}>
       <TopBar title="Créateur" />
-
-      <main className="px-4 pt-4 pb-6 max-w-lg mx-auto space-y-5">
+      <ScreenContainer>
+        <SectionIntro
+          title="Ton espace createur"
+          subtitle="Visualise tes revenus, ta base membres et tes opportunites de croissance."
+          actions={
+            <button
+              onClick={() => setShowCreate(true)}
+              className="press-feedback rounded-xl bg-black px-3 py-2 text-xs font-semibold text-white"
+            >
+              Nouvelle communaute
+            </button>
+          }
+        />
         {usingMock && (
           <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
             Mode simulation actif pour le module créateur (structure backend respectée).
@@ -206,7 +231,7 @@ export default function Creator() {
           <section>
             <h2 className="font-bold text-gray-900 mb-3 text-base">Ma communauté</h2>
             <div
-              className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm cursor-pointer"
+              className="premium-card premium-hover bg-white rounded-2xl p-4 border border-gray-100 shadow-sm cursor-pointer"
               onClick={() => navigate(`/creator/${dashboardMainCommunity.id ?? dashboardMainCommunity.handle}`)}
             >
               <div className="flex items-center gap-3 mb-3">
@@ -244,7 +269,7 @@ export default function Creator() {
         {!dashboardMainCommunity && !dashboardQ.isLoading && (
           <button
             onClick={() => setShowCreate(true)}
-            className="w-full bg-white rounded-2xl p-4 border-2 border-dashed flex items-center gap-3 text-left"
+            className="premium-hover w-full bg-white rounded-2xl p-4 border-2 border-dashed flex items-center gap-3 text-left"
             style={{ borderColor: "#1A6B32" }}
           >
             <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "#F0FDF4" }}>
@@ -274,28 +299,31 @@ export default function Creator() {
           </div>
 
           {communitiesQ.isLoading ? (
-            <div className="space-y-3">
-              {[0, 1, 2].map(i => (
-                <div key={i} className="bg-white rounded-2xl h-28 animate-pulse border border-gray-100" />
-              ))}
-            </div>
+            <SkeletonCard rows={4} className="bg-transparent px-0 py-0 shadow-none border-none" />
           ) : communities.length === 0 ? (
-            <div className="bg-white rounded-2xl p-6 text-center border border-gray-100">
-              <p className="text-sm text-gray-500">Aucune communauté disponible</p>
-              <button
-                onClick={() => setShowCreate(true)}
-                className="mt-3 px-5 py-2.5 rounded-xl font-bold text-white text-sm"
-                style={{ background: "#1A6B32", minHeight: 44 }}
-              >
-                Créer la première
-              </button>
-            </div>
+            <EmptyHint
+              title="Aucune communaute disponible"
+              description="Cree la premiere pour commencer a generer des gains."
+              action={
+                <button
+                  onClick={() => setShowCreate(true)}
+                  className="press-feedback mt-1 rounded-xl bg-black px-5 py-2.5 text-sm font-bold text-white"
+                >
+                  Creer la premiere
+                </button>
+              }
+            />
           ) : (
             <div className="space-y-3">
-              {communities.map((community: any) => (
+              {communities.map((community: any, index: number) => (
                 <div
                   key={community.id}
-                  className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm"
+                  className="premium-card premium-hover bg-white rounded-2xl p-4 border border-gray-100 shadow-sm"
+                  style={{
+                    animation: "premium-page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+                    animationDelay: `${Math.min(index * 45, 240)}ms`,
+                    animationFillMode: "both",
+                  }}
                 >
                   <div className="flex items-center gap-3 mb-3">
                     <div
@@ -323,7 +351,7 @@ export default function Creator() {
                   <div className="flex gap-2">
                     <button
                       onClick={() => navigate(`/creator/${community.id}`)}
-                      className="flex-1 py-2 rounded-xl text-xs font-semibold border"
+                      className="press-feedback flex-1 py-2 rounded-xl text-xs font-semibold border"
                       style={{ borderColor: "#1A6B32", color: "#1A6B32", minHeight: 40 }}
                     >
                       Voir
@@ -332,7 +360,7 @@ export default function Creator() {
                       <button
                         onClick={() => joinMut.mutate(community.id)}
                         disabled={joinMut.isPending}
-                        className="flex-1 py-2 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1"
+                        className="press-feedback flex-1 py-2 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1"
                         style={{ background: "#1A6B32", minHeight: 40 }}
                       >
                         {joinMut.isPending ? <Loader2 size={12} className="animate-spin" /> : null}
@@ -345,7 +373,7 @@ export default function Creator() {
             </div>
           )}
         </section>
-      </main>
+      </ScreenContainer>
 
       <BottomNav />
 
