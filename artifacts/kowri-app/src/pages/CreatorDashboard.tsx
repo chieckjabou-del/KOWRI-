@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { persistShareDailyCount, useCreatorDashboardData } from "@/pages/creator-dashboard/useCreatorDashboardData";
 import { readCache, writeCache } from "@/lib/localCache";
 import { useNamedSmartWarmup } from "@/hooks/useSmartWarmup";
+import { DATA_TTL_MS } from "@/lib/cachePolicy";
 import {
   DailyLoopCard,
   IntroViralCard,
@@ -68,11 +69,15 @@ export default function CreatorDashboard() {
   useEffect(() => {
     const stats = dashboardQuery.data?.dashboard.stats;
     if (!stats) return;
-    writeCache("creator-dashboard-snapshot", {
-      totalEarnings: stats.totalEarnings,
-      totalMembers: stats.totalMembers,
-      totalVolume: stats.totalVolume,
-    }, 5 * 60 * 1000);
+    writeCache(
+      "creator-dashboard-snapshot",
+      {
+        totalEarnings: stats.totalEarnings,
+        totalMembers: stats.totalMembers,
+        totalVolume: stats.totalVolume,
+      },
+      { ttlMs: DATA_TTL_MS.CREATOR_DASHBOARD },
+    );
   }, [dashboardQuery.data?.dashboard.stats]);
 
   return (

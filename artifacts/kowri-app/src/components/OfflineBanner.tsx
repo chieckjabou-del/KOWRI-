@@ -1,21 +1,25 @@
 import { useEffect } from "react";
 import { useOfflineStore } from "@/lib/store";
 import { WifiOff } from "lucide-react";
+import { getQueueLength } from "@/lib/offlineQueue";
 
 export function OfflineBanner() {
-  const { isOnline, setOnline } = useOfflineStore();
+  const { isOnline, setOnline, pendingActions, setPendingActions } = useOfflineStore();
 
   useEffect(() => {
     setOnline(navigator.onLine);
+    setPendingActions(getQueueLength());
     const on  = () => setOnline(true);
     const off = () => setOnline(false);
     window.addEventListener("online",  on);
     window.addEventListener("offline", off);
+    const timerId = window.setInterval(() => setPendingActions(getQueueLength()), 2_500);
     return () => {
       window.removeEventListener("online",  on);
       window.removeEventListener("offline", off);
+      window.clearInterval(timerId);
     };
-  }, [setOnline]);
+  }, [setOnline, setPendingActions]);
 
   if (isOnline) return null;
 
@@ -27,7 +31,8 @@ export function OfflineBanner() {
       aria-live="polite"
     >
       <WifiOff size={13} />
-      Mode hors ligne — les données affichées sont en cache
+      Mode hors ligne — données en cache
+      {pendingActions > 0 ? ` • ${pendingActions} action(s) en attente` : ""}
     </div>
   );
 }

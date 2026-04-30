@@ -17,6 +17,7 @@ import {
 import { nextReceiverLabel, timelineBulletColor, tontineHealthColor } from "@/features/tontine/tontine-ui";
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
+import { invalidateCacheByMutation } from "@/lib/cachePolicy";
 
 interface Props {
   params: { id: string };
@@ -93,6 +94,7 @@ export default function TontineDetailModern({ params }: Props) {
       };
     },
     onSuccess: async (result) => {
+      invalidateCacheByMutation("collect", user?.id ?? null);
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontine-detail", params.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
       if (result.creatorEarningsApplied && result.creatorFeeApplied > 0) {

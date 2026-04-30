@@ -10,6 +10,10 @@ import { ErrorBoundary, LoadingScreen } from "@/components/ErrorFallback";
 import { useToast } from "@/hooks/use-toast";
 import { warmupPrimaryRoutesOnIdle } from "@/lib/route-prefetch";
 import { useNamedSmartWarmup } from "@/hooks/useSmartWarmup";
+import { initOfflineQueue, syncOfflinePendingCount } from "@/lib/offlineQueue";
+import { initFrontendMonitor, trackApiCall } from "@/lib/frontendMonitor";
+import { initOfflineQueue } from "@/lib/offlineQueue";
+import { trackCriticalError } from "@/lib/frontendMonitor";
 
 /* ─── Page skeleton (suspense fallback) ────────────────────────── */
 function PageSkeleton() {
@@ -122,13 +126,18 @@ function PublicPage({ Page }: { Page: React.ComponentType }) {
 
 /* ─── Router ────────────────────────────────────────────────────── */
 function AppRouter() {
-  const { isAuthenticated, isHydrating } = useAuth();
+  const { isAuthenticated, isHydrating, token } = useAuth();
   useNamedSmartWarmup("app", isAuthenticated && !isHydrating);
 
   useEffect(() => {
     if (isHydrating || !isAuthenticated) return;
     return warmupPrimaryRoutesOnIdle();
   }, [isHydrating, isAuthenticated]);
+
+  useEffect(() => {
+    initOfflineQueue(() => token ?? null);
+    void syncOfflinePendingCount();
+  }, [token]);
 
   return (
     <div id="kowri-root">
@@ -236,13 +245,45 @@ function AppRouter() {
   );
 }
 
+function RuntimeGuards() {
+  const { token } = useAuth();
+
+  useEffect(() => {
+    initOfflineQueue(() => token ?? null);
+  }, [token]);
+
+  useEffect(() => {
+    const onError = (event: ErrorEvent) => {
+      trackCriticalError("window.error", event.error ?? event.message ?? "unknown");
+    };
+    const onRejection = (event: PromiseRejectionEvent) => {
+      trackCriticalError("window.unhandledrejection", event.reason ?? "unknown");
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
+
+  return null;
+}
+
 /* ─── App root ──────────────────────────────────────────────────── */
 function App() {
+  useEffect(() => {
+    initFrontendMonitor();
+    const stop = trackApiCall({ route: "app.bootstrap", status: "ok", latencyMs: 0 });
+    return () => stop();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <ErrorBoundary>
           <AuthProvider>
+            <RuntimeGuards />
             <OfflineBanner />
             <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
               <AppRouter />

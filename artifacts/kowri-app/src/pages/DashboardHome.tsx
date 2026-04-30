@@ -12,6 +12,7 @@ import { getPrimaryWallet, getWalletTransactions } from "@/services/api/walletSe
 import { listUserTontines } from "@/services/api/tontineService";
 import { walletActivityPreview } from "@/features/wallet/wallet-ui";
 import { makeCacheKey, readCachedValue, writeCachedValue } from "@/lib/localCache";
+import { getCacheMaxAgeMs, getCacheTtlMs } from "@/lib/cachePolicy";
 import type { WalletSummary, WalletTransaction, TontineListItem } from "@/types/akwe";
 import {
   EmptyHint,
@@ -30,7 +31,7 @@ export default function DashboardHome() {
     () =>
       readCachedValue<{ wallet: WalletSummary; usingMock: boolean }>(
         `${cacheNamespace}:wallet`,
-        5 * 60_000,
+        getCacheMaxAgeMs("wallet-summary"),
       )?.data ?? null,
     [cacheNamespace],
   );
@@ -38,7 +39,7 @@ export default function DashboardHome() {
     () =>
       readCachedValue<{ transactions: WalletTransaction[]; usingMock: boolean }>(
         `${cacheNamespace}:tx`,
-        3 * 60_000,
+        getCacheMaxAgeMs("wallet-transactions"),
       )?.data ?? null,
     [cacheNamespace],
   );
@@ -46,7 +47,7 @@ export default function DashboardHome() {
     () =>
       readCachedValue<{ tontines: TontineListItem[]; usingMock: boolean }>(
         `${cacheNamespace}:tontines`,
-        5 * 60_000,
+        getCacheMaxAgeMs("tontines-list"),
       )?.data ?? null,
     [cacheNamespace],
   );
@@ -88,19 +89,31 @@ export default function DashboardHome() {
 
   useEffect(() => {
     if (walletQuery.data) {
-      writeCachedValue(`${cacheNamespace}:wallet`, walletQuery.data);
+      writeCachedValue(
+        `${cacheNamespace}:wallet`,
+        walletQuery.data,
+        getCacheTtlMs("wallet-summary"),
+      );
     }
   }, [cacheNamespace, walletQuery.data]);
 
   useEffect(() => {
     if (txQuery.data) {
-      writeCachedValue(`${cacheNamespace}:tx`, txQuery.data);
+      writeCachedValue(
+        `${cacheNamespace}:tx`,
+        txQuery.data,
+        getCacheTtlMs("wallet-transactions"),
+      );
     }
   }, [cacheNamespace, txQuery.data]);
 
   useEffect(() => {
     if (tontinesQuery.data) {
-      writeCachedValue(`${cacheNamespace}:tontines`, tontinesQuery.data);
+      writeCachedValue(
+        `${cacheNamespace}:tontines`,
+        tontinesQuery.data,
+        getCacheTtlMs("tontines-list"),
+      );
     }
   }, [cacheNamespace, tontinesQuery.data]);
 

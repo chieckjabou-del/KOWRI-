@@ -1,5 +1,6 @@
 import { Component, ErrorInfo, ReactNode } from "react";
 import { AlertTriangle, RefreshCw, Home } from "lucide-react";
+import { monitorCriticalError } from "@/lib/frontendMonitor";
 
 interface Props {
   children: ReactNode;
@@ -24,6 +25,10 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[ErrorBoundary] Uncaught error:", error, info.componentStack);
+    monitorCriticalError(error, {
+      source: "ErrorBoundary",
+      componentStack: info.componentStack,
+    });
 
     const msg = String(error?.message ?? "");
     const isDomReconcileError =

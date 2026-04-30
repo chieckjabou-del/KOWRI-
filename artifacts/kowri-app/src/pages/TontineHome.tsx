@@ -23,6 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 import { getCached, setCached } from "@/lib/localCache";
 import { useSmartWarmup } from "@/hooks/useSmartWarmup";
+import { DATA_TTL_MS, invalidateCacheByMutation } from "@/lib/cachePolicy";
 
 const FREQUENCIES: TontineFrequency[] = ["weekly", "biweekly", "monthly"];
 const FREQ_LABEL: Record<TontineFrequency, string> = {
@@ -31,8 +32,8 @@ const FREQ_LABEL: Record<TontineFrequency, string> = {
   monthly: "Mensuel",
 };
 
-const TONTINE_CACHE_TTL_MS = 4 * 60 * 1000;
-const TONTINE_PUBLIC_CACHE_TTL_MS = 3 * 60 * 1000;
+const TONTINE_CACHE_TTL_MS = DATA_TTL_MS.TONTINE_LIST;
+const TONTINE_PUBLIC_CACHE_TTL_MS = DATA_TTL_MS.TONTINE_PUBLIC;
 
 export default function TontineHome() {
   const { token, user } = useAuth();
@@ -143,6 +144,7 @@ export default function TontineHome() {
       await joinTontine(token, tontineId, user.id);
     },
     onSuccess: async () => {
+      invalidateCacheByMutation("join", user?.id ?? null);
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-public-tontines"] });
       toast({
@@ -197,6 +199,7 @@ export default function TontineHome() {
       setIsCustomContribution(false);
       setCreatorModeEnabled(false);
       setCreatorCommunityId("");
+      invalidateCacheByMutation("create-tontine", user?.id ?? null);
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-public-tontines"] });
       toast({

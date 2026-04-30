@@ -1,3 +1,5 @@
+import { trackApiFailure, trackApiLatency } from "@/lib/frontendMonitor";
+
 function resolveApiBase(): string {
   const raw = import.meta.env.VITE_API_BASE?.trim();
   if (!raw) return "/api";
@@ -81,12 +83,14 @@ export async function apiFetch<T = unknown>(
   let attempt = 0;
   let lastError: ApiError | null = null;
 
+  const startedAt = Date.now();
   while (attempt <= retries) {
     let res: Response;
     try {
       res = await fetchWithTimeout(buildApiUrl(path), { ...requestInit, headers }, timeoutMs);
     } catch {
       const networkError = new ApiError(0, "Connexion lente ou indisponible. Vérifiez votre réseau.");
+      trackApiFailure(path, method, networkError.status, networkError.message);
       if (attempt < retries && shouldRetry(method, networkError.status)) {
         attempt += 1;
         await wait(retryDelayMs * attempt);
@@ -102,6 +106,7 @@ export async function apiFetch<T = unknown>(
         msg = j.message || j.error || msg;
       } catch {}
       _unauthorizedHandler?.();
+      trackApiFailure(path, method, 401, msg);
       throw new ApiError(401, msg);
     }
 
@@ -112,6 +117,7 @@ export async function apiFetch<T = unknown>(
         msg = j.message || j.error || msg;
       } catch {}
       const failure = new ApiError(res.status, msg);
+      trackApiFailure(path, method, failure.status, failure.message);
       if (attempt < retries && shouldRetry(method, failure.status)) {
         lastError = failure;
         attempt += 1;
@@ -121,6 +127,7 @@ export async function apiFetch<T = unknown>(
       throw failure;
     }
 
+    trackApiLatency(path, Date.now() - startedAt, method);
     return res.json();
   }
 

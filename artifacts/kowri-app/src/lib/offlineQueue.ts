@@ -1,4 +1,5 @@
 import { buildApiUrl } from "@/lib/api";
+import { trackApiError, trackOfflineQueueFlush } from "@/lib/frontendMonitor";
 
 // ── KOWRI Offline Action Queue ────────────────────────────────────────────────
 //
@@ -92,6 +93,12 @@ export async function flushQueue(token: string | null): Promise<FlushStatus> {
       anySuccess = true;
       console.info(`[OfflineQueue] replayed action ${action.id} (${action.type})`);
     } catch (err) {
+      trackApiError({
+        endpoint: action.endpoint,
+        method: action.method,
+        status: 0,
+        message: err instanceof Error ? err.message : "offline queue replay failed",
+      });
       action.attempts += 1;
       if (action.attempts < 3) {
         remaining.push(action);
@@ -103,6 +110,12 @@ export async function flushQueue(token: string | null): Promise<FlushStatus> {
   }
 
   saveQueue(remaining);
+  trackOfflineQueueFlush({
+    attempted: queue.length,
+    replayed: queue.length - remaining.length,
+    dropped: Math.max(queue.length - remaining.length - (anySuccess ? 0 : 0), 0),
+    remaining: remaining.length,
+  });
 
   if (remaining.length === 0) return "flushed";
   if (anySuccess) return "partial";
@@ -116,6 +129,7 @@ export async function flushQueue(token: string | null): Promise<FlushStatus> {
 let _getToken: (() => string | null) | null = null;
 
 export function initOfflineQueue(getToken: () => string | null): void {
+  if (typeof window === "undefined") return;
   _getToken = getToken;
 
   window.addEventListener("online", async () => {

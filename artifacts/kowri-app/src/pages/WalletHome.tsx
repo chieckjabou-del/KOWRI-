@@ -28,6 +28,9 @@ import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 import { readCache, writeCache } from "@/lib/localCache";
 import { getDeviceProfile } from "@/lib/deviceProfile";
+import { invalidateCacheByMutation, CACHE_TTL_MS } from "@/lib/cachePolicy";
+import { queueAction } from "@/lib/offlineQueue";
+import { queueAction } from "@/lib/offlineQueue";
 
 type SendTransferPayload = {
   fromWalletId: string;
@@ -41,6 +44,18 @@ async function sendTransfer(
   token: string | null,
   payload: SendTransferPayload,
 ): Promise<void> {
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    queueAction({
+      id: `offline-transfer-${Date.now()}`,
+      type: "transfer",
+      payload: payload as unknown as Record<string, unknown>,
+      idempotencyKey: `${Date.now()}-wallet-send`,
+      endpoint: "/wallet/transfer",
+      method: "POST",
+      createdAt: Date.now(),
+    });
+    return;
+  }
   const response = await fetch(buildApiUrl("/wallet/transfer"), {
     method: "POST",
     headers: {
@@ -53,6 +68,10 @@ async function sendTransfer(
   if (!response.ok) {
     throw new Error("Transfert refuse. Verifie le montant ou le destinataire.");
   }
+}
+
+function createOfflineActionId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export default function WalletHome() {
@@ -101,13 +120,13 @@ export default function WalletHome() {
   useEffect(() => {
     if (!cacheKey || !walletQuery.data) return;
     setWalletSeeded(walletQuery.data);
-    writeCache(cacheKey, walletQuery.data, { ttlMs: 3 * 60 * 1000 });
+    writeCache(cacheKey, walletQuery.data, { ttlMs: CACHE_TTL_MS.walletSummary });
   }, [cacheKey, walletQuery.data]);
 
   useEffect(() => {
     if (!cacheKey || !transactionsQuery.data) return;
     setTxSeeded(transactionsQuery.data);
-    writeCache(`${cacheKey}:tx`, transactionsQuery.data, { ttlMs: 90 * 1000 });
+    writeCache(`${cacheKey}:tx`, transactionsQuery.data, { ttlMs: CACHE_TTL_MS.walletTransactions });
   }, [cacheKey, transactionsQuery.data]);
 
   const usingMockTransactions = transactionsQuery.data?.usingMock ?? false;
@@ -122,6 +141,7 @@ export default function WalletHome() {
       await depositToWallet(token, wallet.id, amount);
     },
     onSuccess: async () => {
+      invalidateCacheByMutation("deposit", user?.id ?? null);
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet-transactions", wallet?.id] });
       setShowDeposit(false);
@@ -160,6 +180,7 @@ export default function WalletHome() {
       });
     },
     onSuccess: async () => {
+      invalidateCacheByMutation("send", user?.id ?? null);
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet-transactions", wallet?.id] });
       setShowSend(false);
@@ -171,6 +192,28 @@ export default function WalletHome() {
       });
     },
     onError: (error: unknown) => {
+      if (typeof navigator !== "undefined" && !navigator.onLine && wallet) {
+        const idempotencyKey = `${Date.now()}-wallet-send-offline`;
+        queueAction({
+          id: createOfflineActionId("wallet-send"),
+          type: "transfer",
+          payload: {
+            fromWalletId: wallet.id,
+            toWalletId: recipientWalletId.trim(),
+            amount: Number(sendAmount),
+            currency: "XOF",
+            description: "Transfert Wallet Akwe",
+          },
+          idempotencyKey,
+          endpoint: "/wallet/transfer",
+          method: "POST",
+          createdAt: Date.now(),
+        });
+        toast({
+          title: "Envoi mis en file hors ligne",
+          description: "La transaction sera rejouee automatiquement quand le reseau revient.",
+        });
+      }
       toast({
         variant: "destructive",
         title: "Transfert bloque",
