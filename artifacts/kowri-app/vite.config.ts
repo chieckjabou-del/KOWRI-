@@ -59,7 +59,7 @@ export default defineConfig(async ({ command }) => {
     root: path.resolve(import.meta.dirname),
     build: {
       sourcemap: false,
-      outDir: path.resolve(import.meta.dirname, "dist"),
+      outDir: "dist",
       emptyOutDir: true,
       target: "es2020",
       cssMinify: "esbuild",
