@@ -1,6 +1,6 @@
 {
   "framework": "vite",
-  "buildCommand": "pnpm --filter @workspace/kowri-app run build",
+  "buildCommand": "pnpm run build",
   "outputDirectory": "dist",
   "routes": [
     { "handle": "filesystem" },
