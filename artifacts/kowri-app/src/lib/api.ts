@@ -14,6 +14,16 @@ export class ApiError extends Error {
   }
 }
 
+interface ApiFetchPolicy {
+  timeoutMs?: number;
+  retries?: number;
+  retryDelayMs?: number;
+}
+
+interface ApiFetchOptions extends RequestInit {
+  policy?: ApiFetchPolicy;
+}
+
 let _unauthorizedHandler: (() => void) | null = null;
 
 export function setUnauthorizedHandler(cb: () => void): void {
@@ -24,38 +34,97 @@ export function buildApiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetry(method: string, status: number): boolean {
+  const idempotent = method === "GET" || method === "HEAD";
+  if (!idempotent) return false;
+  return status === 0 || status >= 500 || status === 429;
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return fetch(input, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export async function apiFetch<T = unknown>(
   path: string,
   token: string | null,
-  options: RequestInit = {}
+  options: ApiFetchOptions = {}
 ): Promise<T> {
+  const { policy, ...requestInit } = options;
+  const method = (requestInit.method ?? "GET").toUpperCase();
+  const timeoutMs = policy?.timeoutMs ?? (method === "GET" ? 8_000 : 14_000);
+  const retries = policy?.retries ?? (method === "GET" ? 1 : 0);
+  const retryDelayMs = policy?.retryDelayMs ?? 450;
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(options.headers as Record<string, string>),
+    ...(requestInit.headers as Record<string, string>),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  let res: Response;
-  try {
-    res = await fetch(buildApiUrl(path), { ...options, headers });
-  } catch (networkErr: any) {
-    throw new ApiError(0, "Connexion impossible. Vérifiez votre réseau.");
+  let attempt = 0;
+  let lastError: ApiError | null = null;
+
+  while (attempt <= retries) {
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(buildApiUrl(path), { ...requestInit, headers }, timeoutMs);
+    } catch {
+      const networkError = new ApiError(0, "Connexion lente ou indisponible. Vérifiez votre réseau.");
+      if (attempt < retries && shouldRetry(method, networkError.status)) {
+        attempt += 1;
+        await wait(retryDelayMs * attempt);
+        continue;
+      }
+      throw networkError;
+    }
+
+    if (res.status === 401) {
+      let msg = "Session expirée. Reconnectez-vous.";
+      try {
+        const j = await res.json();
+        msg = j.message || j.error || msg;
+      } catch {}
+      _unauthorizedHandler?.();
+      throw new ApiError(401, msg);
+    }
+
+    if (!res.ok) {
+      let msg = `Erreur ${res.status}`;
+      try {
+        const j = await res.json();
+        msg = j.message || j.error || msg;
+      } catch {}
+      const failure = new ApiError(res.status, msg);
+      if (attempt < retries && shouldRetry(method, failure.status)) {
+        lastError = failure;
+        attempt += 1;
+        await wait(retryDelayMs * attempt);
+        continue;
+      }
+      throw failure;
+    }
+
+    return res.json();
   }
 
-  if (res.status === 401) {
-    let msg = "Session expirée. Reconnectez-vous.";
-    try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
-    _unauthorizedHandler?.();
-    throw new ApiError(401, msg);
-  }
-
-  if (!res.ok) {
-    let msg = `Erreur ${res.status}`;
-    try { const j = await res.json(); msg = j.message || j.error || msg; } catch {}
-    throw new ApiError(res.status, msg);
-  }
-
-  return res.json();
+  throw lastError ?? new ApiError(0, "Connexion impossible. Vérifiez votre réseau.");
 }
 
 export async function apiFetchSafe<T = unknown>(

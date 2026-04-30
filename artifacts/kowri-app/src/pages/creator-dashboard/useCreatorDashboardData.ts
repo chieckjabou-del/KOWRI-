@@ -10,6 +10,7 @@ import {
   listCreatorCommunities,
   readCreatorDailyEarning,
 } from "@/services/api/creatorService";
+import { readCache, writeCache } from "@/lib/localCache";
 
 export interface CreatorTontineRevenueRow {
   id: string;
@@ -198,6 +199,13 @@ function clamp(value: number, min: number, max: number): number {
 
 export function useCreatorDashboardData() {
   const { token, user } = useAuth();
+  const creatorCacheKey = user?.id ? `creator-dashboard:${user.id}` : "creator-dashboard:anonymous";
+  const cachedCreator =
+    readCache<{
+      dashboard: Awaited<ReturnType<typeof getCreatorDashboard>>["dashboard"];
+      rows: CreatorTontineRevenueRow[];
+      rankingRows: CreatorRankingRow[];
+    }>(creatorCacheKey) ?? null;
   const [selectedTontineId, setSelectedTontineId] = useState("");
   const [shareCount, setShareCount] = useState(() => {
     if (typeof window === "undefined") return 0;
@@ -216,6 +224,10 @@ export function useCreatorDashboardData() {
     queryKey: ["creator-dashboard-machine", user?.id],
     enabled: Boolean(user?.id),
     queryFn: () => getCreatorDashboard(token, user!.id),
+    initialData: cachedCreator ? { dashboard: cachedCreator.dashboard, usingMock: false } : undefined,
+    placeholderData: cachedCreator ? { dashboard: cachedCreator.dashboard, usingMock: false } : undefined,
+    staleTime: 15_000,
+    gcTime: 600_000,
   });
 
   const communities = dashboardQuery.data?.dashboard.communities ?? [];
@@ -251,6 +263,10 @@ export function useCreatorDashboardData() {
       }
       return rows;
     },
+    initialData: cachedCreator?.rows ?? undefined,
+    placeholderData: cachedCreator?.rows ?? undefined,
+    staleTime: 20_000,
+    gcTime: 600_000,
   });
 
   const reputationQuery = useQuery({
@@ -338,6 +354,10 @@ export function useCreatorDashboardData() {
       }
       return rows.sort((a, b) => b.points - a.points).slice(0, 6);
     },
+    initialData: cachedCreator?.rankingRows ?? undefined,
+    placeholderData: cachedCreator?.rankingRows ?? undefined,
+    staleTime: 45_000,
+    gcTime: 600_000,
   });
 
   const rows = poolsQuery.data ?? [];
@@ -447,6 +467,15 @@ export function useCreatorDashboardData() {
   }, [today, yesterday]);
 
   const rankingRows = rankingQuery.data ?? [];
+
+  useEffect(() => {
+    if (!dashboardQuery.data?.dashboard) return;
+    writeCache(creatorCacheKey, {
+      dashboard: dashboardQuery.data.dashboard,
+      rows: topRows,
+      rankingRows,
+    });
+  }, [creatorCacheKey, dashboardQuery.data?.dashboard, rankingRows, topRows]);
 
   return {
     token,

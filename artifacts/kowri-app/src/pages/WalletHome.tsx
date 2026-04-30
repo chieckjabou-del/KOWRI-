@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownLeft,
@@ -26,6 +26,8 @@ import {
 import { transactionDirection } from "@/features/wallet/wallet-ui";
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
+import { readCache, writeCache } from "@/lib/localCache";
+import { useDeviceProfile } from "@/lib/deviceProfile";
 
 type SendTransferPayload = {
   fromWalletId: string;
@@ -57,6 +59,16 @@ export default function WalletHome() {
   const { token, user } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const deviceProfile = useDeviceProfile();
+  const cacheKey = user?.id ? `wallet-home:${user.id}` : "";
+  const [walletSeeded, setWalletSeeded] = useState(() => {
+    if (!cacheKey) return null as Awaited<ReturnType<typeof getPrimaryWallet>> | null;
+    return readCache<Awaited<ReturnType<typeof getPrimaryWallet>>>(cacheKey);
+  });
+  const [txSeeded, setTxSeeded] = useState(() => {
+    if (!cacheKey) return null as Awaited<ReturnType<typeof getWalletTransactions>> | null;
+    return readCache<Awaited<ReturnType<typeof getWalletTransactions>>>(`${cacheKey}:tx`);
+  });
   const [showReceive, setShowReceive] = useState(false);
   const [showDeposit, setShowDeposit] = useState(false);
   const [showSend, setShowSend] = useState(false);
@@ -69,6 +81,7 @@ export default function WalletHome() {
     queryKey: ["akwe-wallet", user?.id],
     enabled: Boolean(user?.id),
     queryFn: () => getPrimaryWallet(token, user!.id),
+    initialData: walletSeeded ?? undefined,
   });
 
   const wallet = walletQuery.data?.wallet;
@@ -78,12 +91,25 @@ export default function WalletHome() {
     queryKey: ["akwe-wallet-transactions", wallet?.id],
     enabled: Boolean(wallet?.id),
     queryFn: () => getWalletTransactions(token, wallet!.id, 20),
+    initialData: txSeeded ?? undefined,
   });
 
   const transactions = useMemo(
     () => transactionsQuery.data?.transactions ?? [],
     [transactionsQuery.data?.transactions],
   );
+  useEffect(() => {
+    if (!cacheKey || !walletQuery.data) return;
+    setWalletSeeded(walletQuery.data);
+    writeCache(cacheKey, walletQuery.data, { ttlMs: 3 * 60 * 1000 });
+  }, [cacheKey, walletQuery.data]);
+
+  useEffect(() => {
+    if (!cacheKey || !transactionsQuery.data) return;
+    setTxSeeded(transactionsQuery.data);
+    writeCache(`${cacheKey}:tx`, transactionsQuery.data, { ttlMs: 90 * 1000 });
+  }, [cacheKey, transactionsQuery.data]);
+
   const usingMockTransactions = transactionsQuery.data?.usingMock ?? false;
 
   const depositMutation = useMutation({
@@ -267,7 +293,9 @@ export default function WalletHome() {
                     key={tx.id}
                     className="premium-hover flex items-center justify-between rounded-xl border border-gray-100 bg-white px-3 py-3"
                     style={{
-                      animation: "premium-page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+                      animation: deviceProfile.reducedMotion
+                        ? "none"
+                        : "premium-page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1)",
                       animationDelay: `${Math.min(index * 45, 260)}ms`,
                       animationFillMode: "both",
                     }}

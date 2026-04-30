@@ -11,6 +11,7 @@ import { formatXOF, relativeTime } from "@/lib/api";
 import { getPrimaryWallet, getWalletTransactions } from "@/services/api/walletService";
 import { listUserTontines } from "@/services/api/tontineService";
 import { walletActivityPreview } from "@/features/wallet/wallet-ui";
+import { readCache, writeCache } from "@/lib/localCache";
 import {
   EmptyHint,
   ScreenContainer,
@@ -20,11 +21,25 @@ import {
 
 export default function DashboardHome() {
   const { token, user } = useAuth();
+  const cacheNamespace = useMemo(() => (user?.id ? `dashboard:${user.id}` : "dashboard:anon"), [user?.id]);
+  const cachedWallet = useMemo(
+    () => readCache<{ wallet: ReturnType<typeof buildWalletCacheShape>; usingMock?: boolean }>(`${cacheNamespace}:wallet`),
+    [cacheNamespace],
+  );
+  const cachedTx = useMemo(
+    () => readCache<{ transactions: ReturnType<typeof buildTxCacheShape>; usingMock?: boolean }>(`${cacheNamespace}:tx`),
+    [cacheNamespace],
+  );
+  const cachedTontines = useMemo(
+    () => readCache<{ tontines: ReturnType<typeof buildTontineCacheShape>; usingMock?: boolean }>(`${cacheNamespace}:tontines`),
+    [cacheNamespace],
+  );
 
   const walletQuery = useQuery({
     queryKey: ["akwe-dashboard-wallet", user?.id],
     enabled: Boolean(user?.id),
     queryFn: () => getPrimaryWallet(token, user!.id),
+    initialData: cachedWallet ?? undefined,
   });
 
   const wallet = walletQuery.data?.wallet;
@@ -33,13 +48,36 @@ export default function DashboardHome() {
     queryKey: ["akwe-dashboard-tx", wallet?.id],
     enabled: Boolean(wallet?.id),
     queryFn: () => getWalletTransactions(token, wallet!.id, 8),
+    initialData: cachedTx ?? undefined,
   });
 
   const tontinesQuery = useQuery({
     queryKey: ["akwe-dashboard-tontines", user?.id],
     enabled: Boolean(user?.id),
     queryFn: () => listUserTontines(token),
+    initialData: cachedTontines ?? undefined,
   });
+
+  useMemo(() => {
+    if (walletQuery.data) {
+      writeCache(`${cacheNamespace}:wallet`, walletQuery.data, 5 * 60_000);
+    }
+    return null;
+  }, [cacheNamespace, walletQuery.data]);
+
+  useMemo(() => {
+    if (txQuery.data) {
+      writeCache(`${cacheNamespace}:tx`, txQuery.data, 3 * 60_000);
+    }
+    return null;
+  }, [cacheNamespace, txQuery.data]);
+
+  useMemo(() => {
+    if (tontinesQuery.data) {
+      writeCache(`${cacheNamespace}:tontines`, tontinesQuery.data, 5 * 60_000);
+    }
+    return null;
+  }, [cacheNamespace, tontinesQuery.data]);
 
   const recentActivity = useMemo(
     () => walletActivityPreview(txQuery.data?.transactions ?? []),
@@ -50,6 +88,7 @@ export default function DashboardHome() {
   const usingMock = Boolean(
     walletQuery.data?.usingMock || txQuery.data?.usingMock || tontinesQuery.data?.usingMock,
   );
+  const renderingFromCache = !walletQuery.isFetched && Boolean(cachedWallet || cachedTx || cachedTontines);
 
   return (
     <div className="min-h-screen bg-[#fcfcfb] pb-24">
@@ -66,9 +105,11 @@ export default function DashboardHome() {
             </Link>
           }
         />
-        {usingMock ? (
+        {(usingMock || renderingFromCache) ? (
           <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
-            Mode simulation active: le frontend reste utilisable meme si certains endpoints ne repondent pas.
+            {renderingFromCache
+              ? "Affichage instantane depuis cache local, mise a jour en arriere-plan."
+              : "Mode simulation active: le frontend reste utilisable meme si certains endpoints ne repondent pas."}
           </div>
         ) : null}
 
@@ -205,4 +246,54 @@ export default function DashboardHome() {
       <BottomNav />
     </div>
   );
+}
+
+function buildWalletCacheShape() {
+  return {
+    id: "",
+    userId: "",
+    currency: "XOF",
+    walletType: "principal",
+    status: "active",
+    balance: 0,
+    availableBalance: 0,
+  };
+}
+
+function buildTxCacheShape() {
+  return [
+    {
+      id: "",
+      type: "transfer",
+      status: "completed",
+      amount: 0,
+      description: "",
+      createdAt: "",
+      fromWalletId: null,
+      toWalletId: null,
+    },
+  ];
+}
+
+function buildTontineCacheShape() {
+  return [
+    {
+      id: "",
+      name: "",
+      description: null,
+      status: "pending",
+      frequency: "monthly",
+      tontineType: "classic",
+      contributionAmount: 0,
+      memberCount: 0,
+      maxMembers: 0,
+      currentRound: 0,
+      totalRounds: 0,
+      isPublic: true,
+      isMultiAmount: false,
+      adminUserId: "",
+      createdAt: "",
+      nextPayoutDate: null,
+    },
+  ];
 }

@@ -9,6 +9,7 @@ import { setUnauthorizedHandler, ApiError } from "@/lib/api";
 import { ErrorBoundary, LoadingScreen } from "@/components/ErrorFallback";
 import { useToast } from "@/hooks/use-toast";
 import { warmupPrimaryRoutesOnIdle } from "@/lib/route-prefetch";
+import { useSmartWarmup } from "@/hooks/useSmartWarmup";
 
 /* ─── Page skeleton (suspense fallback) ────────────────────────── */
 function PageSkeleton() {
@@ -122,6 +123,7 @@ function PublicPage({ Page }: { Page: React.ComponentType }) {
 /* ─── Router ────────────────────────────────────────────────────── */
 function AppRouter() {
   const { isAuthenticated, isHydrating } = useAuth();
+  useSmartWarmup(isAuthenticated && !isHydrating);
 
   useEffect(() => {
     if (isHydrating || !isAuthenticated) return;

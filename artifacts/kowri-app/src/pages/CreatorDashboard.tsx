@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { ScreenContainer, SectionIntro } from "@/components/premium/PremiumStates";
 import { useToast } from "@/hooks/use-toast";
 import { persistShareDailyCount, useCreatorDashboardData } from "@/pages/creator-dashboard/useCreatorDashboardData";
+import { getCachedOrDefault, setCachedValue } from "@/lib/localCache";
+import { useSmartWarmup } from "@/hooks/useSmartWarmup";
 import {
   DailyLoopCard,
   IntroViralCard,
@@ -21,7 +23,14 @@ import {
 
 export default function CreatorDashboard() {
   const { toast } = useToast();
+  useSmartWarmup("creator");
   const [shareBurst, setShareBurst] = useState(false);
+  const [cachedSnapshot] = useState(() =>
+    getCachedOrDefault<{ totalEarnings: number; totalMembers: number; totalVolume: number }>(
+      "creator-dashboard-snapshot",
+      { totalEarnings: 0, totalMembers: 0, totalVolume: 0 },
+    ),
+  );
   const {
     selectedTontineId,
     setSelectedTontineId,
@@ -57,6 +66,16 @@ export default function CreatorDashboard() {
     nextLevelLabel,
   } = useCreatorDashboardData();
 
+  useEffect(() => {
+    const stats = dashboardQuery.data?.dashboard.stats;
+    if (!stats) return;
+    setCachedValue("creator-dashboard-snapshot", {
+      totalEarnings: stats.totalEarnings,
+      totalMembers: stats.totalMembers,
+      totalVolume: stats.totalVolume,
+    });
+  }, [dashboardQuery.data?.dashboard.stats]);
+
   return (
     <div className="min-h-screen bg-[#fcfcfb] pb-24">
       <TopBar title="Creator Dashboard" />
@@ -89,10 +108,10 @@ export default function CreatorDashboard() {
         />
 
         <MetricsGrid
-          totalEarnings={dashboardQuery.data?.dashboard.stats.totalEarnings ?? 0}
+          totalEarnings={dashboardQuery.data?.dashboard.stats.totalEarnings ?? cachedSnapshot.totalEarnings}
           totalMembersInTontines={totalMembersInTontines}
           totalTontines={totalTontines}
-          totalVolume={dashboardQuery.data?.dashboard.stats.totalVolume ?? 0}
+          totalVolume={dashboardQuery.data?.dashboard.stats.totalVolume ?? cachedSnapshot.totalVolume}
         />
 
         <MoneyFocusCard

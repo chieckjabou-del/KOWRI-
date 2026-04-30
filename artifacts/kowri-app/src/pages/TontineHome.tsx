@@ -21,6 +21,8 @@ import { getCreatorDashboard, saveCreatorModeLink } from "@/services/api/creator
 import type { RotationModel, TontineFrequency } from "@/types/akwe";
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
+import { getCached, setCached } from "@/lib/localCache";
+import { useSmartWarmup } from "@/hooks/useSmartWarmup";
 
 const FREQUENCIES: TontineFrequency[] = ["weekly", "biweekly", "monthly"];
 const FREQ_LABEL: Record<TontineFrequency, string> = {
@@ -28,6 +30,9 @@ const FREQ_LABEL: Record<TontineFrequency, string> = {
   biweekly: "Bimensuel",
   monthly: "Mensuel",
 };
+
+const TONTINE_CACHE_TTL_MS = 4 * 60 * 1000;
+const TONTINE_PUBLIC_CACHE_TTL_MS = 3 * 60 * 1000;
 
 export default function TontineHome() {
   const { token, user } = useAuth();
@@ -50,6 +55,7 @@ export default function TontineHome() {
     { userId: "", amount: "" },
   ]);
   const [createError, setCreateError] = useState("");
+  useSmartWarmup("tontine-home");
   const urlSearch = useMemo(() => {
     const queryString =
       typeof window !== "undefined"
@@ -64,14 +70,31 @@ export default function TontineHome() {
   const userTontinesQuery = useQuery({
     queryKey: ["akwe-tontines", user?.id],
     enabled: Boolean(user?.id),
+    staleTime: TONTINE_CACHE_TTL_MS,
+    initialData: user?.id
+      ? () => getCached<{ tontines: TontineListItem[]; usingMock: boolean }>(`cache:tontines:mine:${user.id}`)
+      : undefined,
     queryFn: () => listUserTontines(token),
   });
+
+  useEffect(() => {
+    if (!user?.id || !userTontinesQuery.data) return;
+    setCached(`cache:tontines:mine:${user.id}`, userTontinesQuery.data, TONTINE_CACHE_TTL_MS);
+  }, [user?.id, userTontinesQuery.data]);
 
   const publicTontinesQuery = useQuery({
     queryKey: ["akwe-public-tontines"],
     enabled: Boolean(user?.id),
+    staleTime: TONTINE_PUBLIC_CACHE_TTL_MS,
+    initialData: () =>
+      getCached<{ tontines: TontineListItem[]; usingMock: boolean }>("cache:tontines:public"),
     queryFn: () => listPublicTontines(token),
   });
+
+  useEffect(() => {
+    if (!publicTontinesQuery.data) return;
+    setCached("cache:tontines:public", publicTontinesQuery.data, TONTINE_PUBLIC_CACHE_TTL_MS);
+  }, [publicTontinesQuery.data]);
 
   const creatorDashboardQuery = useQuery({
     queryKey: ["akwe-tontine-create-creator-dashboard", user?.id],
