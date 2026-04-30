@@ -1,7 +1,6 @@
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./index.css";
-import { initSentry, captureException } from "@/lib/sentry";
 
 const DOM_RECOVERY_ERROR_PATTERNS = [
   "Failed to execute 'insertBefore' on 'Node'",
@@ -12,6 +11,38 @@ const DOM_RECOVERY_ERROR_PATTERNS = [
 let hasAttemptedDomRecovery = false;
 let hasCapturedFallbackWindowError = false;
 let hasCapturedFallbackRejection = false;
+let sentryReady = false;
+
+type CaptureContext = {
+  tags?: Record<string, string>;
+};
+
+type CaptureFn = (error: unknown, context?: CaptureContext) => void;
+
+let captureExceptionSafe: CaptureFn = () => undefined;
+
+async function initializeSentryOnIdle(): Promise<void> {
+  if (sentryReady || typeof window === "undefined") return;
+  sentryReady = true;
+  const bootstrap = async () => {
+    try {
+      const sentry = await import("@/lib/sentry");
+      sentry.initSentry();
+      captureExceptionSafe = sentry.captureException;
+    } catch {
+      // Keep app functional even if sentry bundle fails.
+    }
+  };
+  if ("requestIdleCallback" in window) {
+    (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(() => {
+      void bootstrap();
+    });
+  } else {
+    window.setTimeout(() => {
+      void bootstrap();
+    }, 1_200);
+  }
+}
 
 function shouldAttemptDomRecovery(message: string): boolean {
   return DOM_RECOVERY_ERROR_PATTERNS.some((pattern) => message.includes(pattern));
@@ -31,7 +62,7 @@ function installDomRecoveryGuards() {
         refChild: Node | null
       ): T {
         if (refChild && refChild.parentNode !== this) {
-          captureException(new Error("Blocked unsafe insertBefore reference"), {
+          captureExceptionSafe(new Error("Blocked unsafe insertBefore reference"), {
             tags: { source: "dom.insertBefore.guard" },
           });
           return this.appendChild(newChild) as T;
@@ -45,7 +76,7 @@ function installDomRecoveryGuards() {
       const originalRemoveChild = Node.prototype.removeChild;
       Node.prototype.removeChild = function <T extends Node>(child: T): T {
         if (child.parentNode !== this) {
-          captureException(new Error("Blocked unsafe removeChild target"), {
+          captureExceptionSafe(new Error("Blocked unsafe removeChild target"), {
             tags: { source: "dom.removeChild.guard" },
           });
           return child as T;
@@ -61,7 +92,7 @@ function installDomRecoveryGuards() {
   const recover = () => {
     if (hasAttemptedDomRecovery) return;
     hasAttemptedDomRecovery = true;
-    captureException(new Error("DOM reconciliation recovery triggered"), {
+    captureExceptionSafe(new Error("DOM reconciliation recovery triggered"), {
       tags: { source: "dom-recovery-guard" },
     });
     window.setTimeout(() => window.location.reload(), 50);
@@ -70,12 +101,12 @@ function installDomRecoveryGuards() {
   window.addEventListener("error", (event) => {
     const message = event.error?.message ?? event.message ?? "";
     if (event.error) {
-      captureException(event.error, {
+      captureExceptionSafe(event.error, {
         tags: { source: "window.error" },
       });
     } else if (message && !hasCapturedFallbackWindowError) {
       hasCapturedFallbackWindowError = true;
-      captureException(new Error(message), {
+      captureExceptionSafe(new Error(message), {
         tags: { source: "window.error.message" },
       });
     }
@@ -86,12 +117,12 @@ function installDomRecoveryGuards() {
 
   window.addEventListener("unhandledrejection", (event) => {
     if (event.reason) {
-      captureException(event.reason, {
+      captureExceptionSafe(event.reason, {
         tags: { source: "window.unhandledrejection" },
       });
     } else if (!hasCapturedFallbackRejection) {
       hasCapturedFallbackRejection = true;
-      captureException(new Error("Unhandled rejection without reason"), {
+      captureExceptionSafe(new Error("Unhandled rejection without reason"), {
         tags: { source: "window.unhandledrejection.empty" },
       });
     }
@@ -105,7 +136,7 @@ function installDomRecoveryGuards() {
   });
 }
 
-initSentry();
+void initializeSentryOnIdle();
 installDomRecoveryGuards();
 
 function mount() {

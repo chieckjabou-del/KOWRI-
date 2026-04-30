@@ -51,6 +51,23 @@ export default defineConfig(async ({ command }) => {
       sourcemap: false,
       outDir: path.resolve(import.meta.dirname, "dist"),
       emptyOutDir: true,
+      target: "es2020",
+      cssMinify: "esbuild",
+      minify: "esbuild",
+      chunkSizeWarningLimit: 550,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return;
+            if (id.includes("@tanstack/react-query")) return "rq";
+            if (id.includes("@sentry/")) return "sentry";
+            if (id.includes("@radix-ui/")) return "radix-ui";
+            if (id.includes("lucide-react")) return "icons";
+            if (id.includes("react") || id.includes("scheduler")) return "react-vendor";
+            return "vendor";
+          },
+        },
+      },
     },
     server: {
       port,
