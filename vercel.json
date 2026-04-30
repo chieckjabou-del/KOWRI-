@@ -1,35 +1,4 @@
 {
-  "framework": "vite",
-  "installCommand": "corepack enable && corepack prepare pnpm@10.33.0 --activate && pnpm install --frozen-lockfile",
   "buildCommand": "pnpm --filter @workspace/kowri-app run build",
-  "outputDirectory": "artifacts/kowri-app/dist",
-  "env": {
-    "BASE_PATH": "/"
-  },
-  "headers": [
-    {
-      "source": "/index.html",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-cache, no-store, must-revalidate"
-        }
-      ]
-    },
-    {
-      "source": "/assets/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
-  ]
+  "outputDirectory": "artifacts/kowri-app/dist"
 }
