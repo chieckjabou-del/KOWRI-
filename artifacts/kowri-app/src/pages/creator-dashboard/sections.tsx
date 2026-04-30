@@ -1,4 +1,4 @@
-import { CheckCircle2, Copy, Flame, Sparkles, Trophy, Users } from "lucide-react";
+import { CheckCircle2, Coins, Copy, Flame, Sparkles, Trophy, Users } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";

@@ -64,6 +64,6 @@ export function warmupPrimaryRoutesOnIdle(): () => void {
     return () => window.cancelIdleCallback(id);
   }
 
-  const timeoutId = window.setTimeout(run, 1200);
-  return () => window.clearTimeout(timeoutId);
+  const timeoutId = setTimeout(run, 1200);
+  return () => clearTimeout(timeoutId);
 }

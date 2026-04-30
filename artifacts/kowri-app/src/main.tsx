@@ -23,6 +23,7 @@ let captureExceptionSafe: CaptureFn = () => undefined;
 
 async function initializeSentryOnIdle(): Promise<void> {
   if (sentryReady || typeof window === "undefined") return;
+  const browserWindow = window;
   sentryReady = true;
   const bootstrap = async () => {
     try {
@@ -33,8 +34,8 @@ async function initializeSentryOnIdle(): Promise<void> {
       // Keep app functional even if sentry bundle fails.
     }
   };
-  if ("requestIdleCallback" in window) {
-    (window as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(() => {
+  if ("requestIdleCallback" in browserWindow) {
+    (browserWindow as Window & { requestIdleCallback: (cb: () => void) => number }).requestIdleCallback(() => {
       void bootstrap();
     });
   } else {

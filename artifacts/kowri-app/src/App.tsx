@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { setUnauthorizedHandler, ApiError } from "@/lib/api";
 import { ErrorBoundary, LoadingScreen } from "@/components/ErrorFallback";
 import { useToast } from "@/hooks/use-toast";
+import { warmupPrimaryRoutesOnIdle } from "@/lib/route-prefetch";
 
 /* ─── Page skeleton (suspense fallback) ────────────────────────── */
 function PageSkeleton() {
@@ -121,6 +122,11 @@ function PublicPage({ Page }: { Page: React.ComponentType }) {
 /* ─── Router ────────────────────────────────────────────────────── */
 function AppRouter() {
   const { isAuthenticated, isHydrating } = useAuth();
+
+  useEffect(() => {
+    if (isHydrating || !isAuthenticated) return;
+    return warmupPrimaryRoutesOnIdle();
+  }, [isHydrating, isAuthenticated]);
 
   return (
     <div id="kowri-root">
