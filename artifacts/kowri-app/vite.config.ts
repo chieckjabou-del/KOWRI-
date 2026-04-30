@@ -14,6 +14,13 @@ if (rawPort && (Number.isNaN(port) || port <= 0)) {
 // BASE_PATH controls asset URL prefixes in the production bundle.
 // Default to root (/) for standalone deployments like Vercel.
 const basePath = process.env.BASE_PATH ?? "/";
+const commitShort =
+  (process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.SOURCE_VERSION ?? "").slice(0, 8) || "local";
+const deployToken =
+  (process.env.VERCEL_DEPLOYMENT_ID ?? process.env.VERCEL_URL ?? "").slice(-8) ||
+  Date.now().toString(36);
+const appVersion = process.env.npm_package_version ?? "0.0.0";
+const uiFingerprint = `${appVersion}-${commitShort}-${deployToken}`;
 
 export default defineConfig(async ({ command }) => {
   const isDevServer = command === "serve";
@@ -33,6 +40,9 @@ export default defineConfig(async ({ command }) => {
 
   return {
     base: basePath,
+    define: {
+      __KOWRI_UI_FINGERPRINT__: JSON.stringify(uiFingerprint),
+    },
     plugins: [
       react(),
       tailwindcss(),

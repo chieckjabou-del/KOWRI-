@@ -12,6 +12,7 @@ let hasAttemptedDomRecovery = false;
 let hasCapturedFallbackWindowError = false;
 let hasCapturedFallbackRejection = false;
 let sentryReady = false;
+const APP_BUILD_ID = import.meta.env.VITE_APP_BUILD_ID ?? "dev";
 
 type CaptureContext = {
   tags?: Record<string, string>;
@@ -145,6 +146,10 @@ function mount() {
   if (!rootEl) {
     console.error("[KOWRI] Élément #root introuvable dans le DOM.");
     return;
+  }
+  rootEl.setAttribute("data-app-build", APP_BUILD_ID);
+  if (typeof document !== "undefined") {
+    document.documentElement.setAttribute("data-app-build", APP_BUILD_ID);
   }
   createRoot(rootEl).render(<App />);
 }

@@ -3,6 +3,9 @@
   "installCommand": "corepack enable && corepack prepare pnpm@10.33.0 --activate && pnpm install --frozen-lockfile",
   "buildCommand": "pnpm --filter @workspace/kowri-app run build",
   "outputDirectory": "artifacts/kowri-app/dist",
+  "env": {
+    "BASE_PATH": "/"
+  },
   "rewrites": [
     {
       "source": "/(.*)",
