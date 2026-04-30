@@ -1,5 +1,6 @@
 {
   "framework": "vite",
+  "installCommand": "corepack enable && corepack prepare pnpm@10.33.0 --activate && pnpm install --filter @workspace/kowri-app... --frozen-lockfile",
   "buildCommand": "pnpm run build",
   "outputDirectory": "dist",
   "routes": [
