@@ -18,6 +18,7 @@ import { nextReceiverLabel, timelineBulletColor, tontineHealthColor } from "@/fe
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 import { invalidateCacheByMutation } from "@/lib/cachePolicy";
+import { trackUxAction } from "@/lib/frontendMonitor";
 
 interface Props {
   params: { id: string };
@@ -95,6 +96,10 @@ export default function TontineDetailModern({ params }: Props) {
     },
     onSuccess: async (result) => {
       invalidateCacheByMutation("collect", user?.id ?? null);
+      trackUxAction("tontine.collect.success", {
+        tontineId: params.id,
+        totalCollected: result.totalCollected,
+      });
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontine-detail", params.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
       if (result.creatorEarningsApplied && result.creatorFeeApplied > 0) {
@@ -113,6 +118,10 @@ export default function TontineDetailModern({ params }: Props) {
       }
     },
     onError: (error: unknown) => {
+      trackUxAction("tontine.collect.failed", {
+        tontineId: params.id,
+        message: error instanceof Error ? error.message : "unknown",
+      });
       toast({
         variant: "destructive",
         title: "Collecte impossible",

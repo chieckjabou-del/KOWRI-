@@ -10,7 +10,7 @@ import {
   listCreatorCommunities,
   readCreatorDailyEarning,
 } from "@/services/api/creatorService";
-import { readCachedValue, writeCachedValue } from "@/lib/localCache";
+import { makeCacheKey, readCachedValue, writeCachedValue } from "@/lib/localCache";
 import { DATA_TTL_MS } from "@/lib/cachePolicy";
 
 export interface CreatorTontineRevenueRow {
@@ -475,7 +475,7 @@ export function useCreatorDashboardData() {
       dashboard: dashboardQuery.data.dashboard,
       rows: topRows,
       rankingRows,
-    }, { dataType: "creatorDashboard" });
+    });
   }, [creatorCacheKey, dashboardQuery.data?.dashboard, rankingRows, topRows]);
 
   return {

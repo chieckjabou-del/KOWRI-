@@ -24,6 +24,7 @@ import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/compon
 import { getCached, setCached } from "@/lib/localCache";
 import { useSmartWarmup } from "@/hooks/useSmartWarmup";
 import { DATA_TTL_MS, invalidateCacheByMutation } from "@/lib/cachePolicy";
+import { trackUxAction } from "@/lib/frontendMonitor";
 
 const FREQUENCIES: TontineFrequency[] = ["weekly", "biweekly", "monthly"];
 const FREQ_LABEL: Record<TontineFrequency, string> = {
@@ -145,6 +146,7 @@ export default function TontineHome() {
     },
     onSuccess: async () => {
       invalidateCacheByMutation("join", user?.id ?? null);
+      trackUxAction("tontine.join.success", { userId: user?.id ?? "anon" });
       await queryClient.invalidateQueries({ queryKey: ["akwe-tontines", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-public-tontines"] });
       toast({
@@ -183,6 +185,10 @@ export default function TontineHome() {
       });
     },
     onSuccess: async (result) => {
+      trackUxAction("tontine.create.success", {
+        userId: user?.id ?? "anon",
+        creatorModeEnabled,
+      });
       const selectedCommunity = creatorCommunities.find(
         (community) => community.id === creatorCommunityId,
       );

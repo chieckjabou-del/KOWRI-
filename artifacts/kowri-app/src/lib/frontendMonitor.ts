@@ -60,15 +60,25 @@ export function trackEvent(
 
 export function trackApiFailure(
   path: string,
+  method: string,
   status: number,
   message?: string,
   durationMs?: number,
 ): void {
   trackEvent("api-failure", "api.request.failed", {
     path,
+    method,
     status,
     message: message ?? "",
     durationMs: durationMs ?? null,
+  });
+}
+
+export function trackApiLatency(path: string, durationMs: number, method?: string): void {
+  trackEvent("load-time", "api.request.latency", {
+    path,
+    method: method ?? "GET",
+    durationMs,
   });
 }
 
@@ -82,6 +92,65 @@ export function trackUxAction(name: string, payload?: Record<string, unknown>): 
 
 export function trackCriticalError(message: string, source?: string): void {
   trackEvent("error", "runtime.error", { message, source: source ?? "unknown" });
+}
+
+export function monitorCriticalError(
+  error: unknown,
+  context?: { source?: string; componentStack?: string },
+): void {
+  trackCriticalError(
+    error instanceof Error ? error.message : String(error ?? "unknown"),
+    context?.source,
+  );
+  if (context?.componentStack) {
+    trackEvent("error", "runtime.error.stack", { componentStack: context.componentStack });
+  }
+}
+
+export function trackApiError(input: {
+  endpoint: string;
+  method?: string;
+  status: number;
+  message?: string;
+}): void {
+  trackApiFailure(
+    input.endpoint,
+    input.method ?? "GET",
+    input.status,
+    input.message ?? "",
+  );
+  trackEvent("api-failure", "api.request.meta", {
+    endpoint: input.endpoint,
+    method: input.method ?? "GET",
+  });
+}
+
+export function trackOfflineQueueFlush(payload: {
+  attempted: number;
+  replayed: number;
+  dropped: number;
+  remaining: number;
+}): void {
+  trackEvent("ux-action", "offline.queue.flush", payload);
+}
+
+export function initFrontendMonitor(): void {
+  if (typeof window === "undefined" || typeof performance === "undefined") return;
+  const entries = performance.getEntriesByType("navigation");
+  const nav = entries[0] as PerformanceNavigationTiming | undefined;
+  if (nav?.domContentLoadedEventEnd) {
+    const loadMs = Math.max(0, nav.domContentLoadedEventEnd - nav.startTime);
+    trackLoadTime("app.dom-content-loaded", Math.round(loadMs));
+  }
+}
+
+export function trackApiCall(payload: {
+  route: string;
+  status: "ok" | "error";
+  latencyMs: number;
+}): () => void {
+  trackEvent("ux-action", "api.call.marker", payload);
+  return () => undefined;
 }
 
 export function readMonitorEvents(): MonitorEvent[] {

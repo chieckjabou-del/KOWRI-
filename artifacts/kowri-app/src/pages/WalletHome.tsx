@@ -30,7 +30,7 @@ import { readCache, writeCache } from "@/lib/localCache";
 import { getDeviceProfile } from "@/lib/deviceProfile";
 import { invalidateCacheByMutation, CACHE_TTL_MS } from "@/lib/cachePolicy";
 import { queueAction } from "@/lib/offlineQueue";
-import { queueAction } from "@/lib/offlineQueue";
+import { trackUxAction } from "@/lib/frontendMonitor";
 
 type SendTransferPayload = {
   fromWalletId: string;
@@ -142,6 +142,10 @@ export default function WalletHome() {
     },
     onSuccess: async () => {
       invalidateCacheByMutation("deposit", user?.id ?? null);
+      trackUxAction("wallet.deposit.success", {
+        amount: Number(depositAmount),
+        userId: user?.id ?? "anon",
+      });
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet-transactions", wallet?.id] });
       setShowDeposit(false);
@@ -181,6 +185,10 @@ export default function WalletHome() {
     },
     onSuccess: async () => {
       invalidateCacheByMutation("send", user?.id ?? null);
+      trackUxAction("wallet.send.success", {
+        amount: Number(sendAmount),
+        userId: user?.id ?? "anon",
+      });
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet", user?.id] });
       await queryClient.invalidateQueries({ queryKey: ["akwe-wallet-transactions", wallet?.id] });
       setShowSend(false);
@@ -208,6 +216,10 @@ export default function WalletHome() {
           endpoint: "/wallet/transfer",
           method: "POST",
           createdAt: Date.now(),
+        });
+        trackUxAction("wallet.send.queued-offline", {
+          amount: Number(sendAmount),
+          userId: user?.id ?? "anon",
         });
         toast({
           title: "Envoi mis en file hors ligne",

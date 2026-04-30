@@ -89,31 +89,19 @@ export default function DashboardHome() {
 
   useEffect(() => {
     if (walletQuery.data) {
-      writeCachedValue(
-        `${cacheNamespace}:wallet`,
-        walletQuery.data,
-        getCacheTtlMs("wallet-summary"),
-      );
+      writeCachedValue(`${cacheNamespace}:wallet`, walletQuery.data);
     }
   }, [cacheNamespace, walletQuery.data]);
 
   useEffect(() => {
     if (txQuery.data) {
-      writeCachedValue(
-        `${cacheNamespace}:tx`,
-        txQuery.data,
-        getCacheTtlMs("wallet-transactions"),
-      );
+      writeCachedValue(`${cacheNamespace}:tx`, txQuery.data);
     }
   }, [cacheNamespace, txQuery.data]);
 
   useEffect(() => {
     if (tontinesQuery.data) {
-      writeCachedValue(
-        `${cacheNamespace}:tontines`,
-        tontinesQuery.data,
-        getCacheTtlMs("tontines-list"),
-      );
+      writeCachedValue(`${cacheNamespace}:tontines`, tontinesQuery.data);
     }
   }, [cacheNamespace, tontinesQuery.data]);
 

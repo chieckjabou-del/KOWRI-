@@ -10,8 +10,6 @@ import { ErrorBoundary, LoadingScreen } from "@/components/ErrorFallback";
 import { useToast } from "@/hooks/use-toast";
 import { warmupPrimaryRoutesOnIdle } from "@/lib/route-prefetch";
 import { useNamedSmartWarmup } from "@/hooks/useSmartWarmup";
-import { initOfflineQueue, syncOfflinePendingCount } from "@/lib/offlineQueue";
-import { initFrontendMonitor, trackApiCall } from "@/lib/frontendMonitor";
 import { initOfflineQueue } from "@/lib/offlineQueue";
 import { trackCriticalError } from "@/lib/frontendMonitor";
 
@@ -136,7 +134,6 @@ function AppRouter() {
 
   useEffect(() => {
     initOfflineQueue(() => token ?? null);
-    void syncOfflinePendingCount();
   }, [token]);
 
   return (
@@ -272,12 +269,6 @@ function RuntimeGuards() {
 
 /* ─── App root ──────────────────────────────────────────────────── */
 function App() {
-  useEffect(() => {
-    initFrontendMonitor();
-    const stop = trackApiCall({ route: "app.bootstrap", status: "ok", latencyMs: 0 });
-    return () => stop();
-  }, []);
-
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>

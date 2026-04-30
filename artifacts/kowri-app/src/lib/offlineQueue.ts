@@ -1,5 +1,9 @@
 import { buildApiUrl } from "@/lib/api";
-import { trackApiError, trackOfflineQueueFlush } from "@/lib/frontendMonitor";
+import {
+  trackApiFailure,
+  trackOfflineQueueFlush,
+  trackUxAction,
+} from "@/lib/frontendMonitor";
 
 // ── KOWRI Offline Action Queue ────────────────────────────────────────────────
 //
@@ -7,6 +11,8 @@ import { trackApiError, trackOfflineQueueFlush } from "@/lib/frontendMonitor";
 // when the connection is restored. localStorage-backed — safe for reload.
 
 const QUEUE_KEY = "kowri_offline_queue";
+let _isFlushing = false;
+let _onlineListenerRegistered = false;
 
 export interface QueuedAction {
   id: string;
@@ -46,6 +52,12 @@ export function queueAction(action: Omit<QueuedAction, "attempts">): void {
   const queue = getQueue();
   queue.push({ ...action, attempts: 0 });
   saveQueue(queue);
+  syncOfflinePendingCount();
+  trackUxAction("offline.queue.added", {
+    type: action.type,
+    endpoint: action.endpoint,
+    queueSize: queue.length,
+  });
   console.info(`[OfflineQueue] queued action ${action.id} (type: ${action.type})`);
 }
 
@@ -55,6 +67,7 @@ export function getQueueLength(): number {
 
 export function clearQueue(): void {
   localStorage.removeItem(QUEUE_KEY);
+  syncOfflinePendingCount();
 }
 
 async function executeAction(action: QueuedAction, token: string | null): Promise<void> {
@@ -79,8 +92,13 @@ async function executeAction(action: QueuedAction, token: string | null): Promis
 }
 
 export async function flushQueue(token: string | null): Promise<FlushStatus> {
+  if (_isFlushing) return "partial";
+  _isFlushing = true;
   const queue = getQueue();
-  if (queue.length === 0) return "empty";
+  if (queue.length === 0) {
+    _isFlushing = false;
+    return "empty";
+  }
 
   console.info(`[OfflineQueue] flushing ${queue.length} queued action(s)…`);
 
@@ -93,12 +111,12 @@ export async function flushQueue(token: string | null): Promise<FlushStatus> {
       anySuccess = true;
       console.info(`[OfflineQueue] replayed action ${action.id} (${action.type})`);
     } catch (err) {
-      trackApiError({
-        endpoint: action.endpoint,
-        method: action.method,
-        status: 0,
-        message: err instanceof Error ? err.message : "offline queue replay failed",
-      });
+      trackApiFailure(
+        action.endpoint,
+        action.method,
+        0,
+        err instanceof Error ? err.message : "offline queue replay failed",
+      );
       action.attempts += 1;
       if (action.attempts < 3) {
         remaining.push(action);
@@ -110,6 +128,7 @@ export async function flushQueue(token: string | null): Promise<FlushStatus> {
   }
 
   saveQueue(remaining);
+  syncOfflinePendingCount();
   trackOfflineQueueFlush({
     attempted: queue.length,
     replayed: queue.length - remaining.length,
@@ -117,6 +136,7 @@ export async function flushQueue(token: string | null): Promise<FlushStatus> {
     remaining: remaining.length,
   });
 
+  _isFlushing = false;
   if (remaining.length === 0) return "flushed";
   if (anySuccess) return "partial";
   return "partial";
@@ -131,9 +151,22 @@ let _getToken: (() => string | null) | null = null;
 export function initOfflineQueue(getToken: () => string | null): void {
   if (typeof window === "undefined") return;
   _getToken = getToken;
+  if (_onlineListenerRegistered) return;
+  _onlineListenerRegistered = true;
 
   window.addEventListener("online", async () => {
     console.info("[OfflineQueue] connection restored — flushing…");
     await flushQueue(_getToken?.() ?? null);
   });
+}
+
+export function syncOfflinePendingCount(): number {
+  if (typeof window === "undefined") return 0;
+  const queueLength = getQueueLength();
+  window.dispatchEvent(
+    new CustomEvent("akwe-offline-queue-updated", {
+      detail: { queueLength },
+    }),
+  );
+  return queueLength;
 }

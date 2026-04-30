@@ -1,55 +1,81 @@
-export type CacheScope =
+import { invalidateCache, makeCacheKey } from "@/lib/localCache";
+
+type DataKind =
   | "wallet-summary"
   | "wallet-transactions"
   | "dashboard"
-  | "tontines-mine"
+  | "tontines-list"
   | "tontines-public"
   | "creator-dashboard"
   | "creator-ranking"
-  | "creator-reputation"
-  | "generic";
+  | "creator-reputation";
 
-const SHORT = 90_000;
-const MEDIUM = 5 * 60_000;
-const LONG = 12 * 60_000;
+export const CACHE_TTL_MS = {
+  walletSummary: 90_000,
+  walletTransactions: 90_000,
+} as const;
 
-export function ttlForScope(scope: CacheScope): number {
-  switch (scope) {
+export const DATA_TTL_MS = {
+  DASHBOARD: 5 * 60_000,
+  TONTINE_LIST: 5 * 60_000,
+  TONTINE_PUBLIC: 3 * 60_000,
+  CREATOR_DASHBOARD: 5 * 60_000,
+  CREATOR_RANKING: 4 * 60_000,
+  CREATOR_REPUTATION: 10 * 60_000,
+} as const;
+
+export function getCacheTtlMs(kind: DataKind): number {
+  switch (kind) {
     case "wallet-summary":
-      return SHORT;
+      return CACHE_TTL_MS.walletSummary;
     case "wallet-transactions":
-      return SHORT;
+      return CACHE_TTL_MS.walletTransactions;
     case "dashboard":
-      return MEDIUM;
-    case "tontines-mine":
-      return MEDIUM;
+      return DATA_TTL_MS.DASHBOARD;
+    case "tontines-list":
+      return DATA_TTL_MS.TONTINE_LIST;
     case "tontines-public":
-      return 3 * 60_000;
+      return DATA_TTL_MS.TONTINE_PUBLIC;
     case "creator-dashboard":
-      return MEDIUM;
+      return DATA_TTL_MS.CREATOR_DASHBOARD;
     case "creator-ranking":
-      return 4 * 60_000;
+      return DATA_TTL_MS.CREATOR_RANKING;
     case "creator-reputation":
-      return LONG;
+      return DATA_TTL_MS.CREATOR_REPUTATION;
     default:
-      return MEDIUM;
+      return DATA_TTL_MS.DASHBOARD;
   }
 }
 
-export function invalidateForAction(action: "collect" | "send" | "deposit", userId?: string | null): string[] {
-  const uid = userId ?? "anon";
-  if (action === "send" || action === "deposit") {
-    return [
-      `akwe-cache:wallet-summary:${uid}`,
-      `akwe-cache:wallet-transactions:${uid}`,
-      `akwe-cache:dashboard:${uid}:wallet`,
-      `akwe-cache:dashboard:${uid}:tx`,
-    ];
+export function getCacheMaxAgeMs(kind: DataKind): number {
+  return getCacheTtlMs(kind);
+}
+
+type CriticalAction = "collect" | "send" | "deposit" | "join" | "create-tontine";
+
+export function invalidateCacheByMutation(action: CriticalAction, userId?: string | null): void {
+  const uid = userId ?? null;
+  switch (action) {
+    case "send":
+    case "deposit":
+      if (uid) {
+        invalidateCache(makeCacheKey("wallet-home", uid));
+        invalidateCache(`${makeCacheKey("wallet-home", uid)}:tx`);
+      }
+      invalidateCache(`${makeCacheKey("dashboard", uid)}:wallet`);
+      invalidateCache(`${makeCacheKey("dashboard", uid)}:tx`);
+      break;
+    case "collect":
+    case "join":
+    case "create-tontine":
+      invalidateCache("cache:tontines:public");
+      if (uid) {
+        invalidateCache(`cache:tontines:mine:${uid}`);
+      }
+      invalidateCache(`${makeCacheKey("dashboard", uid)}:tontines`);
+      invalidateCache(makeCacheKey("creator-dashboard", uid));
+      break;
+    default:
+      break;
   }
-  return [
-    `akwe-cache:tontines-mine:${uid}`,
-    `akwe-cache:dashboard:${uid}:tontines`,
-    `akwe-cache:creator-dashboard:${uid}`,
-    `akwe-cache:creator-ranking:${uid}`,
-  ];
 }
