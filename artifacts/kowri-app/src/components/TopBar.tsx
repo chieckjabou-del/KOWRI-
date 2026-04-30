@@ -69,6 +69,13 @@ export function TopBar({ title, showBack, onBack }: TopBarProps) {
           Synchronisation en cours… • UI {uiVersion}
         </div>
       )}
+      {isOnline && !justReconnected && (
+        <div
+          className="flex items-center justify-center gap-2 px-4 py-1.5 text-[10px] font-semibold text-gray-600 bg-gray-50 border-b border-gray-100"
+        >
+          Version UI active: {uiVersion}
+        </div>
+      )}
     <header
       className="bg-white border-b border-gray-100 flex items-center justify-between px-4"
       style={{ height: 56 }}
