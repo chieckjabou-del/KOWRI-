@@ -2,6 +2,7 @@ export interface DeviceProfile {
   isLowDevice: boolean;
   isSlowNetwork: boolean;
   shouldReduceEffects: boolean;
+  reducedMotion: boolean;
 }
 
 function readDeviceMemory(): number {
@@ -40,6 +41,11 @@ export function getDeviceProfile(): DeviceProfile {
     isLowDevice,
     isSlowNetwork: slowNetwork,
     shouldReduceEffects: isLowDevice || slowNetwork,
+    reducedMotion: isLowDevice || slowNetwork,
   };
+}
+
+export function useDeviceProfile(): DeviceProfile {
+  return getDeviceProfile();
 }
 

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import { Loader2 } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button";
 import { ScreenContainer, SectionIntro } from "@/components/premium/PremiumStates";
 import { useToast } from "@/hooks/use-toast";
 import { persistShareDailyCount, useCreatorDashboardData } from "@/pages/creator-dashboard/useCreatorDashboardData";
-import { getCachedOrDefault, setCachedValue } from "@/lib/localCache";
-import { useSmartWarmup } from "@/hooks/useSmartWarmup";
+import { readCache, writeCache } from "@/lib/localCache";
+import { useNamedSmartWarmup } from "@/hooks/useSmartWarmup";
 import {
   DailyLoopCard,
   IntroViralCard,
@@ -23,13 +23,12 @@ import {
 
 export default function CreatorDashboard() {
   const { toast } = useToast();
-  useSmartWarmup("creator");
+  useNamedSmartWarmup("creator");
   const [shareBurst, setShareBurst] = useState(false);
   const [cachedSnapshot] = useState(() =>
-    getCachedOrDefault<{ totalEarnings: number; totalMembers: number; totalVolume: number }>(
+    readCache<{ totalEarnings: number; totalMembers: number; totalVolume: number }>(
       "creator-dashboard-snapshot",
-      { totalEarnings: 0, totalMembers: 0, totalVolume: 0 },
-    ),
+    ) ?? { totalEarnings: 0, totalMembers: 0, totalVolume: 0 },
   );
   const {
     selectedTontineId,
@@ -69,11 +68,11 @@ export default function CreatorDashboard() {
   useEffect(() => {
     const stats = dashboardQuery.data?.dashboard.stats;
     if (!stats) return;
-    setCachedValue("creator-dashboard-snapshot", {
+    writeCache("creator-dashboard-snapshot", {
       totalEarnings: stats.totalEarnings,
       totalMembers: stats.totalMembers,
       totalVolume: stats.totalVolume,
-    });
+    }, 5 * 60 * 1000);
   }, [dashboardQuery.data?.dashboard.stats]);
 
   return (

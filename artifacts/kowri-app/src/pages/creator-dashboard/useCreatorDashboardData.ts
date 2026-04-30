@@ -10,7 +10,7 @@ import {
   listCreatorCommunities,
   readCreatorDailyEarning,
 } from "@/services/api/creatorService";
-import { readCache, writeCache } from "@/lib/localCache";
+import { readCachedValue, writeCachedValue } from "@/lib/localCache";
 
 export interface CreatorTontineRevenueRow {
   id: string;
@@ -201,11 +201,11 @@ export function useCreatorDashboardData() {
   const { token, user } = useAuth();
   const creatorCacheKey = user?.id ? `creator-dashboard:${user.id}` : "creator-dashboard:anonymous";
   const cachedCreator =
-    readCache<{
+    readCachedValue<{
       dashboard: Awaited<ReturnType<typeof getCreatorDashboard>>["dashboard"];
       rows: CreatorTontineRevenueRow[];
       rankingRows: CreatorRankingRow[];
-    }>(creatorCacheKey) ?? null;
+    }>(creatorCacheKey, 10 * 60 * 1000)?.data ?? null;
   const [selectedTontineId, setSelectedTontineId] = useState("");
   const [shareCount, setShareCount] = useState(() => {
     if (typeof window === "undefined") return 0;
@@ -470,7 +470,7 @@ export function useCreatorDashboardData() {
 
   useEffect(() => {
     if (!dashboardQuery.data?.dashboard) return;
-    writeCache(creatorCacheKey, {
+    writeCachedValue(creatorCacheKey, {
       dashboard: dashboardQuery.data.dashboard,
       rows: topRows,
       rankingRows,

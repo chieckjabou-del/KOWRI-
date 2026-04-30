@@ -27,7 +27,7 @@ import { transactionDirection } from "@/features/wallet/wallet-ui";
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 import { readCache, writeCache } from "@/lib/localCache";
-import { useDeviceProfile } from "@/lib/deviceProfile";
+import { getDeviceProfile } from "@/lib/deviceProfile";
 
 type SendTransferPayload = {
   fromWalletId: string;
@@ -59,7 +59,7 @@ export default function WalletHome() {
   const { token, user } = useAuth();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const deviceProfile = useDeviceProfile();
+  const deviceProfile = getDeviceProfile();
   const cacheKey = user?.id ? `wallet-home:${user.id}` : "";
   const [walletSeeded, setWalletSeeded] = useState(() => {
     if (!cacheKey) return null as Awaited<ReturnType<typeof getPrimaryWallet>> | null;

@@ -1,5 +1,10 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/lib/auth";
+import { getPrimaryWallet } from "@/services/api/walletService";
+import { listUserTontines } from "@/services/api/tontineService";
+import { getCreatorDashboard } from "@/services/api/creatorService";
+import { listPublicTontines } from "@/services/api/tontineService";
 
 type WarmupEntry<T> = {
   queryKey: readonly unknown[];
@@ -42,7 +47,51 @@ export function useSmartWarmup(entries: WarmupEntry<unknown>[], enabled = true):
       return () => window.cancelIdleCallback(id);
     }
 
-    const timeoutId = window.setTimeout(run, 1300);
-    return () => window.clearTimeout(timeoutId);
+    const timeoutId = setTimeout(run, 1300);
+    return () => clearTimeout(timeoutId);
   }, [enabled, entries, queryClient]);
+}
+
+type WarmupPreset = "app" | "creator" | "tontine-home";
+
+export function useNamedSmartWarmup(
+  preset: WarmupPreset,
+  enabled = true,
+): void {
+  const { token, user } = useAuth();
+  const entries = useMemo(() => {
+    if (!user?.id) return [] as WarmupEntry<unknown>[];
+    if (preset === "creator") {
+      return [
+        {
+          queryKey: ["creator-dashboard-machine", user.id],
+          queryFn: () => getCreatorDashboard(token, user.id),
+        },
+      ] satisfies WarmupEntry<unknown>[];
+    }
+    if (preset === "tontine-home") {
+      return [
+        {
+          queryKey: ["akwe-tontines", user.id],
+          queryFn: () => listUserTontines(token),
+        },
+        {
+          queryKey: ["akwe-public-tontines"],
+          queryFn: () => listPublicTontines(token),
+        },
+      ] satisfies WarmupEntry<unknown>[];
+    }
+    return [
+      {
+        queryKey: ["akwe-dashboard-wallet", user.id],
+        queryFn: () => getPrimaryWallet(token, user.id),
+      },
+      {
+        queryKey: ["akwe-dashboard-tontines", user.id],
+        queryFn: () => listUserTontines(token),
+      },
+    ] satisfies WarmupEntry<unknown>[];
+  }, [preset, token, user?.id]);
+
+  useSmartWarmup(entries, enabled && entries.length > 0);
 }

@@ -18,7 +18,7 @@ import {
   searchPublicTontines,
 } from "@/services/api/tontineService";
 import { getCreatorDashboard, saveCreatorModeLink } from "@/services/api/creatorService";
-import type { RotationModel, TontineFrequency } from "@/types/akwe";
+import type { RotationModel, TontineFrequency, TontineListItem } from "@/types/akwe";
 import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 import { getCached, setCached } from "@/lib/localCache";
@@ -55,7 +55,16 @@ export default function TontineHome() {
     { userId: "", amount: "" },
   ]);
   const [createError, setCreateError] = useState("");
-  useSmartWarmup("tontine-home");
+  useSmartWarmup([
+    {
+      queryKey: ["akwe-public-tontines"],
+      queryFn: () => listPublicTontines(token),
+    },
+    {
+      queryKey: ["akwe-tontines", user?.id],
+      queryFn: () => listUserTontines(token),
+    },
+  ], Boolean(token && user?.id));
   const urlSearch = useMemo(() => {
     const queryString =
       typeof window !== "undefined"
