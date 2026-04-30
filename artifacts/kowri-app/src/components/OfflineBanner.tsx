@@ -1,23 +1,27 @@
 import { useEffect } from "react";
 import { useOfflineStore } from "@/lib/store";
 import { WifiOff } from "lucide-react";
-import { getQueueLength } from "@/lib/offlineQueue";
+import { getQueueLength, syncOfflinePendingCount } from "@/lib/offlineQueue";
 
 export function OfflineBanner() {
   const { isOnline, setOnline, pendingActions, setPendingActions } = useOfflineStore();
 
   useEffect(() => {
     setOnline(navigator.onLine);
-    setPendingActions(getQueueLength());
+    setPendingActions(syncOfflinePendingCount());
     const on  = () => setOnline(true);
     const off = () => setOnline(false);
+    const onQueueUpdated = (event: Event) => {
+      const queueEvent = event as CustomEvent<{ queueLength?: number }>;
+      setPendingActions(queueEvent.detail?.queueLength ?? getQueueLength());
+    };
     window.addEventListener("online",  on);
     window.addEventListener("offline", off);
-    const timerId = window.setInterval(() => setPendingActions(getQueueLength()), 2_500);
+    window.addEventListener("akwe-offline-queue-updated", onQueueUpdated as EventListener);
     return () => {
       window.removeEventListener("online",  on);
       window.removeEventListener("offline", off);
-      window.clearInterval(timerId);
+      window.removeEventListener("akwe-offline-queue-updated", onQueueUpdated as EventListener);
     };
   }, [setOnline, setPendingActions]);
 

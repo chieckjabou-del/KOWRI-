@@ -10,7 +10,7 @@ import { ErrorBoundary, LoadingScreen } from "@/components/ErrorFallback";
 import { useToast } from "@/hooks/use-toast";
 import { warmupPrimaryRoutesOnIdle } from "@/lib/route-prefetch";
 import { useNamedSmartWarmup } from "@/hooks/useSmartWarmup";
-import { initOfflineQueue } from "@/lib/offlineQueue";
+import { initOfflineQueue, syncOfflinePendingCount } from "@/lib/offlineQueue";
 import { trackCriticalError } from "@/lib/frontendMonitor";
 
 /* ─── Page skeleton (suspense fallback) ────────────────────────── */
@@ -134,6 +134,7 @@ function AppRouter() {
 
   useEffect(() => {
     initOfflineQueue(() => token ?? null);
+    syncOfflinePendingCount();
   }, [token]);
 
   return (
@@ -247,6 +248,7 @@ function RuntimeGuards() {
 
   useEffect(() => {
     initOfflineQueue(() => token ?? null);
+    syncOfflinePendingCount();
   }, [token]);
 
   useEffect(() => {

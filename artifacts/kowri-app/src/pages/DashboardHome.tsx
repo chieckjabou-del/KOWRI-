@@ -13,6 +13,7 @@ import { listUserTontines } from "@/services/api/tontineService";
 import { walletActivityPreview } from "@/features/wallet/wallet-ui";
 import { makeCacheKey, readCachedValue, writeCachedValue } from "@/lib/localCache";
 import { getCacheMaxAgeMs, getCacheTtlMs } from "@/lib/cachePolicy";
+import { hasMajorDataDrift } from "@/lib/localCache";
 import type { WalletSummary, WalletTransaction, TontineListItem } from "@/types/akwe";
 import {
   EmptyHint,
@@ -20,6 +21,7 @@ import {
   SectionIntro,
   SkeletonCard,
 } from "@/components/premium/PremiumStates";
+import { TrustPill } from "@/components/trust/TrustPill";
 
 export default function DashboardHome() {
   const { token, user } = useAuth();
@@ -89,9 +91,12 @@ export default function DashboardHome() {
 
   useEffect(() => {
     if (walletQuery.data) {
+      if (hasMajorDataDrift(`${cacheNamespace}:wallet`, walletQuery.data)) {
+        void walletQuery.refetch();
+      }
       writeCachedValue(`${cacheNamespace}:wallet`, walletQuery.data);
     }
-  }, [cacheNamespace, walletQuery.data]);
+  }, [cacheNamespace, walletQuery.data, walletQuery]);
 
   useEffect(() => {
     if (txQuery.data) {
@@ -115,6 +120,11 @@ export default function DashboardHome() {
     walletQuery.data?.usingMock || txQuery.data?.usingMock || tontinesQuery.data?.usingMock,
   );
   const renderingFromCache = !walletQuery.isFetched && Boolean(cachedWallet || cachedTx || cachedTontines);
+  const walletTrustState = walletQuery.isFetching
+    ? "syncing"
+    : renderingFromCache
+      ? "fallback"
+      : "updated";
 
   return (
     <div className="min-h-screen bg-[#fcfcfb] pb-24">
@@ -138,6 +148,7 @@ export default function DashboardHome() {
               : "Mode simulation active: le frontend reste utilisable meme si certains endpoints ne repondent pas."}
           </div>
         ) : null}
+        <TrustPill state={walletTrustState} />
 
         <Card className="premium-card premium-hover rounded-3xl border-black/5 shadow-sm">
           <CardHeader className="pb-2">

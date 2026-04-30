@@ -19,6 +19,8 @@ import { useToast } from "@/hooks/use-toast";
 import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 import { invalidateCacheByMutation } from "@/lib/cachePolicy";
 import { trackUxAction } from "@/lib/frontendMonitor";
+import { TrustPill } from "@/components/trust/TrustPill";
+import { useActionCooldown } from "@/hooks/useActionCooldown";
 
 interface Props {
   params: { id: string };
@@ -35,6 +37,7 @@ export default function TontineDetailModern({ params }: Props) {
   const { toast } = useToast();
   const [location, navigate] = useLocation();
   const queryClient = useQueryClient();
+  const collectCooldown = useActionCooldown(1_800);
 
   const tontineQuery = useQuery({
     queryKey: ["akwe-tontine-detail", params.id],
@@ -197,9 +200,16 @@ export default function TontineDetailModern({ params }: Props) {
                   </div>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
+                  <TrustPill
+                    state={collectMutation.isPending ? "processing" : "secure"}
+                    className="self-center"
+                  />
                   <Button
                     className="press-feedback rounded-xl bg-black text-white hover:bg-black/90"
-                    onClick={() => collectMutation.mutate()}
+                    onClick={() => {
+                      if (collectMutation.isPending || !collectCooldown.canRun("collect")) return;
+                      collectMutation.mutate();
+                    }}
                     disabled={collectMutation.isPending}
                   >
                     {collectMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

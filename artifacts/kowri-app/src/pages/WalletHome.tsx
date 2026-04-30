@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDownLeft,
@@ -9,6 +9,7 @@ import {
   Landmark,
   Loader2,
   SendHorizontal,
+  ShieldCheck,
 } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
@@ -31,6 +32,8 @@ import { getDeviceProfile } from "@/lib/deviceProfile";
 import { invalidateCacheByMutation, CACHE_TTL_MS } from "@/lib/cachePolicy";
 import { queueAction } from "@/lib/offlineQueue";
 import { trackUxAction } from "@/lib/frontendMonitor";
+import { TrustPill } from "@/components/trust/TrustPill";
+import { useActionCooldown } from "@/hooks/useActionCooldown";
 
 type SendTransferPayload = {
   fromWalletId: string;
@@ -95,6 +98,21 @@ export default function WalletHome() {
   const [sendAmount, setSendAmount] = useState("10000");
   const [recipientWalletId, setRecipientWalletId] = useState("");
   const [copied, setCopied] = useState(false);
+  const [walletDisplayBalance, setWalletDisplayBalance] = useState(0);
+  const [walletTrustState, setWalletTrustState] = useState<"syncing" | "updated" | "offline-queued">(
+    "syncing",
+  );
+  const [walletDriftHint, setWalletDriftHint] = useState(false);
+  const [sendQueuedOffline, setSendQueuedOffline] = useState(false);
+  const [depositQueuedOffline, setDepositQueuedOffline] = useState(false);
+  const lastWalletBalanceRef = useRef<number | null>(null);
+  const [pendingSendConfirm, setPendingSendConfirm] = useState(false);
+  const [pendingDepositConfirm, setPendingDepositConfirm] = useState(false);
+  const [lastWalletSyncedAt, setLastWalletSyncedAt] = useState<number | null>(null);
+  const [lastTxSyncedAt, setLastTxSyncedAt] = useState<number | null>(null);
+  const [walletPulse, setWalletPulse] = useState(false);
+  const sendCooldown = useActionCooldown(1200);
+  const depositCooldown = useActionCooldown(1200);
 
   const walletQuery = useQuery({
     queryKey: ["akwe-wallet", user?.id],
@@ -121,12 +139,17 @@ export default function WalletHome() {
     if (!cacheKey || !walletQuery.data) return;
     setWalletSeeded(walletQuery.data);
     writeCache(cacheKey, walletQuery.data, { ttlMs: CACHE_TTL_MS.walletSummary });
+    setLastWalletSyncedAt(Date.now());
+    setWalletPulse(true);
+    const timer = window.setTimeout(() => setWalletPulse(false), 900);
+    return () => window.clearTimeout(timer);
   }, [cacheKey, walletQuery.data]);
 
   useEffect(() => {
     if (!cacheKey || !transactionsQuery.data) return;
     setTxSeeded(transactionsQuery.data);
     writeCache(`${cacheKey}:tx`, transactionsQuery.data, { ttlMs: CACHE_TTL_MS.walletTransactions });
+    setLastTxSyncedAt(Date.now());
   }, [cacheKey, transactionsQuery.data]);
 
   const usingMockTransactions = transactionsQuery.data?.usingMock ?? false;
@@ -141,6 +164,7 @@ export default function WalletHome() {
       await depositToWallet(token, wallet.id, amount);
     },
     onSuccess: async () => {
+      setPendingDepositConfirm(false);
       invalidateCacheByMutation("deposit", user?.id ?? null);
       trackUxAction("wallet.deposit.success", {
         amount: Number(depositAmount),
@@ -155,6 +179,7 @@ export default function WalletHome() {
       });
     },
     onError: (error: unknown) => {
+      setPendingDepositConfirm(false);
       toast({
         variant: "destructive",
         title: "Depot impossible",
@@ -184,6 +209,7 @@ export default function WalletHome() {
       });
     },
     onSuccess: async () => {
+      setPendingSendConfirm(false);
       invalidateCacheByMutation("send", user?.id ?? null);
       trackUxAction("wallet.send.success", {
         amount: Number(sendAmount),
@@ -200,6 +226,7 @@ export default function WalletHome() {
       });
     },
     onError: (error: unknown) => {
+      setPendingSendConfirm(false);
       if (typeof navigator !== "undefined" && !navigator.onLine && wallet) {
         const idempotencyKey = `${Date.now()}-wallet-send-offline`;
         queueAction({
@@ -225,6 +252,10 @@ export default function WalletHome() {
           title: "Envoi mis en file hors ligne",
           description: "La transaction sera rejouee automatiquement quand le reseau revient.",
         });
+        setShowSend(false);
+        setRecipientWalletId("");
+        setSendAmount("10000");
+        return;
       }
       toast({
         variant: "destructive",
@@ -235,6 +266,28 @@ export default function WalletHome() {
   });
 
   const loading = walletQuery.isLoading || !wallet;
+  const walletFreshMs =
+    lastWalletSyncedAt != null ? Math.max(0, Date.now() - lastWalletSyncedAt) : Number.POSITIVE_INFINITY;
+  const walletSyncStatus: "syncing" | "updated" | "fallback" =
+    walletQuery.isFetching || transactionsQuery.isFetching
+      ? "syncing"
+      : walletFreshMs <= CACHE_TTL_MS.walletSummary
+        ? "updated"
+        : "fallback";
+  const trustLabel =
+    walletSyncStatus === "syncing"
+      ? "Synchronisation en cours"
+      : walletSyncStatus === "updated"
+        ? "Mis a jour"
+        : "En attente de refresh";
+  const txFreshMs =
+    lastTxSyncedAt != null ? Math.max(0, Date.now() - lastTxSyncedAt) : Number.POSITIVE_INFINITY;
+  const historyStatus: "syncing" | "updated" | "fallback" =
+    transactionsQuery.isFetching
+      ? "syncing"
+      : txFreshMs <= CACHE_TTL_MS.walletTransactions
+        ? "updated"
+        : "fallback";
 
   return (
     <div className="min-h-screen bg-[#fcfcfb] pb-24">
@@ -260,12 +313,19 @@ export default function WalletHome() {
             ) : (
               <>
                 <div>
-                  <p className="text-4xl font-black tracking-tight text-black">
+                  <p className={`text-4xl font-black tracking-tight text-black transition-all ${walletPulse ? "gain-pulse" : ""}`}>
                     {formatXOF(wallet.availableBalance)}
                   </p>
                   <p className="mt-1 text-xs text-gray-500">
                     Solde total: {formatXOF(wallet.balance)} - Statut: {wallet.status}
                   </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <TrustPill state={walletSyncStatus} />
+                    <span className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      Securise
+                    </span>
+                  </div>
                 </div>
                 <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <Button
@@ -422,12 +482,20 @@ export default function WalletHome() {
             />
             <Button
               className="press-feedback w-full rounded-xl bg-black text-white hover:bg-black/90"
-              onClick={() => depositMutation.mutate()}
-              disabled={depositMutation.isPending}
+              onClick={() => {
+                if (depositMutation.isPending || pendingDepositConfirm || !depositCooldown.canRun("deposit")) return;
+                setPendingDepositConfirm(true);
+                trackUxAction("wallet.deposit.pending", { amount: Number(depositAmount), userId: user?.id ?? "anon" });
+                depositMutation.mutate();
+              }}
+              disabled={depositMutation.isPending || pendingDepositConfirm}
             >
-              {depositMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {depositMutation.isPending ? "Traitement..." : "Confirmer le depot"}
+              {depositMutation.isPending || pendingDepositConfirm ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {depositMutation.isPending || pendingDepositConfirm ? "Transaction en cours..." : "Confirmer le depot"}
             </Button>
+            {pendingDepositConfirm ? (
+              <TrustPill state="processing" />
+            ) : null}
             <p className="text-xs text-gray-500">
               Cette action enverra une demande de depot vers l'API wallet existante.
             </p>
@@ -456,12 +524,20 @@ export default function WalletHome() {
             />
             <Button
               className="press-feedback w-full rounded-xl bg-black text-white hover:bg-black/90"
-              onClick={() => sendMutation.mutate()}
-              disabled={sendMutation.isPending}
+              onClick={() => {
+                if (sendMutation.isPending || pendingSendConfirm || !sendCooldown.canRun("send")) return;
+                setPendingSendConfirm(true);
+                trackUxAction("wallet.send.pending", { amount: Number(sendAmount), userId: user?.id ?? "anon" });
+                sendMutation.mutate();
+              }}
+              disabled={sendMutation.isPending || pendingSendConfirm}
             >
-              {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
-              {sendMutation.isPending ? "Envoi en cours..." : "Confirmer l'envoi"}
+              {sendMutation.isPending || pendingSendConfirm ? <Loader2 className="h-4 w-4 animate-spin" /> : <SendHorizontal className="h-4 w-4" />}
+              {sendMutation.isPending || pendingSendConfirm ? "Transaction en cours..." : "Confirmer l'envoi"}
             </Button>
+            {pendingSendConfirm ? (
+              <TrustPill state="processing" />
+            ) : null}
             <div className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
               <p className="font-medium text-gray-700">Retour visuel instantane</p>
               <p className="mt-0.5">Tu recevras une confirmation juste apres validation.</p>
@@ -472,10 +548,21 @@ export default function WalletHome() {
                 Envoi confirme.
               </div>
             ) : null}
+            {typeof navigator !== "undefined" && !navigator.onLine ? (
+              <TrustPill state="queued-offline" />
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>
 
+      <div className="mx-auto mb-2 w-full max-w-4xl px-4">
+        <div className="rounded-2xl border border-gray-100 bg-white px-4 py-3 text-xs text-gray-600">
+          <div className="flex flex-wrap items-center gap-2">
+            <TrustPill state={historyStatus} />
+            <span>Chaque operation est verrouillee pour eviter le double clic et les executions en double.</span>
+          </div>
+        </div>
+      </div>
       <BottomNav />
     </div>
   );
