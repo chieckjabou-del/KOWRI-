@@ -1,0 +1,10 @@
+{
+  "framework": "vite",
+  "installCommand": "cd KOWRI-FRONTEND && npm install",
+  "buildCommand": "cd KOWRI-FRONTEND && npm run build",
+  "outputDirectory": "KOWRI-FRONTEND/dist",
+  "routes": [
+    { "handle": "filesystem" },
+    { "src": "/.*", "dest": "/index.html" }
+  ]
+}
