@@ -8,10 +8,81 @@ import {
   tontineMembersTable,
   savingsPlansTable,
 } from "@workspace/db";
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { desc, eq, inArray, or } from "drizzle-orm";
 import { requireAuth } from "../lib/productAuth";
 
 const router = Router();
+
+interface DashboardUser {
+  id: string;
+  phone: string;
+  firstName: string;
+  lastName: string;
+  status: string;
+  country: string;
+}
+
+interface DashboardWallet {
+  id: string;
+  userId: string;
+  currency: string;
+  walletType: string;
+  status: string;
+  balance: unknown;
+  availableBalance: unknown;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface DashboardTransaction {
+  id: string;
+  fromWalletId: string | null;
+  toWalletId: string | null;
+  amount: unknown;
+  currency: string;
+  type: string;
+  status: string;
+  reference: string;
+  description: string | null;
+  createdAt: Date;
+}
+
+interface DashboardTontine {
+  id: string;
+  name: string;
+  description: string | null;
+  contributionAmount: unknown;
+  currency: string;
+  frequency: string;
+  maxMembers: number;
+  memberCount: number;
+  currentRound: number;
+  totalRounds: number;
+  status: string;
+  tontineType: string;
+  goalAmount: unknown;
+  createdAt: Date;
+}
+
+interface DashboardPlan {
+  id: string;
+  userId: string;
+  walletId: string;
+  name: string;
+  lockedAmount: unknown;
+  interestRate: unknown;
+  accruedYield: unknown;
+  earlyBreakPenalty: unknown;
+  status: string;
+  createdAt: Date;
+}
+
+interface SavingsSummary {
+  totalLocked: number;
+  totalYield: number;
+  activePlans: number;
+  maturedPlans: number;
+}
 
 function toNumber(value: unknown): number {
   const parsed = Number(value);
@@ -47,20 +118,20 @@ router.get("/", async (req, res, next) => {
       return res.status(404).json({ error: true, message: "User not found" });
     }
 
-    const wallets = await db
+    const wallets = (await db
       .select()
       .from(walletsTable)
       .where(eq(walletsTable.userId, auth.userId))
       .orderBy(desc(walletsTable.createdAt))
-      .limit(3);
+      .limit(3)) as DashboardWallet[];
 
     const walletIds = wallets.map((wallet) => wallet.id);
     const primaryWallet = wallets[0] ?? null;
 
-    const transactions =
+    const transactions: DashboardTransaction[] =
       walletIds.length === 0
         ? []
-        : await db
+        : ((await db
             .select()
             .from(transactionsTable)
             .where(
@@ -70,44 +141,44 @@ router.get("/", async (req, res, next) => {
               ),
             )
             .orderBy(desc(transactionsTable.createdAt))
-            .limit(txLimit);
+            .limit(txLimit)) as DashboardTransaction[]);
 
-    const memberRows = await db
+    const memberRows = (await db
       .select({ tontineId: tontineMembersTable.tontineId })
       .from(tontineMembersTable)
       .where(eq(tontineMembersTable.userId, auth.userId))
-      .limit(200);
+      .limit(200)) as Array<{ tontineId: string }>;
 
     const memberTontineIds = [...new Set(memberRows.map((row) => row.tontineId))];
-    const tontines =
+    const tontines: DashboardTontine[] =
       memberTontineIds.length === 0
         ? []
-        : await db
+        : ((await db
             .select()
             .from(tontinesTable)
             .where(inArray(tontinesTable.id, memberTontineIds))
             .orderBy(desc(tontinesTable.createdAt))
-            .limit(tontineLimit);
+            .limit(tontineLimit)) as DashboardTontine[]);
 
-    const plans = await db
+    const plans = (await db
       .select()
       .from(savingsPlansTable)
       .where(eq(savingsPlansTable.userId, auth.userId))
       .orderBy(desc(savingsPlansTable.createdAt))
-      .limit(20);
+      .limit(20)) as DashboardPlan[];
 
-    const savingsSummary = plans.reduce(
-      (acc, plan) => {
-        const lockedAmount = toNumber(plan.lockedAmount);
-        const accruedYield = toNumber(plan.accruedYield);
-        acc.totalLocked += lockedAmount;
-        acc.totalYield += accruedYield;
-        if (plan.status === "active") acc.activePlans += 1;
-        if (plan.status === "matured") acc.maturedPlans += 1;
-        return acc;
-      },
-      { totalLocked: 0, totalYield: 0, activePlans: 0, maturedPlans: 0 },
-    );
+    const savingsSummary: SavingsSummary = {
+      totalLocked: 0,
+      totalYield: 0,
+      activePlans: 0,
+      maturedPlans: 0,
+    };
+    for (const plan of plans) {
+      savingsSummary.totalLocked += toNumber(plan.lockedAmount);
+      savingsSummary.totalYield += toNumber(plan.accruedYield);
+      if (plan.status === "active") savingsSummary.activePlans += 1;
+      if (plan.status === "matured") savingsSummary.maturedPlans += 1;
+    }
 
     // Keep payload keys aligned with existing frontend service contracts.
     return res.json({
