@@ -8,8 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/lib/auth";
 import { formatXOF, relativeTime } from "@/lib/api";
-import { getPrimaryWallet, getWalletTransactions } from "@/services/api/walletService";
-import { listUserTontines } from "@/services/api/tontineService";
+import { getDashboardHomeData } from "@/services/api/dashboardService";
 import { walletActivityPreview } from "@/features/wallet/wallet-ui";
 import { makeCacheKey, readCachedValue, writeCachedValue } from "@/lib/localCache";
 import { getCacheMaxAgeMs, getCacheTtlMs } from "@/lib/cachePolicy";
@@ -54,73 +53,70 @@ export default function DashboardHome() {
     [cacheNamespace],
   );
 
-  const walletQuery = useQuery({
-    queryKey: ["akwe-dashboard-wallet", user?.id],
+  const dashboardQuery = useQuery({
+    queryKey: ["akwe-dashboard-aggregate", user?.id],
     enabled: Boolean(user?.id),
-    queryFn: () => getPrimaryWallet(token, user!.id),
-    initialData: cachedWallet ?? undefined,
-  });
-
-  const wallet = walletQuery.data?.wallet;
-
-  const txQuery = useQuery({
-    queryKey: ["akwe-dashboard-tx", wallet?.id],
-    enabled: Boolean(wallet?.id),
-    queryFn: () => getWalletTransactions(token, wallet!.id, 8),
+    queryFn: () => getDashboardHomeData(token, user!.id),
     initialData:
-      cachedTx != null
+      cachedWallet?.wallet != null
         ? {
-            transactions: cachedTx.transactions as ReturnType<typeof walletActivityPreview>,
-            usingMock: Boolean(cachedTx.usingMock),
+            wallet: cachedWallet.wallet,
+            transactions: cachedTx?.transactions ?? [],
+            tontines: cachedTontines?.tontines ?? [],
+            notifications: [],
+            usingMock: Boolean(
+              cachedWallet.usingMock || cachedTx?.usingMock || cachedTontines?.usingMock,
+            ),
+            source: "composed",
           }
         : undefined,
   });
 
-  const tontinesQuery = useQuery({
-    queryKey: ["akwe-dashboard-tontines", user?.id],
-    enabled: Boolean(user?.id),
-    queryFn: () => listUserTontines(token),
-    initialData:
-      cachedTontines != null
-        ? {
-            tontines: cachedTontines.tontines as Awaited<ReturnType<typeof listUserTontines>>["tontines"],
-            usingMock: Boolean(cachedTontines.usingMock),
-          }
-        : undefined,
-  });
+  const wallet = dashboardQuery.data?.wallet ?? null;
+  const transactions = dashboardQuery.data?.transactions ?? [];
+  const tontines = dashboardQuery.data?.tontines ?? [];
 
   useEffect(() => {
-    if (walletQuery.data) {
-      if (hasMajorDataDrift(`${cacheNamespace}:wallet`, walletQuery.data)) {
-        void walletQuery.refetch();
+    if (dashboardQuery.data?.wallet) {
+      const walletPayload = {
+        wallet: dashboardQuery.data.wallet,
+        usingMock: dashboardQuery.data.usingMock,
+      };
+      if (hasMajorDataDrift(`${cacheNamespace}:wallet`, walletPayload)) {
+        void dashboardQuery.refetch();
       }
-      writeCachedValue(`${cacheNamespace}:wallet`, walletQuery.data);
+      writeCachedValue(`${cacheNamespace}:wallet`, walletPayload);
     }
-  }, [cacheNamespace, walletQuery.data, walletQuery]);
+  }, [cacheNamespace, dashboardQuery.data, dashboardQuery]);
 
   useEffect(() => {
-    if (txQuery.data) {
-      writeCachedValue(`${cacheNamespace}:tx`, txQuery.data);
+    if (dashboardQuery.data) {
+      writeCachedValue(`${cacheNamespace}:tx`, {
+        transactions: dashboardQuery.data.transactions,
+        usingMock: dashboardQuery.data.usingMock,
+      });
     }
-  }, [cacheNamespace, txQuery.data]);
+  }, [cacheNamespace, dashboardQuery.data]);
 
   useEffect(() => {
-    if (tontinesQuery.data) {
-      writeCachedValue(`${cacheNamespace}:tontines`, tontinesQuery.data);
+    if (dashboardQuery.data) {
+      writeCachedValue(`${cacheNamespace}:tontines`, {
+        tontines: dashboardQuery.data.tontines,
+        usingMock: dashboardQuery.data.usingMock,
+      });
     }
-  }, [cacheNamespace, tontinesQuery.data]);
+  }, [cacheNamespace, dashboardQuery.data]);
 
   const recentActivity = useMemo(
-    () => walletActivityPreview(txQuery.data?.transactions ?? []),
-    [txQuery.data?.transactions],
+    () => walletActivityPreview(transactions),
+    [transactions],
   );
 
-  const primaryTontine = (tontinesQuery.data?.tontines ?? [])[0];
-  const usingMock = Boolean(
-    walletQuery.data?.usingMock || txQuery.data?.usingMock || tontinesQuery.data?.usingMock,
-  );
-  const renderingFromCache = !walletQuery.isFetched && Boolean(cachedWallet || cachedTx || cachedTontines);
-  const walletTrustState = walletQuery.isFetching
+  const primaryTontine = tontines[0];
+  const usingMock = Boolean(dashboardQuery.data?.usingMock);
+  const renderingFromCache =
+    !dashboardQuery.isFetched && Boolean(cachedWallet || cachedTx || cachedTontines);
+  const walletTrustState = dashboardQuery.isFetching
     ? "syncing"
     : renderingFromCache
       ? "fallback"
@@ -155,7 +151,7 @@ export default function DashboardHome() {
             <CardTitle className="text-sm font-medium text-gray-500">Solde disponible</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            {walletQuery.isLoading || !wallet ? (
+            {dashboardQuery.isLoading || !wallet ? (
               <SkeletonCard rows={4} />
             ) : (
               <>
@@ -203,7 +199,7 @@ export default function DashboardHome() {
             </Link>
           </CardHeader>
           <CardContent>
-            {tontinesQuery.isLoading ? (
+            {dashboardQuery.isLoading ? (
               <SkeletonCard rows={2} className="bg-transparent px-0 py-0 shadow-none border-none" />
             ) : primaryTontine ? (
               <Link href={`/tontine/${primaryTontine.id}`}>
@@ -245,7 +241,7 @@ export default function DashboardHome() {
             </Link>
           </CardHeader>
           <CardContent className="space-y-2">
-            {txQuery.isLoading ? (
+            {dashboardQuery.isLoading ? (
               <div className="flex items-center gap-2 py-3 text-sm text-gray-500">
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Chargement de l'activite premium...

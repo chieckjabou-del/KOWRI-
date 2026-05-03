@@ -23,6 +23,15 @@ export interface WalletTransaction {
   toWalletId?: string | null;
 }
 
+export interface DashboardNotification {
+  id: string;
+  title: string;
+  message: string;
+  type: string;
+  read: boolean;
+  createdAt: string;
+}
+
 export interface TontineListItem {
   id: string;
   name: string;

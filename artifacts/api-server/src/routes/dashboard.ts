@@ -7,6 +7,7 @@ import {
   tontinesTable,
   tontineMembersTable,
   savingsPlansTable,
+  productNotificationsTable,
 } from "@workspace/db";
 import { desc, eq, inArray, or } from "drizzle-orm";
 import { requireAuth } from "../lib/productAuth";
@@ -82,6 +83,30 @@ interface SavingsSummary {
   totalYield: number;
   activePlans: number;
   maturedPlans: number;
+}
+
+interface DashboardNotification {
+  id: string;
+  userId: string;
+  type: string;
+  title: string;
+  message: string;
+  channel: string;
+  read: boolean;
+  metadata: unknown;
+  createdAt: Date;
+}
+
+interface DashboardStats {
+  walletCount: number;
+  transactionsCount: number;
+  tontinesCount: number;
+  activeTontines: number;
+  pendingTontines: number;
+  completedTontines: number;
+  cancelledTontines: number;
+  unreadNotifications: number;
+  savings: SavingsSummary;
 }
 
 function toNumber(value: unknown): number {
@@ -167,6 +192,13 @@ router.get("/", async (req, res, next) => {
       .orderBy(desc(savingsPlansTable.createdAt))
       .limit(20)) as DashboardPlan[];
 
+    const notifications = (await db
+      .select()
+      .from(productNotificationsTable)
+      .where(eq(productNotificationsTable.userId, auth.userId))
+      .orderBy(desc(productNotificationsTable.createdAt))
+      .limit(20)) as DashboardNotification[];
+
     const savingsSummary: SavingsSummary = {
       totalLocked: 0,
       totalYield: 0,
@@ -180,7 +212,24 @@ router.get("/", async (req, res, next) => {
       if (plan.status === "matured") savingsSummary.maturedPlans += 1;
     }
 
-    // Keep payload keys aligned with existing frontend service contracts.
+    const notificationPayload = {
+      items: notifications,
+      unreadCount: notifications.filter((item) => !item.read).length,
+    };
+
+    const stats: DashboardStats = {
+      walletCount: wallets.length,
+      transactionsCount: transactions.length,
+      tontinesCount: tontines.length,
+      activeTontines: tontines.filter((item) => item.status === "active").length,
+      pendingTontines: tontines.filter((item) => item.status === "pending").length,
+      completedTontines: tontines.filter((item) => item.status === "completed").length,
+      cancelledTontines: tontines.filter((item) => item.status === "cancelled").length,
+      unreadNotifications: notificationPayload.unreadCount,
+      savings: savingsSummary,
+    };
+
+    // Keep payload keys aligned with existing and upcoming frontend contracts.
     return res.json({
       user,
       wallets: wallets.map((wallet) => ({
@@ -208,6 +257,16 @@ router.get("/", async (req, res, next) => {
         accruedYield: toNumber(plan.accruedYield),
         earlyBreakPenalty: toNumber(plan.earlyBreakPenalty),
       })),
+      savings: {
+        plans: plans.map((plan) => ({
+          ...plan,
+          lockedAmount: toNumber(plan.lockedAmount),
+          interestRate: toNumber(plan.interestRate),
+          accruedYield: toNumber(plan.accruedYield),
+          earlyBreakPenalty: toNumber(plan.earlyBreakPenalty),
+        })),
+        summary: savingsSummary,
+      },
       summary: {
         totalBalance: wallets.reduce((sum, wallet) => sum + toNumber(wallet.balance), 0),
         availableBalance: wallets.reduce((sum, wallet) => sum + toNumber(wallet.availableBalance), 0),
@@ -215,6 +274,8 @@ router.get("/", async (req, res, next) => {
         tontinesCount: tontines.length,
         savings: savingsSummary,
       },
+      notifications: notificationPayload,
+      stats,
       meta: {
         generatedAt: new Date().toISOString(),
         sessionType: auth.type,
