@@ -1,7 +1,10 @@
 import { trackApiFailure, trackApiLatency } from "@/lib/frontendMonitor";
 
 function resolveApiBase(): string {
-  const raw = import.meta.env.VITE_API_URL?.trim();
+  const raw = (
+    import.meta.env.VITE_API_URL?.trim() ??
+    "https://workspaceapi-server-production-c114.up.railway.app/"
+  );
   if (!raw) return "/api";
   const normalized = raw.replace(/\/$/, "");
   return normalized.endsWith("/api") ? normalized : `${normalized}/api`;
