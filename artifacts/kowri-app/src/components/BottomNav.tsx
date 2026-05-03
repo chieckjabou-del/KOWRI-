@@ -1,17 +1,19 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import {
-  Home, Users, Send, Globe, User,
+  Home, Users, Send, User,
   MoreHorizontal, BarChart3, Shield, Star, PiggyBank,
   TrendingUp, Store, ShieldCheck, X, MessageSquare,
+  Wallet,
 } from "lucide-react";
+import { prefetchPrimaryRoutes, prefetchRoute } from "@/lib/route-prefetch";
 
 const PRIMARY_TABS = [
-  { href: "/dashboard",  label: "Accueil",  Icon: Home  },
-  { href: "/tontines",   label: "Tontines", Icon: Users },
-  { href: "/send",       label: "Envoyer",  Icon: Send  },
-  { href: "/diaspora",   label: "Diaspora", Icon: Globe },
-  { href: "/profile",    label: "Profil",   Icon: User  },
+  { href: "/dashboard",  label: "Accueil",  Icon: Home   },
+  { href: "/wallet",     label: "Wallet",   Icon: Wallet },
+  { href: "/send",       label: "Envoyer",  Icon: Send   },
+  { href: "/tontine",    label: "Tontine",  Icon: Users  },
+  { href: "/profile",    label: "Profil",   Icon: User   },
 ];
 
 const MORE_ITEMS = [
@@ -27,7 +29,7 @@ const MORE_ITEMS = [
 
 const MORE_ACTIVE_PREFIXES = [
   "/invest", "/insurance", "/creator", "/merchant", "/agent", "/support",
-  "/credit", "/savings",
+  "/credit", "/savings", "/diaspora",
 ];
 
 export function BottomNav() {
@@ -64,7 +66,13 @@ export function BottomNav() {
           {MORE_ITEMS.map(({ href, label, Icon, color }) => {
             const active = location.startsWith(href);
             return (
-              <Link key={href} href={href} onClick={() => setShowMore(false)}>
+              <Link
+                key={href}
+                href={href}
+                onClick={() => setShowMore(false)}
+                onMouseEnter={() => prefetchRoute(href)}
+                onTouchStart={() => prefetchRoute(href)}
+              >
                 <div
                   className="flex flex-col items-center gap-1.5 py-3 rounded-2xl border transition-all cursor-pointer"
                   style={{
@@ -94,6 +102,7 @@ export function BottomNav() {
       <nav
         className="fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-100"
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        onMouseEnter={() => prefetchPrimaryRoutes()}
       >
         <div className="flex items-center justify-around max-w-lg mx-auto">
           {PRIMARY_TABS.map(({ href, label, Icon }) => {
@@ -104,6 +113,8 @@ export function BottomNav() {
                 href={href}
                 className="flex flex-col items-center gap-0.5 py-3 px-1.5 min-h-[56px] min-w-[52px] transition-colors"
                 style={{ color: active ? "#1A6B32" : "#9CA3AF" }}
+                onMouseEnter={() => prefetchPrimaryRoutes()}
+                onTouchStart={() => prefetchPrimaryRoutes()}
               >
                 <Icon size={21} strokeWidth={active ? 2.5 : 1.8} />
                 <span className="text-[9px] font-medium">{label}</span>
