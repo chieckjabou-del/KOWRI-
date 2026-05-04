@@ -5,7 +5,12 @@ import { eq, count, sql, desc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { createHash } from "crypto";
-import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
+import {
+  validateQueryParams,
+  VALID_USER_STATUSES,
+  normalizePhone,
+  parsePin,
+} from "../middleware/validate";
 import { createSession, requireAuth } from "../lib/productAuth";
 
 const router = Router();
@@ -74,21 +79,21 @@ router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req
 
 router.post("/", async (req, res, next) => {
   try {
-    console.log("REGISTER INPUT:", { phone: req.body?.phone, firstName: req.body?.firstName, hasPin: !!req.body?.pin });
-
     const { phone, email, firstName, lastName, country, pin } = req.body ?? {};
+    const normalizedPhone = normalizePhone(phone);
+    const parsedPin = parsePin(pin);
 
-    if (!phone || !firstName || !pin) {
+    if (!normalizedPhone || !firstName || !parsedPin) {
       return res.status(400).json({ error: "Bad request", message: "Téléphone, prénom et PIN sont requis" });
     }
 
     const id       = generateId();
-    const pinHash  = createHash("sha256").update(String(pin)).digest("hex");
+    const pinHash  = createHash("sha256").update(parsedPin).digest("hex");
 
     // DB schema: last_name and country are NOT NULL — use empty string when not provided
     const [user] = await db.insert(usersTable).values({
       id,
-      phone:     String(phone).replace(/\s/g, ""),
+      phone:     normalizedPhone,
       email:     email    ? String(email)   : null,
       firstName: String(firstName).trim(),
       lastName:  lastName ? String(lastName).trim() : "",
@@ -103,8 +108,6 @@ router.post("/", async (req, res, next) => {
       id:     generateId(),
       userId: user.id,
     }).onConflictDoNothing();
-
-    console.log("REGISTER OK:", user.id);
 
     return res.status(201).json({
       id:        user.id,
@@ -128,13 +131,15 @@ router.post("/", async (req, res, next) => {
 
 router.post("/login", async (req, res) => {
   const { phone, pin } = req.body;
-  if (!phone || !pin) {
+  const normalizedPhone = normalizePhone(phone);
+  const parsedPin = parsePin(pin);
+  if (!normalizedPhone || !parsedPin) {
     return res.status(400).json({ error: true, message: "phone and pin required" });
   }
   try {
-    const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, normalizedPhone)).limit(1);
     if (!user) return res.status(401).json({ error: true, message: "Invalid credentials" });
-    const pinHash = createHash("sha256").update(String(pin)).digest("hex");
+    const pinHash = createHash("sha256").update(parsedPin).digest("hex");
     if ((user as any).pinHash !== pinHash) {
       return res.status(401).json({ error: true, message: "Invalid credentials" });
     }

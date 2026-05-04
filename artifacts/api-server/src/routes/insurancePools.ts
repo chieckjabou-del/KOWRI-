@@ -111,7 +111,7 @@ router.post("/:poolId/join", requireIdempotencyKey, checkIdempotency, async (req
     const poolId = routeParamString(req, "poolId")!;
     const policy = await joinInsurancePool(poolId, userId, walletId);
     const body = { ...policy, totalPremiumPaid: Number(policy.totalPremiumPaid) };
-    await req.saveIdempotentResponse?.(body);
+    await req.saveIdempotentResponse?.(body, 201);
     return res.status(201).json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
@@ -178,7 +178,7 @@ router.patch("/claims/:claimId/adjudicate", requireIdempotencyKey, checkIdempote
     const claimId = routeParamString(req, "claimId")!;
     await adjudicateClaim(claimId, adjudicatorId, Boolean(approved), payoutAmount, rejectionReason);
     const body = { success: true, approved: Boolean(approved) };
-    await req.saveIdempotentResponse?.(body);
+    await req.saveIdempotentResponse?.(body, 200);
     return res.json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });

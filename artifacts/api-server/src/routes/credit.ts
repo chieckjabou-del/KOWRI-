@@ -363,7 +363,7 @@ router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, asy
       isFullyRepaid,
       message:      isFullyRepaid ? "Loan fully repaid!" : "Repayment recorded",
     };
-    await req.saveIdempotentResponse?.(body);
+    await req.saveIdempotentResponse?.(body, 201);
     return res.status(201).json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
