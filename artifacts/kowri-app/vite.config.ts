@@ -14,6 +14,13 @@ if (rawPort && (Number.isNaN(port) || port <= 0)) {
 // BASE_PATH controls asset URL prefixes in the production bundle.
 // Default to root (/) for standalone deployments like Vercel.
 const basePath = process.env.BASE_PATH ?? "/";
+const commitShort =
+  (process.env.VERCEL_GIT_COMMIT_SHA ?? process.env.SOURCE_VERSION ?? "").slice(0, 8) || "local";
+const deployToken =
+  (process.env.VERCEL_DEPLOYMENT_ID ?? process.env.VERCEL_URL ?? "").slice(-8) ||
+  Date.now().toString(36);
+const appVersion = process.env.npm_package_version ?? "0.0.0";
+const uiFingerprint = `${appVersion}-${commitShort}-${deployToken}`;
 
 export default defineConfig(async ({ command }) => {
   const isDevServer = command === "serve";
@@ -33,6 +40,9 @@ export default defineConfig(async ({ command }) => {
 
   return {
     base: basePath,
+    define: {
+      __KOWRI_UI_FINGERPRINT__: JSON.stringify(uiFingerprint),
+    },
     plugins: [
       react(),
       tailwindcss(),
@@ -49,8 +59,24 @@ export default defineConfig(async ({ command }) => {
     root: path.resolve(import.meta.dirname),
     build: {
       sourcemap: false,
-      outDir: path.resolve(import.meta.dirname, "dist"),
+      outDir: "dist",
       emptyOutDir: true,
+      target: "es2020",
+      cssMinify: "esbuild",
+      minify: "esbuild",
+      chunkSizeWarningLimit: 550,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return;
+            if (id.includes("react") || id.includes("scheduler")) return "react-vendor";
+            if (id.includes("@tanstack/react-query")) return "rq";
+            if (id.includes("@radix-ui/")) return "radix-ui";
+            if (id.includes("lucide-react")) return "icons";
+            return "vendor";
+          },
+        },
+      },
     },
     server: {
       port,

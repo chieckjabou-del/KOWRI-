@@ -1,6 +1,7 @@
 import {
   createContext, useContext, useState, useEffect, useCallback, ReactNode,
 } from "react";
+import { buildApiUrl } from "@/lib/api";
 
 export interface AuthUser {
   id: string;
@@ -55,7 +56,7 @@ function writeSession(state: AuthState): void {
 
 async function validateToken(token: string): Promise<AuthUser | null> {
   try {
-    const res = await fetch("/api/users/me", {
+    const res = await fetch(buildApiUrl("/users/me"), {
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json",

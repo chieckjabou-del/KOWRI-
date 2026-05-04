@@ -8,6 +8,11 @@ import { AuthProvider, useAuth } from "@/lib/auth";
 import { setUnauthorizedHandler, ApiError } from "@/lib/api";
 import { ErrorBoundary, LoadingScreen } from "@/components/ErrorFallback";
 import { useToast } from "@/hooks/use-toast";
+import { warmupPrimaryRoutesOnIdle } from "@/lib/route-prefetch";
+import { useNamedSmartWarmup } from "@/hooks/useSmartWarmup";
+import { initOfflineQueue, syncOfflinePendingCount } from "@/lib/offlineQueue";
+import { trackCriticalError } from "@/lib/frontendMonitor";
+import { APP_VERSION } from "@/lib/version";
 
 /* ─── Page skeleton (suspense fallback) ────────────────────────── */
 function PageSkeleton() {
@@ -28,9 +33,13 @@ function PageSkeleton() {
 const Login         = lazy(() => import("@/pages/Login"));
 const Register      = lazy(() => import("@/pages/Register"));
 const Dashboard     = lazy(() => import("@/pages/Dashboard"));
+const DashboardHome = lazy(() => import("@/pages/DashboardHome"));
+const WalletHome    = lazy(() => import("@/pages/WalletHome"));
 const Tontines      = lazy(() => import("@/pages/Tontines"));
+const TontineHome   = lazy(() => import("@/pages/TontineHome"));
 const TontineCreate = lazy(() => import("@/pages/TontineCreate"));
 const TontineDetail = lazy(() => import("@/pages/TontineDetail"));
+const TontineDetailModern = lazy(() => import("@/pages/TontineDetailModern"));
 const Send          = lazy(() => import("@/pages/Send"));
 const Profile       = lazy(() => import("@/pages/Profile"));
 const Credit        = lazy(() => import("@/pages/Credit"));
@@ -45,6 +54,7 @@ const InvestDetail  = lazy(() => import("@/pages/InvestDetail"));
 const Insurance     = lazy(() => import("@/pages/Insurance"));
 const Creator       = lazy(() => import("@/pages/Creator"));
 const CreatorDetail = lazy(() => import("@/pages/CreatorDetail"));
+const CreatorDashboard = lazy(() => import("@/pages/CreatorDashboard"));
 const Support       = lazy(() => import("@/pages/Support"));
 const NotFound      = lazy(() => import("@/pages/not-found"));
 
@@ -115,7 +125,18 @@ function PublicPage({ Page }: { Page: React.ComponentType }) {
 
 /* ─── Router ────────────────────────────────────────────────────── */
 function AppRouter() {
-  const { isAuthenticated, isHydrating } = useAuth();
+  const { isAuthenticated, isHydrating, token } = useAuth();
+  useNamedSmartWarmup("app", isAuthenticated && !isHydrating);
+
+  useEffect(() => {
+    if (isHydrating || !isAuthenticated) return;
+    return warmupPrimaryRoutesOnIdle();
+  }, [isHydrating, isAuthenticated]);
+
+  useEffect(() => {
+    initOfflineQueue(() => token ?? null);
+    syncOfflinePendingCount();
+  }, [token]);
 
   return (
     <div id="kowri-root">
@@ -135,6 +156,18 @@ function AppRouter() {
 
         {/* Protected routes — Suspense lives inside ProtectedRoute */}
         <Route path="/dashboard">
+          {() => <ProtectedRoute component={DashboardHome} />}
+        </Route>
+        <Route path="/wallet">
+          {() => <ProtectedRoute component={WalletHome} />}
+        </Route>
+        <Route path="/tontine/:id">
+          {(params) => <ProtectedRoute component={TontineDetailModern} params={params} />}
+        </Route>
+        <Route path="/tontine">
+          {() => <ProtectedRoute component={TontineHome} />}
+        </Route>
+        <Route path="/legacy/dashboard">
           {() => <ProtectedRoute component={Dashboard} />}
         </Route>
         <Route path="/tontines/create">
@@ -182,6 +215,9 @@ function AppRouter() {
         <Route path="/insurance">
           {() => <ProtectedRoute component={Insurance} />}
         </Route>
+        <Route path="/creator-dashboard">
+          {() => <ProtectedRoute component={CreatorDashboard} />}
+        </Route>
         <Route path="/creator/:id">
           {(params) => <ProtectedRoute component={CreatorDetail} params={params} />}
         </Route>
@@ -208,6 +244,62 @@ function AppRouter() {
   );
 }
 
+function RuntimeGuards() {
+  const { token } = useAuth();
+
+  useEffect(() => {
+    initOfflineQueue(() => token ?? null);
+    syncOfflinePendingCount();
+  }, [token]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const KEY = "akwe-app-version";
+    const current = APP_VERSION;
+    const previous = window.localStorage.getItem(KEY);
+    if (previous && previous !== current) {
+      // Force-clean volatile caches when deployed UI version changes.
+      Object.keys(window.localStorage)
+        .filter(
+          (key) =>
+            key.startsWith("akwe-cache:") ||
+            key.startsWith("cache:tontines:") ||
+            key === "akwe-cache:index:v2",
+        )
+        .forEach((key) => window.localStorage.removeItem(key));
+    }
+    window.localStorage.setItem(KEY, current);
+  }, []);
+
+  useEffect(() => {
+    const onPreloadError = () => {
+      // Recover from stale chunk references after deployment rollover.
+      window.location.reload();
+    };
+    window.addEventListener("vite:preloadError", onPreloadError as EventListener);
+    return () => {
+      window.removeEventListener("vite:preloadError", onPreloadError as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onError = (event: ErrorEvent) => {
+      trackCriticalError("window.error", event.error ?? event.message ?? "unknown");
+    };
+    const onRejection = (event: PromiseRejectionEvent) => {
+      trackCriticalError("window.unhandledrejection", event.reason ?? "unknown");
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, []);
+
+  return null;
+}
+
 /* ─── App root ──────────────────────────────────────────────────── */
 function App() {
   return (
@@ -215,6 +307,7 @@ function App() {
       <TooltipProvider>
         <ErrorBoundary>
           <AuthProvider>
+            <RuntimeGuards />
             <OfflineBanner />
             <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
               <AppRouter />
