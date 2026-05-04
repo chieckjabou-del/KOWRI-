@@ -286,7 +286,7 @@ export default function AgentPage() {
           <div>
             <h2 className="text-xl font-bold text-gray-900 mb-2">Vous n'êtes pas encore agent</h2>
             <p className="text-gray-500 text-sm leading-relaxed">
-              Pour devenir agent KOWRI et accéder au réseau de liquidité, contactez votre Super Agent ou notre équipe.
+              Pour devenir agent AKWE et accéder au réseau de liquidité, contactez votre Super Agent ou notre équipe.
             </p>
           </div>
           <button

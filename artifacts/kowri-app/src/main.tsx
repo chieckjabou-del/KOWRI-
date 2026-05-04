@@ -144,7 +144,7 @@ installDomRecoveryGuards();
 function mount() {
   const rootEl = document.getElementById("root");
   if (!rootEl) {
-    console.error("[KOWRI] Élément #root introuvable dans le DOM.");
+    console.error("[AKWE] Élément #root introuvable dans le DOM.");
     return;
   }
   rootEl.setAttribute("data-app-build", APP_BUILD_ID);

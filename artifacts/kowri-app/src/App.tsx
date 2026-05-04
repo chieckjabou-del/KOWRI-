@@ -143,7 +143,7 @@ function AppRouter() {
       <AuthGate />
       <div data-slot="router-content">
         {isHydrating ? (
-          <LoadingScreen message="Démarrage de KOWRI…" />
+          <LoadingScreen message="Démarrage d'AKWE…" />
         ) : (
           <Switch>
         {/* Public routes — each with its own isolated Suspense */}

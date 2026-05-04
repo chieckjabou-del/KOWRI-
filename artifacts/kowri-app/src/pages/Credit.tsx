@@ -281,7 +281,7 @@ export default function Credit() {
           amount: amt,
           currency: "XOF",
           termDays,
-          purpose: "Prêt personnel KOWRI",
+          purpose: "Prêt personnel AKWE",
         }),
       });
     },
@@ -329,7 +329,7 @@ export default function Credit() {
               </div>
               <p className="font-bold text-gray-900 mb-1">Pas encore de score</p>
               <p className="text-sm text-gray-500 mb-5">
-                Calculez votre score de crédit pour accéder aux prêts KOWRI
+                Calculez votre score de crédit pour accéder aux prêts AKWE
               </p>
               <button
                 onClick={() => computeMut.mutate()}

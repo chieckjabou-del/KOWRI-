@@ -92,7 +92,7 @@ export function TopBar({ title, showBack, onBack }: TopBarProps) {
           </button>
         ) : (
           <span className="font-black text-xl tracking-tight" style={{ color: "#1A6B32" }}>
-            KOWRI
+            AKWE
           </span>
         )}
         {title && <span className="font-semibold text-gray-900">{title}</span>}

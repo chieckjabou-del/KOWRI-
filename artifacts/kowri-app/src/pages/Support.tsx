@@ -59,7 +59,7 @@ function TicketRow({ ticket }: { ticket: any }) {
           <p className="text-sm text-gray-700 leading-relaxed mt-3">{ticket.description}</p>
           {ticket.resolution ? (
             <div className="mt-3 rounded-xl p-3" style={{ background: "#F0FDF4" }}>
-              <p className="text-xs font-semibold text-green-800 mb-1">Réponse KOWRI</p>
+              <p className="text-xs font-semibold text-green-800 mb-1">Réponse AKWE</p>
               <p className="text-xs text-green-700">{ticket.resolution}</p>
             </div>
           ) : null}
@@ -127,7 +127,7 @@ export default function Support() {
             <ChevronLeft size={22} className="text-gray-700" />
           </Link>
           <div className="flex-1">
-            <h1 className="font-bold text-gray-900 text-lg">Support KOWRI</h1>
+            <h1 className="font-bold text-gray-900 text-lg">Support AKWE</h1>
             <p className="text-xs text-gray-500">Nous vous répondons sous 24h</p>
           </div>
           <button

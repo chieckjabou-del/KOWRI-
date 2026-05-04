@@ -478,7 +478,7 @@ export default function Profile() {
             </div>
             {badges.length === 0 ? (
               <div className="px-4 py-5 text-center">
-                <p className="text-sm text-gray-400">Aucun badge encore — continuez à utiliser KOWRI !</p>
+                <p className="text-sm text-gray-400">Aucun badge encore — continuez à utiliser AKWE !</p>
               </div>
             ) : (
               <div className="px-4 py-3 flex gap-3 overflow-x-auto hide-scrollbar">

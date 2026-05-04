@@ -108,7 +108,7 @@ export default function Register() {
           <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-5" style={{ background: "#F0FDF4" }}>
             <CheckCircle2 size={40} style={{ color: "#1A6B32" }} />
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Bienvenue sur KOWRI !</h2>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Bienvenue sur AKWE !</h2>
           <p className="text-gray-500">Connexion en cours…</p>
         </div>
       </div>
@@ -155,7 +155,7 @@ export default function Register() {
           <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl text-white" style={{ background: "#1A6B32" }}>
             K
           </div>
-          <span className="text-2xl font-black text-gray-900">KOWRI</span>
+          <span className="text-2xl font-black text-gray-900">AKWE</span>
         </div>
       </div>
 

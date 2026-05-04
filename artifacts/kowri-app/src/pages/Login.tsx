@@ -47,7 +47,7 @@ export default function Login() {
         <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center mb-4">
           <span className="text-white text-2xl font-black">K</span>
         </div>
-        <h1 className="text-3xl font-black text-white tracking-tight">KOWRI</h1>
+        <h1 className="text-3xl font-black text-white tracking-tight">AKWÊ</h1>
         <p className="text-white/70 text-sm mt-1">Votre super-app financière</p>
       </div>
 
