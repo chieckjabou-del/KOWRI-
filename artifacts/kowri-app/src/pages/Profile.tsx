@@ -176,7 +176,7 @@ function TxRow({ tx }: { tx: any }) {
 
 /* ─── Main component ──────────────────────────────────────────────────────── */
 export default function Profile() {
-  const { user, logout, token } = useAuth();
+  const { user, logout, token, isFounder } = useAuth();
   const [, navigate]   = useLocation();
   const qc             = useQueryClient();
   const fileRef        = useRef<HTMLInputElement>(null);
@@ -478,7 +478,7 @@ export default function Profile() {
             </div>
             {badges.length === 0 ? (
               <div className="px-4 py-5 text-center">
-                <p className="text-sm text-gray-400">Aucun badge encore — continuez à utiliser KOWRI !</p>
+                <p className="text-sm text-gray-400">Aucun badge encore — continuez à utiliser AKWE !</p>
               </div>
             ) : (
               <div className="px-4 py-3 flex gap-3 overflow-x-auto hide-scrollbar">
@@ -651,6 +651,25 @@ export default function Profile() {
             </div>
           )}
         </div>
+
+        {isFounder ? (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="px-4 pt-4 pb-2 border-b border-gray-50">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">Founder mode</p>
+            </div>
+            <button
+              onClick={() => navigate("/founder")}
+              className="w-full flex items-center gap-3 px-4 py-4 text-left hover:bg-gray-50 transition-colors"
+            >
+              <TrendingUp size={18} className="text-gray-500" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-900">Ouvrir Founder Dashboard</p>
+                <p className="text-xs text-gray-500">Activation, retention proxy, referral et volume</p>
+              </div>
+              <ChevronRight size={16} className="text-gray-400" />
+            </button>
+          </div>
+        ) : null}
 
         {/* ─── Logout ──────────────────────────────── */}
         <button

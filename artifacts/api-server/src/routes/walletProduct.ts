@@ -14,22 +14,11 @@ import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempoten
 
 const router = Router();
 
-router.post("/login", async (req, res) => {
-  const { phone, pin } = req.body;
-  if (!phone || !pin) return res.status(400).json({ error: "phone and pin required" });
-  try {
-    const users = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
-    if (!users[0]) return res.status(401).json({ error: "User not found" });
-    const session = await createSession(users[0].id, "wallet", { ttlHours: 24 });
-    return res.json({
-      token:     session.token,
-      expiresAt: session.expiresAt,
-      userId:    users[0].id,
-      name:      `${users[0].firstName} ${users[0].lastName}`,
-    });
-  } catch (err) {
-    return res.status(500).json({ error: "Login failed" });
-  }
+router.post("/login", async (_req, res) => {
+  return res.status(410).json({
+    error: true,
+    message: "Deprecated endpoint. Use /api/auth/otp/request + /api/auth/otp/verify or /api/auth/pin/login",
+  });
 });
 
 router.post("/logout", async (req, res) => {

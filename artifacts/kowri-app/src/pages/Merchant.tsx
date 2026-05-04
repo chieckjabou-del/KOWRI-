@@ -61,7 +61,7 @@ function Onboarding({ userId, onCreated }: { userId: string; onCreated: () => vo
             🏪
           </div>
           <div>
-            <h2 className="font-bold text-gray-900">Devenir Marchand KOWRI</h2>
+            <h2 className="font-bold text-gray-900">Devenir Marchand AKWE</h2>
             <p className="text-xs text-gray-500">Gratuit · Activé en quelques minutes</p>
           </div>
         </div>
@@ -70,7 +70,7 @@ function Onboarding({ userId, onCreated }: { userId: string; onCreated: () => vo
           {[
             ["💳", "Acceptez les paiements par QR code"],
             ["📊", "Suivez vos revenus en temps réel"],
-            ["🔗", "Intégrez KOWRI dans votre boutique"],
+            ["🔗", "Intégrez AKWE dans votre boutique"],
           ].map(([icon, text]) => (
             <div key={text} className="flex items-center gap-3">
               <span className="text-xl">{icon}</span>
@@ -149,7 +149,7 @@ function Onboarding({ userId, onCreated }: { userId: string; onCreated: () => vo
 /* ─── QR section ────────────────────────────────────────────────────────── */
 function QRSection({ merchantId, businessName }: { merchantId: string; businessName: string }) {
   const qrValue = `kowri://pay?merchant=${merchantId}&currency=XOF`;
-  const shareLink = `https://pay.kowri.io/${merchantId}`;
+  const shareLink = `https://akwe.app/pay/${merchantId}`;
   const qrRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
 
@@ -199,7 +199,7 @@ function QRSection({ merchantId, businessName }: { merchantId: string; businessN
         </div>
 
         <p className="text-xs text-gray-500 text-center mb-4 px-4 leading-relaxed">
-          Faites scanner ce code par vos clients pour recevoir des paiements KOWRI
+          Faites scanner ce code par vos clients pour recevoir des paiements AKWE
         </p>
 
         <div className="flex gap-3 w-full">

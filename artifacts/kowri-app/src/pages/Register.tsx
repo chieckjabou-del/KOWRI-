@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { Link } from "wouter";
 import { ChevronLeft, Eye, EyeOff, Loader2, CheckCircle2 } from "lucide-react";
 import { useAuth, AuthUser } from "@/lib/auth";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, buildApiUrl } from "@/lib/api";
+import { normalizePhoneInput, readGrowthAttribution } from "@/lib/growth";
+import { trackUxAction } from "@/lib/frontendMonitor";
 
 const STEPS = ["Téléphone", "PIN", "Votre nom"] as const;
 
@@ -12,6 +14,7 @@ const INPUT_CLS = "w-full px-4 py-4 rounded-2xl border border-gray-200 bg-gray-5
 export default function Register() {
   const { login }    = useAuth();
   const [, navigate] = useLocation();
+  const attribution = useMemo(() => readGrowthAttribution(), []);
 
   const [step, setStep]     = useState(0);
   const [phone, setPhone]   = useState("");
@@ -23,6 +26,13 @@ export default function Register() {
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState("");
   const [done,      setDone]      = useState(false);
+
+  useEffect(() => {
+    trackUxAction("growth.auth.register_step_viewed", {
+      stepIndex: step,
+      stepName: STEPS[step],
+    });
+  }, [step]);
 
   function validateStep(): string | null {
     if (step === 0) {
@@ -46,17 +56,30 @@ export default function Register() {
     if (err) { setError(err); return; }
 
     if (step < 2) {
+      trackUxAction("growth.auth.register_step_completed", {
+        stepIndex: step,
+        stepName: STEPS[step],
+        validationErrorCount: 0,
+      });
       setStep(s => s + 1);
       return;
     }
 
     setLoading(true);
+    const startedAt = Date.now();
+    const normalizedPhone = normalizePhoneInput(phone);
     try {
-      const res = await fetch("/api/users", {
+      trackUxAction("growth.auth.register_submitted", {
+        hasLastName: Boolean(lastName.trim()),
+        hasReferrer: Boolean(attribution?.referrerCode),
+        referrerCode: attribution?.referrerCode ?? "",
+        normalizedPhoneLength: normalizedPhone.length,
+      });
+      const res = await fetch(buildApiUrl("/users"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          phone:     phone.replace(/\s/g, ""),
+          phone:     normalizedPhone,
           pin,
           firstName: firstName.trim(),
           lastName:  lastName.trim() || "",
@@ -69,19 +92,33 @@ export default function Register() {
       }
 
       setDone(true);
-      setTimeout(async () => {
-        try {
-          const loginData = await apiFetch<{ token: string; user: AuthUser }>(
-            "/users/login", null,
-            { method: "POST", body: JSON.stringify({ phone: phone.replace(/\s/g, ""), pin }) }
-          );
-          login(loginData.token, loginData.user);
-          navigate("/dashboard");
-        } catch {
-          navigate("/login");
-        }
-      }, 1500);
+      try {
+        const loginData = await apiFetch<{ token: string; user: AuthUser }>(
+          "/users/login", null,
+          { method: "POST", body: JSON.stringify({ phone: normalizedPhone, pin }) }
+        );
+        trackUxAction("growth.auth.register_success", {
+          userId: loginData.user.id,
+          autoLoginSuccess: true,
+          ttfRegisterMs: Date.now() - startedAt,
+          referrerCode: attribution?.referrerCode ?? "",
+        });
+        login(loginData.token, loginData.user);
+        navigate("/dashboard");
+      } catch {
+        trackUxAction("growth.auth.register_success", {
+          userId: "unknown",
+          autoLoginSuccess: false,
+          ttfRegisterMs: Date.now() - startedAt,
+          referrerCode: attribution?.referrerCode ?? "",
+        });
+        navigate("/login");
+      }
     } catch (e: any) {
+      trackUxAction("growth.auth.register_failed", {
+        stepIndex: step,
+        errorMessage: e?.message ?? "unknown",
+      });
       setError(e.message ?? "Inscription échouée. Réessayez.");
     } finally {
       setLoading(false);
@@ -108,8 +145,8 @@ export default function Register() {
           <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-5" style={{ background: "#F0FDF4" }}>
             <CheckCircle2 size={40} style={{ color: "#1A6B32" }} />
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Bienvenue sur KOWRI !</h2>
-          <p className="text-gray-500">Connexion en cours…</p>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Bienvenue sur AKWE !</h2>
+          <p className="text-gray-500">Ton compte est pret. Connexion en cours…</p>
         </div>
       </div>
 
@@ -153,9 +190,9 @@ export default function Register() {
         {/* Branding */}
         <div className="flex items-center justify-center gap-3 mb-8">
           <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-xl text-white" style={{ background: "#1A6B32" }}>
-            K
+            A
           </div>
-          <span className="text-2xl font-black text-gray-900">KOWRI</span>
+          <span className="text-2xl font-black text-gray-900">AKWE</span>
         </div>
       </div>
 
@@ -184,10 +221,15 @@ export default function Register() {
               onChange={e => setPhone(e.target.value)}
               placeholder="+2250700000000"
               inputMode="tel"
+              autoComplete="tel"
+              enterKeyHint="next"
               tabIndex={step === 0 ? 0 : -1}
               className={INPUT_CLS}
               onKeyDown={e => { if (e.key === "Enter" && step === 0) handleNext(); }}
             />
+            <p className="mt-1 text-xs text-gray-500">
+              Ton numero sert a securiser ton compte et recevoir les alertes paiement.
+            </p>
           </div>
 
           {/* ─── Step 1: PIN ─── Always rendered, hidden via display:none */}
@@ -200,6 +242,8 @@ export default function Register() {
                 placeholder="••••"
                 inputMode="numeric"
                 maxLength={4}
+                autoComplete="one-time-code"
+                enterKeyHint="next"
                 tabIndex={step === 1 ? 0 : -1}
                 className={INPUT_CLS}
                 style={{ letterSpacing: "0.5em", fontSize: 22 }}
@@ -220,6 +264,8 @@ export default function Register() {
               placeholder="Confirmer le PIN"
               inputMode="numeric"
               maxLength={4}
+              autoComplete="one-time-code"
+              enterKeyHint="next"
               tabIndex={step === 1 ? 0 : -1}
               className={INPUT_CLS}
               style={{ letterSpacing: "0.5em", fontSize: 22 }}

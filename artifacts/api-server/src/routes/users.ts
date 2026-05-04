@@ -7,10 +7,22 @@ import { generateId } from "../lib/id";
 import { createHash } from "crypto";
 import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
 import { createSession, requireAuth } from "../lib/productAuth";
+import {
+  getKycStatusWithLimits,
+  parseDeviceContext,
+  trackAuthEvent,
+  verifyPinWithTrust,
+} from "../lib/authFintech";
 
 const router = Router();
 type UserRow = InferSelectModel<typeof usersTable>;
 type KycRow = InferSelectModel<typeof kycRecordsTable>;
+
+function normalizePhoneInput(phone: string): string {
+  const trimmed = phone.trim();
+  if (trimmed.startsWith("+")) return `+${trimmed.slice(1).replace(/\D/g, "")}`;
+  return trimmed.replace(/\D/g, "");
+}
 
 router.get("/me", async (req, res) => {
   const auth = await requireAuth(req.headers.authorization);
@@ -84,11 +96,12 @@ router.post("/", async (req, res, next) => {
 
     const id       = generateId();
     const pinHash  = createHash("sha256").update(String(pin)).digest("hex");
+    const normalizedPhone = normalizePhoneInput(String(phone));
 
     // DB schema: last_name and country are NOT NULL — use empty string when not provided
     const [user] = await db.insert(usersTable).values({
       id,
-      phone:     String(phone).replace(/\s/g, ""),
+      phone:     normalizedPhone,
       email:     email    ? String(email)   : null,
       firstName: String(firstName).trim(),
       lastName:  lastName ? String(lastName).trim() : "",
@@ -131,24 +144,60 @@ router.post("/login", async (req, res) => {
   if (!phone || !pin) {
     return res.status(400).json({ error: true, message: "phone and pin required" });
   }
+  const device = parseDeviceContext({
+    deviceId: req.headers["x-device-id"] as string | undefined,
+    ipAddress: (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() || req.ip,
+    userAgent: req.headers["user-agent"] as string | undefined,
+    deviceLabel: req.body?.deviceLabel as string | undefined,
+  });
   try {
-    const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
-    if (!user) return res.status(401).json({ error: true, message: "Invalid credentials" });
-    const pinHash = createHash("sha256").update(String(pin)).digest("hex");
-    if ((user as any).pinHash !== pinHash) {
-      return res.status(401).json({ error: true, message: "Invalid credentials" });
+    const result = await verifyPinWithTrust({ phone, pin, device });
+    if (!result.ok || !result.user || !result.meta) {
+      await trackAuthEvent({
+        phone,
+        method: "pin",
+        status: "failed",
+        reason: result.reason ?? "pin_failed",
+        suspicious: false,
+        riskScore: 0,
+        device,
+      });
+      return res.status(401).json({ error: true, message: result.reason ?? "Invalid credentials" });
     }
-    const session = await createSession(user.id, "wallet");
+    const session = await createSession(result.user.id, "wallet", {
+      deviceId: device.deviceId,
+      ipAddress: device.ipAddress,
+      ttlHours: 24,
+    });
+    await trackAuthEvent({
+      userId: result.user.id,
+      phone: result.user.phone,
+      method: "pin",
+      status: "success",
+      reason: result.meta.suspicious ? "suspicious_login" : "ok",
+      suspicious: result.meta.suspicious,
+      riskScore: result.meta.riskScore,
+      device,
+    });
+    const kyc = result.meta.kyc ?? (await getKycStatusWithLimits(result.user.id));
     return res.json({
       token: session.token,
       expiresAt: session.expiresAt,
       user: {
-        id: user.id,
-        phone: user.phone,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        status: user.status,
-        country: user.country,
+        id: result.user.id,
+        phone: result.user.phone,
+        firstName: result.user.firstName,
+        lastName: result.user.lastName,
+        status: result.user.status,
+        country: result.user.country,
+      },
+      authMeta: {
+        primaryMethod: "phone_pin_fallback",
+        suspicious: result.meta.suspicious,
+        riskScore: result.meta.riskScore,
+        deviceTrustScore: result.meta.deviceTrustScore,
+        weakNetworkMode: true,
+        kyc,
       },
     });
   } catch (err) {

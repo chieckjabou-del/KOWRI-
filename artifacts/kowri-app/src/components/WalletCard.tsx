@@ -44,7 +44,7 @@ export function WalletCard({
       }}
     >
       <div className="flex items-start justify-between mb-4">
-        <p className="text-sm font-medium opacity-80">Mon Wallet KOWRI</p>
+        <p className="text-sm font-medium opacity-80">Mon Wallet AKWE</p>
         <div className="flex items-center gap-2">
           <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full font-medium">
             {isFrozen ? "Gelé" : "Actif"}

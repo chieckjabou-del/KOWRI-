@@ -209,9 +209,11 @@ export default function Dashboard() {
   function closeSaveModal() { setShowSave(false); setSaveSuccess(false); }
 
   function shareReferral() {
-    const msg = `Rejoins-moi sur KOWRI, la super-app financière africaine ! 🌍\nUtilise mon code : ${user?.id?.slice(0, 8).toUpperCase()}\nhttps://kowri.africa/join?ref=${user?.id}`;
+    const referralCode = user?.id?.slice(0, 8).toUpperCase() ?? "";
+    const inviteLink = `https://akwe.app/register?ref=${referralCode}&utm_source=whatsapp&utm_medium=referral&utm_campaign=growth-mode`;
+    const msg = `Rejoins-moi sur AKWE, la super-app financière africaine ! 🌍\nUtilise mon code : ${referralCode}\n${inviteLink}`;
     if (navigator.share) {
-      navigator.share({ title: "KOWRI — Invitation", text: msg }).catch(() => {});
+      navigator.share({ title: "AKWE — Invitation", text: msg }).catch(() => {});
     } else {
       navigator.clipboard?.writeText(msg).catch(() => {});
     }
@@ -397,7 +399,7 @@ export default function Dashboard() {
             </div>
             <div className="flex-1">
               <p className="font-bold text-gray-900 text-sm">Créer une tontine</p>
-              <p className="text-xs text-gray-500 mt-0.5">Débloque l'accès au crédit KOWRI</p>
+              <p className="text-xs text-gray-500 mt-0.5">Débloque l'accès au crédit AKWE</p>
             </div>
             <Zap size={18} style={{ color: "#D97706" }} />
           </div>

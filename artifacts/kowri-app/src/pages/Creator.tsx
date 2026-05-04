@@ -1,13 +1,21 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import {
-  Users, Star, Loader2, X, CheckCircle2, AlertTriangle, Plus,
+  Users, Loader2, X, AlertTriangle, Plus,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth";
-import { apiFetch, formatXOF } from "@/lib/api";
+import { formatXOF } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
+import {
+  createCommunity,
+  getCreatorDashboard,
+  joinCommunity,
+  listCreatorCommunities,
+} from "@/services/api/creatorService";
+import { useToast } from "@/hooks/use-toast";
+import { EmptyHint, ScreenContainer, SectionIntro, SkeletonCard } from "@/components/premium/PremiumStates";
 
 function initials(name: string) {
   return name
@@ -22,7 +30,7 @@ function CreateCommunityModal({ userId, onClose, onCreated }: {
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [handle, setHandle] = useState("");
@@ -31,26 +39,28 @@ function CreateCommunityModal({ userId, onClose, onCreated }: {
   const [error, setError] = useState("");
 
   const createMut = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!name.trim() || !handle.trim()) throw new Error("Nom et identifiant requis");
       const h = handle.replace(/^@/, "").toLowerCase().replace(/[^a-z0-9_]/g, "");
       if (!h) throw new Error("Identifiant invalide (lettres, chiffres, _)");
-      return apiFetch<any>("/creator/communities", token, {
-        method: "POST",
-        body: JSON.stringify({
-          name: name.trim(),
-          handle: h,
-          description: description.trim(),
-          creatorId: userId,
-          creatorFeeRate: parseFloat(creatorFee) / 100,
-          platformFeeRate: 0.02,
-        }),
+      const parsedCreatorFee = Number(creatorFee);
+      if (!Number.isFinite(parsedCreatorFee) || parsedCreatorFee < 0 || parsedCreatorFee > 30) {
+        throw new Error("Commission créateur invalide (0-30%)");
+      }
+      return createCommunity(token, {
+        name: name.trim(),
+        handle: h,
+        description: description.trim(),
+        creatorId: user?.id ?? userId,
+        // Backend expects percentage points (5 => 5%)
+        creatorFeeRate: parsedCreatorFee,
+        platformFeeRate: 2,
       });
     },
-    onSuccess: (data) => {
+    onSuccess: ({ community }) => {
       qc.invalidateQueries({ queryKey: ["creator-communities"] });
       qc.invalidateQueries({ queryKey: ["creator-dashboard", userId] });
-      onCreated(data.id ?? data.handle);
+      onCreated(community.id ?? community.handle);
     },
     onError: (err: any) => setError(err.message ?? "Création échouée"),
   });
@@ -117,7 +127,9 @@ function CreateCommunityModal({ userId, onClose, onCreated }: {
               className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-sm focus:outline-none"
               style={{ minHeight: 48 }}
             />
-            <p className="text-xs text-gray-400 mt-1">Platform: 2% · Créateur: {creatorFee}% · Membres: {Math.max(0, 98 - parseFloat(creatorFee || "0"))}%</p>
+            <p className="text-xs text-gray-400 mt-1">
+              Platform: 2% · Créateur: {creatorFee}% · Membres: {Math.max(0, 98 - parseFloat(creatorFee || "0"))}%
+            </p>
           </div>
 
           {error && (
@@ -147,75 +159,114 @@ export default function Creator() {
   const [, navigate] = useLocation();
   const [showCreate, setShowCreate] = useState(false);
   const qc = useQueryClient();
+  const { toast } = useToast();
 
   const communitiesQ = useQuery({
     queryKey: ["creator-communities"],
-    queryFn: () => apiFetch<any>("/creator/communities?limit=30", token),
+    queryFn: () => listCreatorCommunities(token),
     staleTime: 30_000,
   });
 
   const dashboardQ = useQuery({
     queryKey: ["creator-dashboard", user?.id],
-    queryFn: () => apiFetch<any>(`/creator/dashboard/${user?.id}`, token),
+    queryFn: () => getCreatorDashboard(token, user?.id ?? ""),
     enabled: !!user?.id,
     staleTime: 30_000,
     retry: false,
   });
 
   const joinMut = useMutation({
-    mutationFn: (communityId: string) =>
-      apiFetch<any>(`/creator/communities/${communityId}/join`, token, {
-        method: "POST",
-        body: JSON.stringify({ userId: user?.id }),
-      }),
+    mutationFn: async (communityId: string) => {
+      if (!user?.id) return;
+      await joinCommunity(token, communityId, user.id);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["creator-communities"] });
+      toast({
+        title: "Communauté rejointe",
+        description: "Tu fais maintenant partie de cette communauté.",
+      });
+    },
+    onError: (error: unknown) => {
+      toast({
+        variant: "destructive",
+        title: "Rejoindre impossible",
+        description: error instanceof Error ? error.message : "Reessaie dans un instant.",
+      });
     },
   });
 
-  const communitiesSource = communitiesQ.data?.communities;
-  const communities: any[] = Array.isArray(communitiesSource) ? communitiesSource : [];
-  const dashboard = dashboardQ.data;
+  const communities = communitiesQ.data?.communities ?? [];
+  const dashboard = dashboardQ.data?.dashboard;
+  const dashboardMainCommunity = useMemo(
+    () => dashboard?.communities[0] ?? null,
+    [dashboard?.communities],
+  );
+  const usingMock = Boolean(communitiesQ.data?.usingMock || dashboardQ.data?.usingMock);
 
   return (
     <div className="min-h-screen pb-24" style={{ background: "#FAFAF8" }}>
       <TopBar title="Créateur" />
-
-      <main className="px-4 pt-4 pb-6 max-w-lg mx-auto space-y-5">
+      <ScreenContainer>
+        <SectionIntro
+          title="Ton espace createur"
+          subtitle="Visualise tes revenus, ta base membres et tes opportunites de croissance."
+          actions={
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowCreate(true)}
+                className="press-feedback rounded-xl bg-black px-3 py-2 text-xs font-semibold text-white"
+              >
+                Nouvelle communaute
+              </button>
+              <button
+                onClick={() => navigate("/creator-dashboard")}
+                className="press-feedback rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700"
+              >
+                Machine a argent
+              </button>
+            </div>
+          }
+        />
+        {usingMock && (
+          <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800">
+            Mode simulation actif pour le module créateur (structure backend respectée).
+          </div>
+        )}
 
         {/* My Community (if creator) */}
-        {dashboard && (
+        {dashboardMainCommunity && (
           <section>
             <h2 className="font-bold text-gray-900 mb-3 text-base">Ma communauté</h2>
             <div
-              className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm cursor-pointer"
-              onClick={() => navigate(`/creator/${dashboard.id ?? dashboard.handle}`)}
+              className="premium-card premium-hover bg-white rounded-2xl p-4 border border-gray-100 shadow-sm cursor-pointer"
+              onClick={() => navigate(`/creator/${dashboardMainCommunity.id ?? dashboardMainCommunity.handle}`)}
             >
               <div className="flex items-center gap-3 mb-3">
                 <div
                   className="w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-white text-base flex-shrink-0"
                   style={{ background: "#1A6B32" }}
                 >
-                  {initials(dashboard.name ?? "C")}
+                  {initials(dashboardMainCommunity.name ?? "C")}
                 </div>
                 <div>
-                  <p className="font-bold text-gray-900">{dashboard.name}</p>
-                  <p className="text-xs text-gray-400">@{dashboard.handle}</p>
+                  <p className="font-bold text-gray-900">{dashboardMainCommunity.name}</p>
+                  <p className="text-xs text-gray-400">@{dashboardMainCommunity.handle}</p>
                 </div>
               </div>
 
               <div className="grid grid-cols-3 gap-2 text-xs">
                 <div className="rounded-xl p-2.5 text-center" style={{ background: "#F0FDF4" }}>
                   <p className="text-gray-500">Membres</p>
-                  <p className="font-bold text-gray-900">{dashboard.memberCount ?? 0}</p>
+                  <p className="font-bold text-gray-900">{dashboard?.stats.totalMembers ?? 0}</p>
                 </div>
                 <div className="rounded-xl p-2.5 text-center" style={{ background: "#FFFBEB" }}>
                   <p className="text-gray-500">Gains</p>
-                  <p className="font-bold" style={{ color: "#D97706" }}>{formatXOF(dashboard.totalEarnings ?? 0)}</p>
+                  <p className="font-bold" style={{ color: "#D97706" }}>{formatXOF(dashboard?.stats.totalEarnings ?? 0)}</p>
                 </div>
                 <div className="rounded-xl p-2.5 text-center" style={{ background: "#EFF6FF" }}>
                   <p className="text-gray-500">Commission</p>
-                  <p className="font-bold text-blue-700">{((dashboard.creatorFeeRate ?? 0.05) * 100).toFixed(0)}%</p>
+                  <p className="font-bold text-blue-700">{(dashboardMainCommunity.creatorFeeRate ?? 5).toFixed(0)}%</p>
                 </div>
               </div>
             </div>
@@ -223,10 +274,10 @@ export default function Creator() {
         )}
 
         {/* Create Community CTA */}
-        {!dashboard && !dashboardQ.isLoading && (
+        {!dashboardMainCommunity && !dashboardQ.isLoading && (
           <button
             onClick={() => setShowCreate(true)}
-            className="w-full bg-white rounded-2xl p-4 border-2 border-dashed flex items-center gap-3 text-left"
+            className="premium-hover w-full bg-white rounded-2xl p-4 border-2 border-dashed flex items-center gap-3 text-left"
             style={{ borderColor: "#1A6B32" }}
           >
             <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "#F0FDF4" }}>
@@ -256,28 +307,31 @@ export default function Creator() {
           </div>
 
           {communitiesQ.isLoading ? (
-            <div className="space-y-3">
-              {[0, 1, 2].map(i => (
-                <div key={i} className="bg-white rounded-2xl h-28 animate-pulse border border-gray-100" />
-              ))}
-            </div>
+            <SkeletonCard rows={4} className="bg-transparent px-0 py-0 shadow-none border-none" />
           ) : communities.length === 0 ? (
-            <div className="bg-white rounded-2xl p-6 text-center border border-gray-100">
-              <p className="text-sm text-gray-500">Aucune communauté disponible</p>
-              <button
-                onClick={() => setShowCreate(true)}
-                className="mt-3 px-5 py-2.5 rounded-xl font-bold text-white text-sm"
-                style={{ background: "#1A6B32", minHeight: 44 }}
-              >
-                Créer la première
-              </button>
-            </div>
+            <EmptyHint
+              title="Aucune communaute disponible"
+              description="Cree la premiere pour commencer a generer des gains."
+              action={
+                <button
+                  onClick={() => setShowCreate(true)}
+                  className="press-feedback mt-1 rounded-xl bg-black px-5 py-2.5 text-sm font-bold text-white"
+                >
+                  Creer la premiere
+                </button>
+              }
+            />
           ) : (
             <div className="space-y-3">
-              {communities.map((community: any) => (
+              {communities.map((community: any, index: number) => (
                 <div
                   key={community.id}
-                  className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm"
+                  className="premium-card premium-hover bg-white rounded-2xl p-4 border border-gray-100 shadow-sm"
+                  style={{
+                    animation: "premium-page-enter 320ms cubic-bezier(0.16, 1, 0.3, 1)",
+                    animationDelay: `${Math.min(index * 45, 240)}ms`,
+                    animationFillMode: "both",
+                  }}
                 >
                   <div className="flex items-center gap-3 mb-3">
                     <div
@@ -305,7 +359,7 @@ export default function Creator() {
                   <div className="flex gap-2">
                     <button
                       onClick={() => navigate(`/creator/${community.id}`)}
-                      className="flex-1 py-2 rounded-xl text-xs font-semibold border"
+                      className="press-feedback flex-1 py-2 rounded-xl text-xs font-semibold border"
                       style={{ borderColor: "#1A6B32", color: "#1A6B32", minHeight: 40 }}
                     >
                       Voir
@@ -314,7 +368,7 @@ export default function Creator() {
                       <button
                         onClick={() => joinMut.mutate(community.id)}
                         disabled={joinMut.isPending}
-                        className="flex-1 py-2 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1"
+                        className="press-feedback flex-1 py-2 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1"
                         style={{ background: "#1A6B32", minHeight: 40 }}
                       >
                         {joinMut.isPending ? <Loader2 size={12} className="animate-spin" /> : null}
@@ -327,7 +381,7 @@ export default function Creator() {
             </div>
           )}
         </section>
-      </main>
+      </ScreenContainer>
 
       <BottomNav />
 

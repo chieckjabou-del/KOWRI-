@@ -4,6 +4,7 @@ import { useAuth } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
+import { getUiVersionLabel } from "@/lib/version";
 
 interface TopBarProps {
   title?: string;
@@ -46,6 +47,7 @@ export function TopBar({ title, showBack, onBack }: TopBarProps) {
   });
 
   const unread = data ?? 0;
+  const uiVersion = getUiVersionLabel();
 
   return (
     <div className="sticky top-0 z-40">
@@ -64,7 +66,14 @@ export function TopBar({ title, showBack, onBack }: TopBarProps) {
           className="flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-white"
           style={{ background: "#1A6B32" }}
         >
-          Synchronisation en cours…
+          Synchronisation en cours… • UI {uiVersion}
+        </div>
+      )}
+      {isOnline && !justReconnected && (
+        <div
+          className="flex items-center justify-center gap-2 px-4 py-1.5 text-[10px] font-semibold text-gray-600 bg-gray-50 border-b border-gray-100"
+        >
+          Version UI active: {uiVersion}
         </div>
       )}
     <header
@@ -83,7 +92,7 @@ export function TopBar({ title, showBack, onBack }: TopBarProps) {
           </button>
         ) : (
           <span className="font-black text-xl tracking-tight" style={{ color: "#1A6B32" }}>
-            KOWRI
+            AKWE
           </span>
         )}
         {title && <span className="font-semibold text-gray-900">{title}</span>}
