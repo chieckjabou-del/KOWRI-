@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Link } from "wouter";
 import { ChevronLeft, Eye, EyeOff, Loader2, CheckCircle2 } from "lucide-react";
 import { useAuth, AuthUser } from "@/lib/auth";
-import { apiFetch } from "@/lib/api";
+import { apiFetch, buildApiUrl } from "@/lib/api";
 
 const STEPS = ["Téléphone", "PIN", "Votre nom"] as const;
 
@@ -52,7 +52,7 @@ export default function Register() {
 
     setLoading(true);
     try {
-      const res = await fetch("/api/users", {
+      const res = await fetch(buildApiUrl("/users"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

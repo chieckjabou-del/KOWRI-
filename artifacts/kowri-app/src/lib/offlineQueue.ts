@@ -1,3 +1,5 @@
+import { buildApiUrl } from "@/lib/api";
+
 // ── KOWRI Offline Action Queue ────────────────────────────────────────────────
 //
 // Queues financial actions when offline and replays them (with idempotency)
@@ -55,8 +57,7 @@ export function clearQueue(): void {
 }
 
 async function executeAction(action: QueuedAction, token: string | null): Promise<void> {
-  const baseUrl = (import.meta as any).env?.VITE_API_BASE ?? "";
-  const url = `${baseUrl}/api${action.endpoint}`;
+  const url = buildApiUrl(action.endpoint);
 
   const headers: Record<string, string> = {
     "Content-Type":   "application/json",

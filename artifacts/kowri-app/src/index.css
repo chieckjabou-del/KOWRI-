@@ -309,4 +309,105 @@
   .border.hover-elevate:not(.no-hover-interaction-elevate)::after {
     inset: -1px;
   }
+
+  .page-enter {
+    animation: premium-page-enter 360ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .premium-card {
+    border: 1px solid rgba(17, 24, 39, 0.06);
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 18px 40px -28px rgba(15, 23, 42, 0.55);
+    backdrop-filter: blur(4px);
+  }
+
+  .premium-hover {
+    transition:
+      transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+      box-shadow 220ms cubic-bezier(0.16, 1, 0.3, 1),
+      border-color 220ms ease-out,
+      background-color 220ms ease-out;
+    will-change: transform;
+  }
+
+  .premium-hover:hover {
+    transform: translateY(-2px) scale(1.01);
+    box-shadow: 0 20px 42px -30px rgba(15, 23, 42, 0.62);
+  }
+
+  .press-feedback {
+    transition: transform 160ms ease-out;
+  }
+
+  .press-feedback:active {
+    transform: scale(0.98);
+  }
+
+  .skeleton-shimmer {
+    position: relative;
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.06);
+  }
+
+  .skeleton-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.72), transparent);
+    animation: premium-shimmer 1.3s infinite;
+  }
+}
+
+@keyframes premium-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes premium-page-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes premium-pulse-gain {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.26);
+  }
+  60% {
+    transform: scale(1.02);
+    box-shadow: 0 0 0 14px rgba(5, 150, 105, 0);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(5, 150, 105, 0);
+  }
+}
+
+@keyframes premium-pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@layer utilities {
+  .gain-pulse {
+    animation: premium-pulse-gain 900ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .badge-pop {
+    animation: premium-pop-in 260ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
 }
