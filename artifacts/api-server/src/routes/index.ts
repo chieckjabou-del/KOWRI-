@@ -44,6 +44,7 @@ import agentsRouter            from "./agents";
 import supportRouter           from "./support";
 import authRouter              from "./auth";
 import dashboardRouter         from "./dashboard";
+import founderRouter           from "./founder";
 
 const router: IRouter = Router();
 
@@ -92,5 +93,6 @@ router.use("/agents",              agentsRouter);
 router.use("/support",             supportRouter);
 router.use("/auth",                authRouter);
 router.use("/dashboard",           dashboardRouter);
+router.use("/founder",             founderRouter);
 
 export default router;

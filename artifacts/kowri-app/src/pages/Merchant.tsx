@@ -149,7 +149,7 @@ function Onboarding({ userId, onCreated }: { userId: string; onCreated: () => vo
 /* ─── QR section ────────────────────────────────────────────────────────── */
 function QRSection({ merchantId, businessName }: { merchantId: string; businessName: string }) {
   const qrValue = `kowri://pay?merchant=${merchantId}&currency=XOF`;
-  const shareLink = `https://pay.kowri.io/${merchantId}`;
+  const shareLink = `https://akwe.app/pay/${merchantId}`;
   const qrRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
 

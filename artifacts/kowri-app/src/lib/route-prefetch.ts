@@ -7,6 +7,12 @@ function normalizeRoute(route: string): string {
 
 function routeImport(route: string): Promise<unknown> | null {
   switch (normalizeRoute(route)) {
+    case "/growth":
+      return import("@/pages/GrowthLanding");
+    case "/register":
+      return import("@/pages/Register");
+    case "/login":
+      return import("@/pages/Login");
     case "/dashboard":
       return import("@/pages/DashboardHome");
     case "/wallet":
@@ -17,6 +23,8 @@ function routeImport(route: string): Promise<unknown> | null {
       return import("@/pages/Creator");
     case "/creator-dashboard":
       return import("@/pages/CreatorDashboard");
+    case "/founder":
+      return import("@/pages/FounderDashboard");
     default:
       return null;
   }
@@ -34,11 +42,15 @@ export function prefetchRoute(route: string): void {
 }
 
 export function prefetchPrimaryRoutes(): void {
+  prefetchRoute("/growth");
+  prefetchRoute("/register");
+  prefetchRoute("/login");
   prefetchRoute("/dashboard");
   prefetchRoute("/wallet");
   prefetchRoute("/tontine");
   prefetchRoute("/creator");
   prefetchRoute("/creator-dashboard");
+  prefetchRoute("/founder");
 }
 
 function canUseAggressivePrefetch(): boolean {

@@ -1,8 +1,10 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useLocation } from "wouter";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { apiFetch } from "@/lib/api";
 import { useAuth, AuthUser } from "@/lib/auth";
+import { normalizePhoneInput, readGrowthAttribution } from "@/lib/growth";
+import { trackUxAction } from "@/lib/frontendMonitor";
 
 export default function Login() {
   const [, navigate] = useLocation();
@@ -13,24 +15,52 @@ export default function Login() {
   const [showPin, setShowPin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState("");
+  const attribution = useMemo(() => readGrowthAttribution(), []);
+
+  useEffect(() => {
+    trackUxAction("growth.auth.login_viewed", {
+      screen: "login",
+      hasPrefilledPhone: Boolean(phone.trim()),
+      source: "app",
+      utmSource: attribution?.utmSource ?? "",
+      utmMedium: attribution?.utmMedium ?? "",
+      utmCampaign: attribution?.utmCampaign ?? "",
+      referrerCode: attribution?.referrerCode ?? "",
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!phone.trim() || pin.length < 4) {
+    const normalizedPhone = normalizePhoneInput(phone);
+    if (!normalizedPhone || pin.length < 4) {
       setError("Numéro de téléphone et code PIN requis");
       return;
     }
+    const startedAt = Date.now();
+    trackUxAction("growth.auth.login_submitted", {
+      phoneCountryCode: normalizedPhone.startsWith("+225") ? "+225" : "other",
+      phoneLength: normalizedPhone.length,
+      hasPin: pin.length === 4,
+    });
     setLoading(true);
     setError("");
     try {
       const data = await apiFetch<{ token: string; user: AuthUser }>(
         "/users/login",
         null,
-        { method: "POST", body: JSON.stringify({ phone: phone.trim(), pin }) }
+        { method: "POST", body: JSON.stringify({ phone: normalizedPhone, pin }) }
       );
+      trackUxAction("growth.auth.login_success", {
+        userId: data.user.id,
+        ttfLoginMs: Date.now() - startedAt,
+      });
       login(data.token, data.user);
       navigate("/dashboard");
     } catch (err: any) {
+      trackUxAction("growth.auth.login_failed", {
+        errorMessage: err?.message ?? "unknown",
+      });
       setError(err.message ?? "Identifiants incorrects");
     } finally {
       setLoading(false);
@@ -76,7 +106,11 @@ export default function Login() {
               style={{ minHeight: 52, "--tw-ring-color": "#1A6B32" } as any}
               autoComplete="tel"
               inputMode="tel"
+              enterKeyHint="next"
             />
+            <p className="mt-1 text-xs text-gray-500">
+              Connecte-toi avec ton numéro mobile (Orange, MTN, Moov).
+            </p>
           </div>
 
           <div>
@@ -91,6 +125,8 @@ export default function Login() {
                 placeholder="••••"
                 maxLength={4}
                 inputMode="numeric"
+                autoComplete="one-time-code"
+                enterKeyHint="go"
                 className="w-full px-4 py-3.5 pr-12 rounded-2xl border border-gray-200 bg-white text-gray-900 text-base focus:outline-none focus:ring-2 focus:border-transparent"
                 style={{ minHeight: 52 }}
               />
@@ -117,9 +153,9 @@ export default function Login() {
 
         <p className="mt-6 text-center text-sm text-gray-500">
           Pas encore de compte ?{" "}
-          <a href="/register" className="font-semibold" style={{ color: "#1A6B32" }}>
+          <Link href="/register" className="font-semibold" style={{ color: "#1A6B32" }}>
             Créer un compte
-          </a>
+          </Link>
         </p>
 
         <div className="mt-6 px-4 py-3 rounded-xl text-xs text-center" style={{ background: "#F0FDF4", color: "#166534" }}>

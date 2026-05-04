@@ -24,12 +24,13 @@ const MORE_ITEMS = [
   { href: "/creator",   label: "Créateur",    Icon: Star,       color: "#EA580C" },
   { href: "/merchant",  label: "Marchand",    Icon: Store,      color: "#0891B2" },
   { href: "/agent",     label: "Agent",       Icon: ShieldCheck,color: "#065F46" },
+  { href: "/founder",   label: "Founder",     Icon: BarChart3,  color: "#111827" },
   { href: "/support",   label: "Support",     Icon: MessageSquare, color: "#6B7280" },
 ];
 
 const MORE_ACTIVE_PREFIXES = [
   "/invest", "/insurance", "/creator", "/merchant", "/agent", "/support",
-  "/credit", "/savings", "/diaspora",
+  "/credit", "/savings", "/diaspora", "/founder",
 ];
 
 export function BottomNav() {

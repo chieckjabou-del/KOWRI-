@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
-import { BellRing, Copy, Loader2, MessageCircleMore, Sparkles, Users } from "lucide-react";
+import { BellRing, Copy, Loader2, MessageCircle, MessageCircleMore, Sparkles, Users } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ import { invalidateCacheByMutation } from "@/lib/cachePolicy";
 import { trackUxAction } from "@/lib/frontendMonitor";
 import { TrustPill } from "@/components/trust/TrustPill";
 import { useActionCooldown } from "@/hooks/useActionCooldown";
+import { buildWhatsAppShareUrl } from "@/lib/growth";
 
 interface Props {
   params: { id: string };
@@ -221,20 +222,54 @@ export default function TontineDetailModern({ params }: Props) {
                     </Button>
                   </Link>
                   {creatorLink ? (
-                    <Button
-                      variant="outline"
-                      className="press-feedback rounded-xl"
-                      onClick={async () => {
-                        await navigator.clipboard.writeText(inviteLink).catch(() => undefined);
-                        toast({
-                          title: "Lien de partage copie",
-                          description: "Partage ta tontine pour booster les contributions.",
-                        });
-                      }}
-                    >
-                      <Copy className="h-4 w-4" />
-                      Partager ma tontine
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        className="press-feedback rounded-xl bg-black text-white hover:bg-black/90"
+                        onClick={() => {
+                          trackUxAction("growth.referral.link_generated", {
+                            userId: user?.id ?? "anon",
+                            placement: "tontine_detail",
+                            referralLink: inviteLink,
+                            campaign: "growth-mode",
+                          });
+                          trackUxAction("growth.referral.share_clicked", {
+                            userId: user?.id ?? "anon",
+                            placement: "tontine_detail",
+                            channel: "whatsapp",
+                          });
+                          const waMessage = `Rejoins ma tontine AKWE et commence aujourd'hui : ${inviteLink}`;
+                          window.open(buildWhatsAppShareUrl(waMessage), "_blank", "noopener,noreferrer");
+                        }}
+                      >
+                        <MessageCircle className="h-4 w-4" />
+                        WhatsApp
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="press-feedback rounded-xl"
+                        onClick={async () => {
+                          trackUxAction("growth.referral.link_generated", {
+                            userId: user?.id ?? "anon",
+                            placement: "tontine_detail",
+                            referralLink: inviteLink,
+                            campaign: "growth-mode",
+                          });
+                          trackUxAction("growth.referral.share_clicked", {
+                            userId: user?.id ?? "anon",
+                            placement: "tontine_detail",
+                            channel: "copy",
+                          });
+                          await navigator.clipboard.writeText(inviteLink).catch(() => undefined);
+                          toast({
+                            title: "Lien de partage copie",
+                            description: "Partage ta tontine pour booster les contributions.",
+                          });
+                        }}
+                      >
+                        <Copy className="h-4 w-4" />
+                        Copier lien
+                      </Button>
+                    </div>
                   ) : null}
                 </div>
               </CardContent>

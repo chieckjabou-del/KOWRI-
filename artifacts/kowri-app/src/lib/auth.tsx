@@ -20,6 +20,7 @@ interface AuthState {
 interface AuthContextType extends AuthState {
   isHydrating: boolean;
   isAuthenticated: boolean;
+  isFounder: boolean;
   login: (token: string, user: AuthUser) => void;
   logout: () => void;
   clearAuth: () => void;
@@ -111,12 +112,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuth({ token: null, user: null });
   }, []);
 
+  const isFounder = (() => {
+    if (!auth.user?.id) return false;
+    const allowlist = (
+      import.meta.env.VITE_FOUNDER_USER_IDS?.split(",").map((value) => value.trim()).filter(Boolean) ??
+      []
+    );
+    if (allowlist.length === 0) return true;
+    return allowlist.includes(auth.user.id);
+  })();
+
   return (
     <AuthContext.Provider
       value={{
         ...auth,
         isHydrating,
         isAuthenticated: !!auth.token && !!auth.user,
+        isFounder,
         login,
         logout,
         clearAuth,

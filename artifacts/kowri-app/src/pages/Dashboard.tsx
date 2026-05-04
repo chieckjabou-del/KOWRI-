@@ -209,7 +209,9 @@ export default function Dashboard() {
   function closeSaveModal() { setShowSave(false); setSaveSuccess(false); }
 
   function shareReferral() {
-    const msg = `Rejoins-moi sur AKWE, la super-app financière africaine ! 🌍\nUtilise mon code : ${user?.id?.slice(0, 8).toUpperCase()}\nhttps://kowri.africa/join?ref=${user?.id}`;
+    const referralCode = user?.id?.slice(0, 8).toUpperCase() ?? "";
+    const inviteLink = `https://akwe.app/register?ref=${referralCode}&utm_source=whatsapp&utm_medium=referral&utm_campaign=growth-mode`;
+    const msg = `Rejoins-moi sur AKWE, la super-app financière africaine ! 🌍\nUtilise mon code : ${referralCode}\n${inviteLink}`;
     if (navigator.share) {
       navigator.share({ title: "AKWE — Invitation", text: msg }).catch(() => {});
     } else {

@@ -1,4 +1,4 @@
-import { CheckCircle2, Coins, Copy, Flame, Sparkles, Trophy, Users } from "lucide-react";
+import { CheckCircle2, Coins, Copy, Flame, MessageCircle, Sparkles, Trophy, Users } from "lucide-react";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -419,6 +419,7 @@ export function InviteCard({
   estimatedRevenue,
   onSelect,
   onShare,
+  onShareWhatsApp,
   shareBurst,
   shareCount,
 }: {
@@ -432,6 +433,7 @@ export function InviteCard({
   estimatedRevenue: number;
   onSelect: (value: string) => void;
   onShare: () => Promise<void>;
+  onShareWhatsApp: () => void;
   shareBurst: boolean;
   shareCount: number;
 }) {
@@ -486,15 +488,25 @@ export function InviteCard({
                 <p className="font-bold text-gray-900">{formatXOF(estimatedRevenue)}</p>
               </div>
             </div>
-            <Button
-              className={`press-feedback w-full rounded-xl bg-black text-white hover:bg-black/90 ${shareBurst ? "gain-pulse" : ""}`}
-              onClick={() => {
-                void onShare();
-              }}
-            >
-              <Copy className="h-4 w-4" />
-              Partager ma tontine
-            </Button>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <Button
+                className={`press-feedback h-11 rounded-xl bg-black text-white hover:bg-black/90 ${shareBurst ? "gain-pulse" : ""}`}
+                onClick={() => {
+                  void onShare();
+                }}
+              >
+                <Copy className="h-4 w-4" />
+                Copier lien
+              </Button>
+              <Button
+                variant="outline"
+                className="press-feedback h-11 rounded-xl"
+                onClick={onShareWhatsApp}
+              >
+                <MessageCircle className="h-4 w-4" />
+                WhatsApp
+              </Button>
+            </div>
             <p className="text-[11px] text-gray-500">
               Partages copies: {shareCount}. Feedback instantane actif (toast + animation).
             </p>

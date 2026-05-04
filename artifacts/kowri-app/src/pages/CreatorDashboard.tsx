@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "wouter";
 import { Loader2 } from "lucide-react";
 import { TopBar } from "@/components/TopBar";
@@ -10,6 +10,8 @@ import { persistShareDailyCount, useCreatorDashboardData } from "@/pages/creator
 import { readCache, writeCache } from "@/lib/localCache";
 import { useNamedSmartWarmup } from "@/hooks/useSmartWarmup";
 import { DATA_TTL_MS } from "@/lib/cachePolicy";
+import { trackUxAction } from "@/lib/frontendMonitor";
+import { buildWhatsAppShareUrl } from "@/lib/growth";
 import {
   DailyLoopCard,
   IntroViralCard,
@@ -64,7 +66,12 @@ export default function CreatorDashboard() {
     today,
     invitedCount,
     nextLevelLabel,
+    user,
   } = useCreatorDashboardData();
+  const whatsappShareMessage = useMemo(() => {
+    if (!inviteLink) return "";
+    return `Salut 👋 Je gere mes tontines sur AKWE. Rejoins ma communaute ici: ${inviteLink}`;
+  }, [inviteLink]);
 
   useEffect(() => {
     const stats = dashboardQuery.data?.dashboard.stats;
@@ -153,7 +160,17 @@ export default function CreatorDashboard() {
           onSelect={(value) => setSelectedTontineId(value)}
           onShare={async () => {
             if (!inviteLink) return;
+            trackUxAction("growth.referral.link_generated", {
+              userId: user?.id ?? "anon",
+              placement: "creator_dashboard",
+              referralLink: inviteLink,
+              campaign: "creator-growth",
+            });
             await navigator.clipboard.writeText(inviteLink).catch(() => undefined);
+            trackUxAction("growth.referral.link_copied", {
+              userId: user?.id ?? "anon",
+              placement: "creator_dashboard",
+            });
             setShareBurst(true);
             setShareCount((value) => {
               const nextValue = value + 1;
@@ -176,6 +193,15 @@ export default function CreatorDashboard() {
               title: "Lien copie",
               description: "Partage ta tontine pour accelerer la croissance.",
             });
+          }}
+          onShareWhatsApp={() => {
+            if (!whatsappShareMessage) return;
+            trackUxAction("growth.referral.share_clicked", {
+              userId: user?.id ?? "anon",
+              placement: "creator_dashboard",
+              channel: "whatsapp",
+            });
+            window.open(buildWhatsAppShareUrl(whatsappShareMessage), "_blank", "noopener,noreferrer");
           }}
           shareBurst={shareBurst}
           shareCount={shareCount}

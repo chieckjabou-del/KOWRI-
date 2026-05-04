@@ -34,6 +34,7 @@ import { queueAction } from "@/lib/offlineQueue";
 import { trackUxAction } from "@/lib/frontendMonitor";
 import { TrustPill } from "@/components/trust/TrustPill";
 import { useActionCooldown } from "@/hooks/useActionCooldown";
+import { useLocation } from "wouter";
 
 type SendTransferPayload = {
   fromWalletId: string;
@@ -79,6 +80,7 @@ function createOfflineActionId(prefix: string): string {
 
 export default function WalletHome() {
   const { token, user } = useAuth();
+  const [location] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const deviceProfile = getDeviceProfile();
@@ -113,6 +115,25 @@ export default function WalletHome() {
   const [walletPulse, setWalletPulse] = useState(false);
   const sendCooldown = useActionCooldown(1200);
   const depositCooldown = useActionCooldown(1200);
+  const walletAction = useMemo(() => {
+    const queryString = location.includes("?") ? location.slice(location.indexOf("?")) : "";
+    const params = new URLSearchParams(queryString);
+    const value = params.get("action");
+    if (value === "deposit" || value === "withdraw" || value === "receive") return value;
+    return null;
+  }, [location]);
+
+  useEffect(() => {
+    if (!walletAction) return;
+    if (walletAction === "deposit") setShowDeposit(true);
+    if (walletAction === "receive") setShowReceive(true);
+    if (walletAction === "withdraw") {
+      toast({
+        title: "Retrait bientot disponible",
+        description: "Cette action sera active dans une prochaine version.",
+      });
+    }
+  }, [toast, walletAction]);
 
   const walletQuery = useQuery({
     queryKey: ["akwe-wallet", user?.id],

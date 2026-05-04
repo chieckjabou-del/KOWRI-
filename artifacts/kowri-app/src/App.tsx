@@ -13,6 +13,7 @@ import { useNamedSmartWarmup } from "@/hooks/useSmartWarmup";
 import { initOfflineQueue, syncOfflinePendingCount } from "@/lib/offlineQueue";
 import { trackCriticalError } from "@/lib/frontendMonitor";
 import { APP_VERSION } from "@/lib/version";
+import { captureGrowthAttributionFromUrl } from "@/lib/growth";
 
 /* ─── Page skeleton (suspense fallback) ────────────────────────── */
 function PageSkeleton() {
@@ -55,8 +56,10 @@ const Insurance     = lazy(() => import("@/pages/Insurance"));
 const Creator       = lazy(() => import("@/pages/Creator"));
 const CreatorDetail = lazy(() => import("@/pages/CreatorDetail"));
 const CreatorDashboard = lazy(() => import("@/pages/CreatorDashboard"));
+const FounderDashboard = lazy(() => import("@/pages/FounderDashboard"));
 const Support       = lazy(() => import("@/pages/Support"));
 const NotFound      = lazy(() => import("@/pages/not-found"));
+const GrowthLanding = lazy(() => import("@/pages/GrowthLanding"));
 
 /* ─── Query client ──────────────────────────────────────────────── */
 const queryClient = new QueryClient({
@@ -129,6 +132,12 @@ function AppRouter() {
   useNamedSmartWarmup("app", isAuthenticated && !isHydrating);
 
   useEffect(() => {
+    captureGrowthAttributionFromUrl();
+    // Capture marketing attribution only once when router mounts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
     if (isHydrating || !isAuthenticated) return;
     return warmupPrimaryRoutesOnIdle();
   }, [isHydrating, isAuthenticated]);
@@ -152,6 +161,9 @@ function AppRouter() {
         </Route>
         <Route path="/register">
           {() => <PublicPage Page={Register} />}
+        </Route>
+        <Route path="/growth">
+          {() => <PublicPage Page={GrowthLanding} />}
         </Route>
 
         {/* Protected routes — Suspense lives inside ProtectedRoute */}
@@ -218,6 +230,9 @@ function AppRouter() {
         <Route path="/creator-dashboard">
           {() => <ProtectedRoute component={CreatorDashboard} />}
         </Route>
+        <Route path="/founder">
+          {() => <ProtectedRoute component={FounderDashboard} />}
+        </Route>
         <Route path="/creator/:id">
           {(params) => <ProtectedRoute component={CreatorDetail} params={params} />}
         </Route>
@@ -230,7 +245,7 @@ function AppRouter() {
 
         {/* Root redirect */}
         <Route path="/">
-          {() => isAuthenticated ? <Redirect to="/dashboard" /> : <Redirect to="/login" />}
+          {() => isAuthenticated ? <Redirect to="/dashboard" /> : <Redirect to="/growth" />}
         </Route>
 
         {/* 404 */}
