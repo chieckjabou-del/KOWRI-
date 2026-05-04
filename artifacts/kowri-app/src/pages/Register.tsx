@@ -5,6 +5,8 @@ import { ChevronLeft, Eye, EyeOff, Loader2, CheckCircle2 } from "lucide-react";
 import { useAuth, AuthUser } from "@/lib/auth";
 import { apiFetch } from "@/lib/api";
 
+const API_BASE = (import.meta.env.VITE_API_URL?.trim().replace(/\/$/, "") || "/api");
+
 const STEPS = ["Téléphone", "PIN", "Votre nom"] as const;
 
 const INPUT_CLS = "w-full px-4 py-4 rounded-2xl border border-gray-200 bg-gray-50 text-gray-900 text-base focus:outline-none focus:border-[#1A6B32] transition-colors";
@@ -52,7 +54,10 @@ export default function Register() {
 
     setLoading(true);
     try {
-      const res = await fetch("/api/users", {
+      const endpoint = API_BASE.startsWith("http")
+        ? `${API_BASE}/users`
+        : `${API_BASE}/users`;
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

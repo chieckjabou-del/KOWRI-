@@ -2,6 +2,8 @@ import {
   createContext, useContext, useState, useEffect, useCallback, ReactNode,
 } from "react";
 
+const API_BASE = import.meta.env.VITE_API_URL?.replace(/\/$/, "") || "/api";
+
 export interface AuthUser {
   id: string;
   phone: string;
@@ -55,7 +57,7 @@ function writeSession(state: AuthState): void {
 
 async function validateToken(token: string): Promise<AuthUser | null> {
   try {
-    const res = await fetch("/api/users/me", {
+    const res = await fetch(`${API_BASE}/users/me`, {
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json",
