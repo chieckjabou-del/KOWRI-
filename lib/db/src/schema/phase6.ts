@@ -15,6 +15,69 @@ export const productSessionsTable = pgTable("product_sessions", {
   index("sessions_user_idx").on(t.userId),
 ]);
 
+export const authOtpChallengesTable = pgTable("auth_otp_challenges", {
+  id:              text("id").primaryKey(),
+  phone:           text("phone").notNull(),
+  purpose:         text("purpose").notNull().default("login"),
+  otpHash:         text("otp_hash").notNull(),
+  maxAttempts:     integer("max_attempts").notNull().default(5),
+  attempts:        integer("attempts").notNull().default(0),
+  deliveryChannel: text("delivery_channel").notNull().default("sms"),
+  deviceId:        text("device_id"),
+  ipAddress:       text("ip_address"),
+  userAgent:       text("user_agent"),
+  expiresAt:       timestamp("expires_at").notNull(),
+  consumedAt:      timestamp("consumed_at"),
+  createdAt:       timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("otp_phone_idx").on(t.phone),
+  index("otp_expires_idx").on(t.expiresAt),
+  index("otp_created_idx").on(t.createdAt),
+]);
+
+export const authLoginEventsTable = pgTable("auth_login_events", {
+  id:         text("id").primaryKey(),
+  userId:     text("user_id"),
+  phone:      text("phone"),
+  method:     text("method").notNull(),
+  status:     text("status").notNull(),
+  reason:     text("reason"),
+  suspicious: boolean("suspicious").notNull().default(false),
+  riskScore:  integer("risk_score").notNull().default(0),
+  deviceId:   text("device_id"),
+  ipAddress:  text("ip_address"),
+  userAgent:  text("user_agent"),
+  metadata:   jsonb("metadata"),
+  createdAt:  timestamp("created_at").notNull().defaultNow(),
+}, (t) => [
+  index("auth_events_user_idx").on(t.userId),
+  index("auth_events_phone_idx").on(t.phone),
+  index("auth_events_status_idx").on(t.status),
+  index("auth_events_created_idx").on(t.createdAt),
+]);
+
+export const authDeviceTrustTable = pgTable("auth_device_trust", {
+  id:                  text("id").primaryKey(),
+  userId:              text("user_id").notNull(),
+  deviceId:            text("device_id").notNull(),
+  trustScore:          integer("trust_score").notNull().default(55),
+  failedAttempts:      integer("failed_attempts").notNull().default(0),
+  blockedUntil:        timestamp("blocked_until"),
+  lastIpHash:          text("last_ip_hash"),
+  biometricEnabled:    boolean("biometric_enabled").notNull().default(false),
+  biometricUnlockHash: text("biometric_unlock_hash"),
+  deviceLabel:         text("device_label"),
+  riskFlags:           jsonb("risk_flags"),
+  firstSeenAt:         timestamp("first_seen_at").notNull().defaultNow(),
+  lastLoginAt:         timestamp("last_login_at"),
+  createdAt:           timestamp("created_at").notNull().defaultNow(),
+  updatedAt:           timestamp("updated_at").notNull().defaultNow(),
+}, (t) => [
+  index("device_trust_user_idx").on(t.userId),
+  index("device_trust_device_idx").on(t.deviceId),
+  index("device_trust_score_idx").on(t.trustScore),
+]);
+
 export const productQrCodesTable = pgTable("product_qr_codes", {
   id:         text("id").primaryKey(),
   entityId:   text("entity_id").notNull(),

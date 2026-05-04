@@ -76,14 +76,29 @@ async function fetchWithTimeout(
     return controller.signal;
   };
 
+  const weakNetwork = (() => {
+    if (typeof navigator === "undefined") return false;
+    const connection = (
+      navigator as Navigator & {
+        connection?: { effectiveType?: string; saveData?: boolean };
+      }
+    ).connection;
+    if (!connection) return false;
+    if (connection.saveData) return true;
+    return connection.effectiveType === "slow-2g" || connection.effectiveType === "2g";
+  })();
+  const timeoutForRequest = weakNetwork
+    ? Math.max(timeoutMs, 16_000)
+    : timeoutMs;
+
   if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
     return fetch(input, {
       ...init,
-      signal: mergeSignals(AbortSignal.timeout(timeoutMs), externalSignal ?? undefined),
+      signal: mergeSignals(AbortSignal.timeout(timeoutForRequest), externalSignal ?? undefined),
     });
   }
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutForRequest);
   try {
     return await fetch(input, {
       ...init,
@@ -114,6 +129,13 @@ export async function apiFetch<T = unknown>(
     ...(requestInit.headers as Record<string, string>),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (typeof window !== "undefined") {
+    const persistedDeviceId =
+      window.localStorage.getItem("akwe-device-id-v1") ??
+      `dev-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    window.localStorage.setItem("akwe-device-id-v1", persistedDeviceId);
+    headers["x-device-id"] = persistedDeviceId;
+  }
 
   const runRequest = async (): Promise<T> => {
     let attempt = 0;
@@ -229,4 +251,21 @@ export function relativeTime(dateStr: string): string {
 
 export function generateIdempotencyKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+export function getDeviceId(): string {
+  if (typeof window === "undefined") return "server-device";
+  const key = "akwe-device-id-v1";
+  try {
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+    const next =
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `dev-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    window.localStorage.setItem(key, next);
+    return next;
+  } catch {
+    return `volatile-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
 }
