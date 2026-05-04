@@ -162,7 +162,7 @@ export default function Login() {
     const normalizedPhone = normalizePhoneInput(phone);
     if (!normalizedPhone || pin.length < 4) {
       setError("Numero de telephone et code PIN requis");
-      return;
+      return null;
     }
     const startedAt = Date.now();
     setLoading(true);

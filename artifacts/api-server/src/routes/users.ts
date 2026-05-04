@@ -6,7 +6,7 @@ import type { InferSelectModel } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { createHash } from "crypto";
 import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
-import { requireAuth } from "../lib/productAuth";
+import { createSession, requireAuth } from "../lib/productAuth";
 import {
   getKycStatusWithLimits,
   parseDeviceContext,

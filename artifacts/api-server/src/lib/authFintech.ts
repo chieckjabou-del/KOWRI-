@@ -1,5 +1,5 @@
 import { createHash, randomInt } from "crypto";
-import { eq, and, gt, gte, desc } from "drizzle-orm";
+import { eq, and, gt, gte, desc, sql } from "drizzle-orm";
 import { db } from "@workspace/db";
 import {
   authDeviceTrustTable,
@@ -383,11 +383,11 @@ export async function verifyOtpChallenge(input: {
   const trust = await getOrCreateDeviceTrust(user.id, input.device);
   const recentFailures = await countRecentFailedLoginsForPhone(normalizedPhone);
   const sameIpAsLast = trust.lastIpHash === hashValue(input.device.ipAddress);
+  const blockedUntilTs = trust.blockedUntil ? new Date(trust.blockedUntil).getTime() : 0;
   const suspiciousInfo = computeSuspicionFromLoginHistory({
     trustScore: trust.trustScore,
     sameIpAsLast,
-    hasBlockedUntil:
-      Boolean(trust.blockedUntil) && new Date(trust.blockedUntil).getTime() > Date.now(),
+    hasBlockedUntil: blockedUntilTs > Date.now(),
     recentFailures,
     method: "otp",
   });
