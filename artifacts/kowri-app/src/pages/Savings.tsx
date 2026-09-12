@@ -45,6 +45,7 @@ function PlanCard({
     mutationFn: (isBreak: boolean) =>
       apiFetch<any>(`/savings/plans/${plan.id}/break`, token, {
         method: "POST",
+        headers: { "Idempotency-Key": generateIdempotencyKey() } as any,
         body: JSON.stringify({ targetWalletId: walletId }),
       }),
     onSuccess: () => { setShowBreakWarn(false); setError(""); onAction(); },

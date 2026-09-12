@@ -24,7 +24,8 @@ interface StoredResponse {
 }
 
 export function requireIdempotencyKey(req: Request, res: Response, next: NextFunction): void {
-  const key = req.headers["idempotency-key"] as string | undefined;
+  const raw = req.headers["idempotency-key"] ?? req.headers["x-idempotency-key"];
+  const key = Array.isArray(raw) ? raw[0] : raw;
 
   if (!key || key.trim() === "") {
     res.status(400).json({
