@@ -177,8 +177,11 @@ router.post(
       if (err.message === "Insufficient funds") {
         return res.status(400).json({ error: true, message: "Insufficient funds" });
       }
-      if (err.name === "CurrencyMismatchError") {
+      if (err.name === "CurrencyMismatchError" || err.name === "WalletUnavailableError") {
         return res.status(400).json({ error: true, message: err.message });
+      }
+      if (err.name === "TransactionBlockedError") {
+        return res.status(403).json({ error: true, code: "TRANSACTION_BLOCKED", message: "Cette opération a été bloquée par le contrôle de risque.", reasons: err.findings?.filter((f: any) => f.blocking).map((f: any) => f.type) });
       }
       if (err.message?.includes("not found")) {
         return res.status(404).json({ error: true, message: "One or both wallets not found" });

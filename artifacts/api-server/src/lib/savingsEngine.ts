@@ -78,6 +78,7 @@ export async function accrueYield(planId: string): Promise<number> {
       reference:   `YIELD-${planId}-${day}`,
       description: `Daily yield accrual – ${plan.name}`,
       idempotencyKey: `savings-yield:${planId}:${day}`,
+      internal: true,
     });
   } catch (err) {
     if (isDuplicateIdempotencyKey(err) || (err as any)?.code === "23505") return 0;

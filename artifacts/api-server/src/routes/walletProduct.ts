@@ -132,7 +132,8 @@ router.post("/transfer", walletAuth, requireIdempotencyKey, checkIdempotency, as
     return res.status(201).json(body);
   } catch (err: any) {
     if (err.message?.includes("Insufficient")) return res.status(422).json({ error: "Insufficient balance" });
-    if (err.name === "CurrencyMismatchError" || err.name === "InvalidAmountError") return res.status(400).json({ error: err.message });
+    if (err.name === "CurrencyMismatchError" || err.name === "InvalidAmountError" || err.name === "WalletUnavailableError") return res.status(400).json({ error: err.message });
+    if (err.name === "TransactionBlockedError") return res.status(403).json({ error: "Transaction blocked by risk screening", code: "TRANSACTION_BLOCKED", reasons: err.findings?.filter((f: any) => f.blocking).map((f: any) => f.type) });
     return res.status(500).json({ error: "Transfer failed" });
   }
 });

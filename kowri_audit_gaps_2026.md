@@ -379,6 +379,27 @@ Voir Partie 0 pour les urgences exploitables. Constats complémentaires (non cri
 - Modèle de rôles en base (la clé admin partagée reste transitoire) et écran de connexion admin dans le dashboard.
 - Quitter/annuler une tontine active, résolution des enchères du marché secondaire, contrat d'événements des notifications → Phase 5.
 
+## Phase 4 — Fraude / AML réels (implémentée le 12 septembre 2026)
+
+**Un seul point de contrôle, avant l'argent** — nouveau `lib/riskScreening.ts` (`screenTransaction` / `assertTransactionAllowed`) appelé par `processDeposit`, `processTransfer`, `processFxTransfer` et `processWithdrawal` **avant tout verrou et toute écriture** : une opération bloquée ne touche jamais le grand livre (`TransactionBlockedError` → HTTP 403 `TRANSACTION_BLOCKED`, audit `transaction.blocked`). Le contrôle post-commit en `setImmediate` (qui ne pouvait rien bloquer) est supprimé ; `fraudEngine.ts` et `amlEngine.ts` deviennent de simples façades vers le screening pour l'outillage admin (`POST /aml/check`).
+
+**Couverture** — dépôts et retraits sont désormais screenés (ils ne l'étaient jamais). Les flux internes (cotisations/payouts tontine, épargne, pools, assurance, float agent, décaissement de prêt, rendement) ne sont plus exemptés : `skipFraudCheck` / `internal` signifie « surveillance AML sans règles de vélocité » (celles-ci déclencheraient sur les lots du scheduler), pas « aucun contrôle ».
+
+**Règles et politique de blocage** (seuils en XOF, surchargeables par variables d'environnement `FRAUD_*` / `AML_*`) :
+- Fraude (sorties client) : rafale de transactions (alerte ≥ 5 / 30 s, **blocage ≥ 10**), haute valeur (≥ 1 M alerte ; ≥ 5 M **bloqué si KYC < 2**), vidage de wallet (≥ 80 % du solde, alerte).
+- AML (tous flux, entrées et sorties) : haute valeur ≥ 10 M → flag + dossier `high_value_reporting` ; **structuration** (≥ 9,5 M avec ≥ 3 opérations sous le seuil en 24 h) → flag + dossier **et blocage** ; vélocité ≥ 30 op./h → flag `transaction_monitoring`.
+- **Devise** : tout montant est normalisé en XOF via `exchange_rates` (taux direct ou inverse) — un virement de 50 000 EUR déclenche enfin les seuils ; le multiplicateur hardcodé 609.76 disparaît.
+
+**Dédoublonnage** — pas de nouvelle alerte de risque ni de nouveau flag AML si une occurrence non traitée du même type existe sur le wallet dans les 24 h ; **un seul dossier de conformité ouvert par wallet et par type** (les nouveaux flags s'y rattachent). Les découvertes dédupliquées comptent toujours pour la décision.
+
+**Workflow opérateur** — `routes/risk.ts` et `routes/aml.ts` réservés admin (données clients). Nouveaux `PATCH /risk/alerts/:id/resolve` (audit `risk.alert.resolved`) et `PATCH /aml/flags/:id/review` (audit `aml.flag.reviewed`) ; filtres `?resolved=` / `?reviewed=` / `?status=` ; `stats` exposent les compteurs ouverts ; résolution de dossier idempotente (409 si déjà résolu). `GET /aml/flags` renvoie `flagReason`, `amount`, `currency`, `normalizedXof`, `blocking` à plat — le dashboard AML n'affiche plus des colonnes vides.
+
+**KYC** — le plafond mensuel s'applique aussi aux **retraits**, et le volume mensuel compte transferts, retraits et paiements marchands (statuts `processing`/`completed`).
+
+**Reste ouvert**
+- Alimentation automatique du graphe de fraude (`fraud_network_*`) par les transactions réelles et vrais algorithmes de graphe.
+- Génération planifiée / transmission des rapports SAR à un régulateur.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

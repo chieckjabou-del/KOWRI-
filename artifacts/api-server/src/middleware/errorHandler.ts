@@ -43,6 +43,30 @@ export function errorHandler(
   if (err instanceof Error) {
     const msg = err.message;
 
+    // Ledger-level refusals are client errors, never 500s.
+    if (err.name === "TransactionBlockedError") {
+      const findings = ((err as any).findings ?? []) as Array<{ type: string; blocking: boolean }>;
+      res.status(403).json({
+        error: true,
+        code: "TRANSACTION_BLOCKED",
+        message: "Cette opération a été bloquée par le contrôle de risque.",
+        reasons: findings.filter((f) => f.blocking).map((f) => f.type),
+      });
+      return;
+    }
+    if (err.name === "WalletUnavailableError" || err.name === "CurrencyMismatchError" || err.name === "InvalidAmountError") {
+      res.status(400).json({ error: true, code: err.name, message: msg });
+      return;
+    }
+    if (msg === "Insufficient funds") {
+      res.status(400).json({ error: true, code: "INSUFFICIENT_FUNDS", message: msg });
+      return;
+    }
+    if (err.name === "RateLimitExceededError") {
+      res.status(429).json({ error: true, code: "RATE_LIMITED", message: msg, retryAfter: 60 });
+      return;
+    }
+
     if (msg.includes("not found") || msg.includes("No results")) {
       res.status(404).json({ error: true, message: msg });
       return;

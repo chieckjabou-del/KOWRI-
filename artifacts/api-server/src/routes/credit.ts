@@ -188,6 +188,7 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
               reference: `LOAN-${ctx.loanId}`,
               description: `Loan disbursement #${ctx.loanId}`,
               idempotencyKey: `loan-disburse:${ctx.loanId}`,
+              internal: true,
             });
             await db.update(loansTable)
               .set({ status: "disbursed" as any, disbursedAt: new Date() })

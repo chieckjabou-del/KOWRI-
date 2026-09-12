@@ -1,13 +1,13 @@
 import { db } from "@workspace/db";
 import { ledgerEntriesTable, walletsTable, transactionsTable, usersTable } from "@workspace/db";
-import { eq, sql, and, gte } from "drizzle-orm";
+import { eq, sql, and, gte, inArray } from "drizzle-orm";
 import { generateId, generateReference } from "./id";
 import { assertValidTransition } from "./stateMachine";
 import { audit } from "./auditLogger";
 import { eventBus } from "./eventBus";
 import { recordMetric } from "./metrics";
 import { checkRateLimit, RateLimitExceededError } from "./rateLimiter";
-import { runFraudCheck } from "./fraudEngine";
+import { assertTransactionAllowed } from "./riskScreening";
 import { guard } from "./killSwitch";
 import { computeFee } from "./feeEngine";
 
@@ -128,12 +128,15 @@ export async function processDeposit(params: {
   reference: string;
   description?: string;
   idempotencyKey?: string;
+  internal?: boolean;
 }): Promise<typeof transactionsTable.$inferSelect> {
-  const { walletId, amount, currency, reference, description, idempotencyKey } = params;
+  const { walletId, amount, currency, reference, description, idempotencyKey, internal } = params;
   assertPositiveAmount(amount);
   const start = Date.now();
   const txId = generateId();
   const now = new Date();
+
+  await assertTransactionAllowed({ walletId, transactionId: txId, amount, currency, kind: "deposit", internal });
 
   let newBalanceAfterDeposit: number | undefined;
 
@@ -226,12 +229,14 @@ export async function getMonthlyVolume(fromWalletId: string): Promise<number> {
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
+  // Every outgoing type counts toward the cap, so cash-out cannot sidestep the transfer limit.
   const [result] = await db
     .select({ total: sql<number>`COALESCE(SUM(CAST(${transactionsTable.amount} AS NUMERIC)), 0)` })
     .from(transactionsTable)
     .where(and(
       eq(transactionsTable.fromWalletId, fromWalletId),
-      eq(transactionsTable.type, "transfer"),
+      inArray(transactionsTable.type, ["transfer", "withdrawal", "merchant_payment"]),
+      inArray(transactionsTable.status, ["processing", "completed"]),
       gte(transactionsTable.createdAt, startOfMonth),
     ));
   return Number(result?.total ?? 0);
@@ -300,6 +305,9 @@ export async function processTransfer(params: {
   const txId = generateId();
   const ref = reference ?? generateReference();
   const now = new Date();
+
+  // Screening runs before any lock or write: a blocked transfer never touches the ledger.
+  await assertTransactionAllowed({ walletId: fromWalletId, transactionId: txId, amount, currency, kind: "transfer", internal: skipFraudCheck });
 
   await db.transaction(async (tx) => {
     const locked = await lockWallets(tx as any, [fromWalletId, toWalletId]);
@@ -381,14 +389,6 @@ export async function processTransfer(params: {
     eventBus.publish("wallet.balance.updated", { walletId: toWalletId, currency }),
   ]);
 
-  if (!skipFraudCheck) {
-    setImmediate(() => {
-      runFraudCheck(fromWalletId, amount, currency).catch((err) =>
-        console.error("[FraudEngine] Post-commit check failed:", err)
-      );
-    });
-  }
-
   recordMetric("transaction", Date.now() - start, "transfer");
   return finalTx;
 }
@@ -427,6 +427,8 @@ export async function processFxTransfer(params: {
   const ref = params.reference ?? generateReference();
   const now = new Date();
   const start = Date.now();
+
+  await assertTransactionAllowed({ walletId: fromWalletId, transactionId: txId, amount, currency: fromCurrency, kind: "fx_transfer" });
 
   await db.transaction(async (tx) => {
     const locked = await lockWallets(tx as any, [fromWalletId, toWalletId]);
@@ -477,12 +479,6 @@ export async function processFxTransfer(params: {
     eventBus.publish("wallet.balance.updated", { walletId: toWalletId, currency: toCurrency }),
   ]);
 
-  setImmediate(() => {
-    runFraudCheck(fromWalletId, amount, fromCurrency).catch((err) =>
-      console.error("[FraudEngine] Post-commit check failed:", err)
-    );
-  });
-
   recordMetric("transaction", Date.now() - start, "transfer");
   return { transaction: finalTx, amountReceived, totalDebit };
 }
@@ -505,12 +501,19 @@ export async function processWithdrawal(params: {
   description?:   string;
   userTier?:      string;
   idempotencyKey?: string;
+  skipKycCheck?:  boolean;
+  internal?:      boolean;
 }): Promise<{ transaction: typeof transactionsTable.$inferSelect; feeAmount: number; netAmount: number; rateBps: number }> {
-  const { walletId, amount, currency, description, idempotencyKey, userTier = "bronze" } = params;
+  const { walletId, amount, currency, description, idempotencyKey, userTier = "bronze", skipKycCheck, internal } = params;
   assertPositiveAmount(amount);
   const start = Date.now();
 
   guard("outbound_transfers");
+
+  // Cash-out is capped by the same KYC ceiling as transfers.
+  if (!skipKycCheck) {
+    await enforceKycLimit(walletId, amount);
+  }
 
   // Compute fee BEFORE the transaction — async DB read, non-blocking to hot path
   const { feeAmount, netAmount, rateBps } = await computeFee("cashout", amount, userTier);
@@ -518,6 +521,8 @@ export async function processWithdrawal(params: {
   const txId = generateId();
   const ref  = params.reference ?? generateReference();
   const now  = new Date();
+
+  await assertTransactionAllowed({ walletId, transactionId: txId, amount, currency, kind: "withdrawal", internal });
 
   await db.transaction(async (tx) => {
     const locked = await lockWallets(tx as any, [walletId]);
