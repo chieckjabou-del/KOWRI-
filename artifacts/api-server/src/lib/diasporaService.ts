@@ -5,8 +5,8 @@ import {
 } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { generateId } from "./id";
-import { processTransfer } from "./walletService";
-import { convertAmount } from "./fxEngine";
+import { processFxTransfer } from "./walletService";
+import { getRate } from "./fxEngine";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
 
@@ -70,11 +70,20 @@ export async function getBeneficiaries(userId: string) {
 export async function sendRemittance(params: {
   fromWalletId: string; senderUserId: string; beneficiaryId: string;
   amount: number; fromCurrency: string; toCurrency: string;
-  description?: string;
-}): Promise<{ txId: string; amountSent: number; amountReceived: number; fee: number; corridor?: string }> {
+  description?: string; idempotencyKey?: string;
+}): Promise<{ txId: string; amountSent: number; amountReceived: number; fee: number; totalDebit: number; rate: number; corridor?: string }> {
+  if (!Number.isFinite(params.amount) || params.amount <= 0) throw new Error("amount must be a positive number");
+
   const [bene] = await db.select().from(beneficiariesTable)
-    .where(and(eq(beneficiariesTable.id, params.beneficiaryId), eq(beneficiariesTable.userId, params.senderUserId)));
+    .where(and(eq(beneficiariesTable.id, params.beneficiaryId), eq(beneficiariesTable.userId, params.senderUserId), eq(beneficiariesTable.active, true)));
   if (!bene) throw new Error("Beneficiary not found");
+
+  const [senderWallet] = await db.select({ userId: walletsTable.userId, currency: walletsTable.currency })
+    .from(walletsTable).where(eq(walletsTable.id, params.fromWalletId)).limit(1);
+  if (!senderWallet || senderWallet.userId !== params.senderUserId) throw new Error("Source wallet not found");
+  if (senderWallet.currency !== params.fromCurrency) {
+    throw new Error(`Source wallet is denominated in ${senderWallet.currency}, not ${params.fromCurrency}`);
+  }
 
   const corridors = await db.select().from(remittanceCorridorsTable)
     .where(and(
@@ -86,48 +95,55 @@ export async function sendRemittance(params: {
   const corridor = corridors[0];
   let fee = 0;
   if (corridor) {
-    fee = Number(corridor.flatFee) + (params.amount * Number(corridor.percentFee) / 100);
+    if (params.amount < Number(corridor.minAmount)) throw new Error(`Minimum amount for this corridor is ${corridor.minAmount} ${params.fromCurrency}`);
+    if (params.amount > Number(corridor.maxAmount)) throw new Error(`Maximum amount for this corridor is ${corridor.maxAmount} ${params.fromCurrency}`);
+    fee = Math.round((Number(corridor.flatFee) + (params.amount * Number(corridor.percentFee) / 100)) * 10000) / 10000;
   }
-
-  const totalDebit = params.amount + fee;
 
   let toWalletId = bene.walletId;
   if (!toWalletId) {
+    if (!bene.phone) throw new Error("Beneficiary has neither a wallet nor a phone number");
     const [recipientUser] = await db.select().from(usersTable)
-      .where(eq(usersTable.phone, bene.phone!));
+      .where(eq(usersTable.phone, bene.phone));
     if (!recipientUser) throw new Error("Recipient not found on platform — wallet ID required");
-    const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, recipientUser.id));
-    if (!wallet) throw new Error("Recipient has no wallet");
+    const recipientWallets = await db.select().from(walletsTable)
+      .where(and(eq(walletsTable.userId, recipientUser.id), eq(walletsTable.status, "active")));
+    const wallet = recipientWallets.find(w => w.currency === params.toCurrency && w.walletType === "personal")
+      ?? recipientWallets.find(w => w.currency === params.toCurrency);
+    if (!wallet) throw new Error(`Recipient has no ${params.toCurrency} wallet`);
     toWalletId = wallet.id;
   }
 
-  let amountReceived = params.amount;
-  if (params.fromCurrency !== params.toCurrency) {
-    try {
-      const { convertedAmount } = await convertAmount(params.amount, params.fromCurrency, params.toCurrency);
-      amountReceived = convertedAmount;
-    } catch {
-      amountReceived = params.amount;
-    }
+  const [recipientWallet] = await db.select({ currency: walletsTable.currency })
+    .from(walletsTable).where(eq(walletsTable.id, toWalletId)).limit(1);
+  if (!recipientWallet) throw new Error("Recipient wallet not found");
+  if (recipientWallet.currency !== params.toCurrency) {
+    throw new Error(`Recipient wallet is denominated in ${recipientWallet.currency}, not ${params.toCurrency}`);
   }
 
-  const tx = await processTransfer({
-    fromWalletId: params.fromWalletId,
+  // A missing rate must fail the transfer — never silently fall back to 1:1.
+  const rate = await getRate(params.fromCurrency, params.toCurrency);
+
+  const { transaction: tx, amountReceived, totalDebit } = await processFxTransfer({
+    fromWalletId:  params.fromWalletId,
     toWalletId,
-    amount:       params.amount,
-    currency:     params.fromCurrency,
-    description:  params.description ?? `Remittance to ${bene.name}`,
-    skipFraudCheck: false,
+    amount:        params.amount,
+    fee,
+    fromCurrency:  params.fromCurrency,
+    toCurrency:    params.toCurrency,
+    rate,
+    description:   params.description ?? `Remittance to ${bene.name}`,
+    idempotencyKey: params.idempotencyKey,
   });
 
   await audit({ action: "remittance.sent", entity: "transaction", entityId: tx.id,
-    metadata: { senderUserId: params.senderUserId, beneficiaryId: params.beneficiaryId, amount: params.amount, fee } });
+    metadata: { senderUserId: params.senderUserId, beneficiaryId: params.beneficiaryId, amount: params.amount, fee, rate, amountReceived, corridorId: corridor?.id ?? null } });
   await eventBus.publish("remittance.sent", {
     txId: tx.id, senderUserId: params.senderUserId, beneficiaryId: params.beneficiaryId,
-    amountSent: params.amount, amountReceived, fee,
+    amountSent: params.amount, amountReceived, fee, rate,
   });
 
-  return { txId: tx.id, amountSent: params.amount, amountReceived, fee, corridor: corridor?.id };
+  return { txId: tx.id, amountSent: params.amount, amountReceived, fee, totalDebit, rate, corridor: corridor?.id };
 }
 
 export async function createRecurringTransfer(params: {
@@ -175,6 +191,7 @@ export async function runDueRecurringTransfers(): Promise<{ ran: number; failed:
         fromCurrency:  r.currency,
         toCurrency:    r.currency,
         description:   r.description ?? "Recurring transfer",
+        idempotencyKey: `recurring:${r.id}:run:${r.runCount + 1}`,
       });
 
       const nextRunAt = new Date();

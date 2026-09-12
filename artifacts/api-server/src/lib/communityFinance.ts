@@ -6,7 +6,7 @@ import {
 } from "@workspace/db";
 import { eq, and, sql, count, desc } from "drizzle-orm";
 import { generateId } from "./id";
-import { processTransfer, processDeposit } from "./walletService";
+import { processTransfer, getWalletBalance } from "./walletService";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
 
@@ -86,47 +86,50 @@ export async function investInPool(params: {
   return position;
 }
 
-export async function distributePoolReturns(poolId: string, totalReturn: number): Promise<number> {
+// Returns are allocated to positions on paper only; the cash is paid out of the
+// pool wallet at redemption (principal + return), so the pool wallet must already
+// hold enough to cover every position before returns can be declared.
+export async function distributePoolReturns(poolId: string, totalReturn: number, actor: { userId: string; isPlatformAdmin?: boolean }): Promise<number> {
+  if (!Number.isFinite(totalReturn) || totalReturn <= 0) throw new Error("totalReturn must be a positive number");
+
   const [pool] = await db.select().from(investmentPoolsTable).where(eq(investmentPoolsTable.id, poolId));
   if (!pool) throw new Error("Pool not found");
+  if (!actor.isPlatformAdmin && pool.managerId !== actor.userId) throw new Error("Only the pool manager can distribute returns");
+  const actorId = actor.userId;
+  if (pool.status === "matured") throw new Error("Returns have already been distributed for this pool");
 
   const positions = await db.select().from(poolPositionsTable)
     .where(and(eq(poolPositionsTable.poolId, poolId), eq(poolPositionsTable.status, "active")));
 
+  const outstandingPrincipal = positions.reduce((s, p) => s + Number(p.investedAmount), 0);
+  const poolBalance = await getWalletBalance(pool.walletId);
+  if (poolBalance + 1e-6 < outstandingPrincipal + totalReturn) {
+    throw new Error(
+      `Pool wallet holds ${poolBalance.toFixed(4)} ${pool.currency} but ${(outstandingPrincipal + totalReturn).toFixed(4)} is required to cover principal plus returns`
+    );
+  }
+
   const totalShares = Number(pool.totalShares);
   let distributed = 0;
 
-  for (const pos of positions) {
-    if (Number(pos.returnAmount) > 0) continue;
+  await db.transaction(async (tx) => {
+    for (const pos of positions) {
+      if (Number(pos.returnAmount) > 0) continue;
+      const posShares = Number(pos.shares);
+      const share     = totalShares > 0 ? Math.round((posShares / totalShares) * totalReturn * 10000) / 10000 : 0;
+      if (share <= 0) continue;
 
-    const posShares = Number(pos.shares);
-    const share     = totalShares > 0 ? (posShares / totalShares) * totalReturn : 0;
-    if (share <= 0) continue;
-
-    const [userWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, pos.userId));
-    if (!userWallet) continue;
-
-    try {
-      await processDeposit({
-        walletId:    userWallet.id,
-        amount:      share,
-        currency:    pool.currency,
-        reference:   `RETURN-${poolId}-${pos.userId}`,
-        description: `Investment return from ${pool.name}`,
-      });
-
-      await db.update(poolPositionsTable).set({ returnAmount: String(Number(pos.returnAmount) + share) })
+      await tx.update(poolPositionsTable).set({ returnAmount: String(share) })
         .where(eq(poolPositionsTable.id, pos.id));
-
       distributed += share;
-    } catch {
-      // skip failed distribution; position.returnAmount remains 0 for retry
     }
-  }
 
-  await db.update(investmentPoolsTable).set({ status: "matured", updatedAt: new Date() })
-    .where(eq(investmentPoolsTable.id, poolId));
+    await tx.update(investmentPoolsTable).set({ status: "matured", updatedAt: new Date() })
+      .where(eq(investmentPoolsTable.id, poolId));
+  });
 
+  await audit({ action: "investment.pool.returns_distributed", entity: "investment_pool", entityId: poolId,
+    metadata: { actorId, totalReturn, distributed, positions: positions.length } });
   await eventBus.publish("investment.pool.returns.distributed", { poolId, totalReturn, distributed, positions: positions.length });
   return distributed;
 }
@@ -163,6 +166,7 @@ export async function redeemPoolPosition(positionId: string, userId: string): Pr
       currency:     pool.currency,
       description:  `Redemption from ${pool.name}`,
       skipFraudCheck: true,
+      idempotencyKey: `pool-redeem:${positionId}`,
     });
 
     await db.update(poolPositionsTable).set({
@@ -275,7 +279,24 @@ export async function fileClaim(params: {
   return claim;
 }
 
-export async function adjudicateClaim(claimId: string, adjudicatorId: string, approved: boolean, payoutAmount?: number, rejectionReason?: string): Promise<void> {
+export async function adjudicateClaim(claimId: string, adjudicatorId: string, approved: boolean, payoutAmount?: number, rejectionReason?: string, opts: { isPlatformAdmin?: boolean } = {}): Promise<void> {
+  const [pending] = await db.select().from(insuranceClaimsTable).where(eq(insuranceClaimsTable.id, claimId));
+  if (!pending) throw new Error("Claim not found");
+
+  const [pool] = await db.select().from(insurancePoolsTable).where(eq(insurancePoolsTable.id, pending.poolId));
+  if (!pool) throw new Error("Pool not found");
+  if (!opts.isPlatformAdmin && pool.managerId !== adjudicatorId) {
+    throw new Error("Only the pool manager can adjudicate claims");
+  }
+
+  if (approved) {
+    const claimAmount = Number(pending.claimAmount);
+    if (payoutAmount === undefined || payoutAmount === null) payoutAmount = claimAmount;
+    if (!Number.isFinite(payoutAmount) || payoutAmount <= 0) throw new Error("payoutAmount must be a positive number");
+    if (payoutAmount > claimAmount) throw new Error(`payoutAmount cannot exceed the claimed amount (${claimAmount})`);
+    if (payoutAmount > Number(pool.claimLimit)) throw new Error(`payoutAmount exceeds the pool claim limit (${pool.claimLimit})`);
+  }
+
   const locked = await db.update(insuranceClaimsTable)
     .set({ status: "processing" })
     .where(and(eq(insuranceClaimsTable.id, claimId), eq(insuranceClaimsTable.status, "pending")))
@@ -286,10 +307,11 @@ export async function adjudicateClaim(claimId: string, adjudicatorId: string, ap
 
   try {
     if (approved && payoutAmount) {
-      const [pool] = await db.select().from(insurancePoolsTable).where(eq(insurancePoolsTable.id, claim.poolId));
-      const [userWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, claim.userId));
-
-      if (!pool || !userWallet) throw new Error("Pool or user wallet not found");
+      const claimantWallets = await db.select().from(walletsTable)
+        .where(and(eq(walletsTable.userId, claim.userId), eq(walletsTable.status, "active")));
+      const userWallet = claimantWallets.find(w => w.currency === claim.currency && w.walletType === "personal")
+        ?? claimantWallets.find(w => w.currency === claim.currency);
+      if (!userWallet) throw new Error("Claimant has no wallet in the claim currency");
 
       const tx = await processTransfer({
         fromWalletId: pool.walletId,
@@ -298,6 +320,7 @@ export async function adjudicateClaim(claimId: string, adjudicatorId: string, ap
         currency:     claim.currency,
         description:  `Insurance claim payout – ${claimId}`,
         skipFraudCheck: true,
+        idempotencyKey: `insurance-claim:${claimId}`,
       });
 
       await db.transaction(async (dbTx) => {

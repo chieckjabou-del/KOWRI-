@@ -8,11 +8,9 @@ import { generateId } from "../lib/id";
 import {
   createInsurancePool, joinInsurancePool, fileClaim, adjudicateClaim,
 } from "../lib/communityFinance";
-import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
-
-import { authenticate } from "../middleware/auth";
+import { authenticate, isAdminRequest, walletBelongsToUser } from "../middleware/auth";
 
 const router = Router();
 
@@ -47,13 +45,14 @@ router.get("/", async (req, res, next) => {
 router.post("/", async (req, res, next) => {
   try {
     const {
-      name, description, insuranceType = "general", managerId,
+      name, description, insuranceType = "general",
       premiumAmount, premiumFreq = "monthly", claimLimit,
       currency = "XOF", maxMembers = 100,
     } = req.body;
+    const managerId = req.auth!.userId;
 
-    if (!name || !managerId || !premiumAmount || !claimLimit) {
-      return res.status(400).json({ error: true, message: "name, managerId, premiumAmount, claimLimit required" });
+    if (!name || !premiumAmount || !claimLimit) {
+      return res.status(400).json({ error: true, message: "name, premiumAmount, claimLimit required" });
     }
 
     const poolWalletId = generateId();
@@ -80,13 +79,14 @@ router.post("/", async (req, res, next) => {
 
 router.get("/:poolId", async (req, res, next) => {
   try {
+    const poolId = routeParamString(req, "poolId")!;
     const [pool] = await db.select().from(insurancePoolsTable)
-      .where(eq(insurancePoolsTable.id, req.params.poolId));
+      .where(eq(insurancePoolsTable.id, poolId));
     if (!pool) return res.status(404).json({ error: true, message: "Insurance pool not found" });
 
     const [{ claimCount }] = await db.select({ claimCount: count() })
       .from(insuranceClaimsTable)
-      .where(eq(insuranceClaimsTable.poolId, req.params.poolId));
+      .where(eq(insuranceClaimsTable.poolId, poolId));
 
     return res.json({
       ...pool,
@@ -100,25 +100,34 @@ router.get("/:poolId", async (req, res, next) => {
 
 router.post("/:poolId/join", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { userId, walletId } = req.body;
-    if (!userId || !walletId) {
-      return res.status(400).json({ error: true, message: "userId and walletId required" });
+    const { walletId } = req.body;
+    const userId = req.auth!.userId;
+    if (!walletId) {
+      return res.status(400).json({ error: true, message: "walletId required" });
+    }
+    if (!(await walletBelongsToUser(String(walletId), userId))) {
+      return res.status(403).json({ error: true, message: "You do not own this wallet" });
     }
     const poolId = routeParamString(req, "poolId")!;
     const policy = await joinInsurancePool(poolId, userId, walletId);
     const body = { ...policy, totalPremiumPaid: Number(policy.totalPremiumPaid) };
-    await req.saveIdempotentResponse?.(body);
     return res.status(201).json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
   }
 });
 
+// Managers see every policy in their pool; members only see their own.
 router.get("/:poolId/policies", async (req, res, next) => {
   try {
     const poolId = routeParamString(req, "poolId")!;
+    const [pool] = await db.select({ managerId: insurancePoolsTable.managerId }).from(insurancePoolsTable).where(eq(insurancePoolsTable.id, poolId));
+    if (!pool) return res.status(404).json({ error: true, message: "Insurance pool not found" });
+    const canSeeAll = isAdminRequest(req) || pool.managerId === req.auth!.userId;
     const policies = await db.select().from(insurancePoliciesTable)
-      .where(eq(insurancePoliciesTable.poolId, poolId))
+      .where(canSeeAll
+        ? eq(insurancePoliciesTable.poolId, poolId)
+        : and(eq(insurancePoliciesTable.poolId, poolId), eq(insurancePoliciesTable.userId, req.auth!.userId)))
       .orderBy(desc(insurancePoliciesTable.createdAt));
     return res.json({
       policies: policies.map(p => ({
@@ -130,13 +139,13 @@ router.get("/:poolId/policies", async (req, res, next) => {
 
 router.post("/:poolId/claims", async (req, res, next) => {
   try {
-    const { policyId, userId, claimAmount, reason, evidenceUrl } = req.body;
-    if (!policyId || !userId || !claimAmount || !reason) {
-      return res.status(400).json({ error: true, message: "policyId, userId, claimAmount, reason required" });
+    const { policyId, claimAmount, reason, evidenceUrl } = req.body;
+    if (!policyId || !claimAmount || !reason) {
+      return res.status(400).json({ error: true, message: "policyId, claimAmount, reason required" });
     }
     const poolId = routeParamString(req, "poolId")!;
     const claim = await fileClaim({
-      policyId, poolId, userId,
+      policyId, poolId, userId: req.auth!.userId,
       claimAmount: Number(claimAmount), reason, evidenceUrl,
     });
     return res.status(201).json({ ...claim, claimAmount: Number(claim.claimAmount) });
@@ -149,9 +158,13 @@ router.get("/:poolId/claims", async (req, res, next) => {
   try {
     const poolId = routeParamString(req, "poolId")!;
     const status = req.query.status as string | undefined;
+    const [pool] = await db.select({ managerId: insurancePoolsTable.managerId }).from(insurancePoolsTable).where(eq(insurancePoolsTable.id, poolId));
+    if (!pool) return res.status(404).json({ error: true, message: "Insurance pool not found" });
+    const canSeeAll = isAdminRequest(req) || pool.managerId === req.auth!.userId;
     const claims = await db.select().from(insuranceClaimsTable)
       .where(and(
         eq(insuranceClaimsTable.poolId, poolId),
+        canSeeAll ? undefined : eq(insuranceClaimsTable.userId, req.auth!.userId),
         status ? eq(insuranceClaimsTable.status, status as any) : undefined,
       ))
       .orderBy(desc(insuranceClaimsTable.createdAt));
@@ -167,14 +180,20 @@ router.get("/:poolId/claims", async (req, res, next) => {
 
 router.patch("/claims/:claimId/adjudicate", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { adjudicatorId, approved, payoutAmount, rejectionReason } = req.body;
-    if (!adjudicatorId || approved === undefined) {
-      return res.status(400).json({ error: true, message: "adjudicatorId and approved required" });
+    const { approved, payoutAmount, rejectionReason } = req.body;
+    if (approved === undefined) {
+      return res.status(400).json({ error: true, message: "approved required" });
     }
     const claimId = routeParamString(req, "claimId")!;
-    await adjudicateClaim(claimId, adjudicatorId, Boolean(approved), payoutAmount, rejectionReason);
+    await adjudicateClaim(
+      claimId,
+      req.auth!.userId,
+      Boolean(approved),
+      payoutAmount !== undefined ? Number(payoutAmount) : undefined,
+      rejectionReason,
+      { isPlatformAdmin: isAdminRequest(req) },
+    );
     const body = { success: true, approved: Boolean(approved) };
-    await req.saveIdempotentResponse?.(body);
     return res.json(body);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });

@@ -12,7 +12,7 @@ import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
 
-import { authenticate } from "../middleware/auth";
+import { authenticate, walletBelongsToUser } from "../middleware/auth";
 
 const router = Router();
 
@@ -103,9 +103,16 @@ router.get("/loans", validateQueryParams({ status: VALID_LOAN_STATUSES }), async
 
 router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { userId, walletId, amount, currency, termDays, purpose } = req.body;
-    if (!userId || !walletId || !amount || !currency || !termDays) {
-      return res.status(400).json({ error: true, message: "Missing required fields: userId, walletId, amount, currency, termDays" });
+    const { walletId, amount, currency, termDays, purpose } = req.body;
+    const userId = req.auth!.userId;
+    if (!walletId || !amount || !currency || !termDays) {
+      return res.status(400).json({ error: true, message: "Missing required fields: walletId, amount, currency, termDays" });
+    }
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: true, message: "amount must be a positive number" });
+    }
+    if (!(await walletBelongsToUser(String(walletId), userId))) {
+      return res.status(403).json({ error: true, message: "You do not own this wallet" });
     }
 
     const [creditScore] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, userId));
@@ -180,6 +187,7 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
               currency: ctx.currency,
               reference: `LOAN-${ctx.loanId}`,
               description: `Loan disbursement #${ctx.loanId}`,
+              idempotencyKey: `loan-disburse:${ctx.loanId}`,
             });
             await db.update(loansTable)
               .set({ status: "disbursed" as any, disbursedAt: new Date() })
@@ -296,9 +304,16 @@ router.get("/loans/:loanId/repayments", async (req, res, next) => {
 
 router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { walletId, amount, userId } = req.body;
-    if (!walletId || !amount || !userId) {
-      return res.status(400).json({ error: true, message: "walletId, amount, userId required" });
+    const { walletId, amount } = req.body;
+    const userId = req.auth!.userId;
+    if (!walletId || !amount) {
+      return res.status(400).json({ error: true, message: "walletId, amount required" });
+    }
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: true, message: "amount must be a positive number" });
+    }
+    if (!(await walletBelongsToUser(String(walletId), userId))) {
+      return res.status(403).json({ error: true, message: "You do not own this wallet" });
     }
 
     const loanId = routeParamString(req, "loanId")!;
@@ -307,6 +322,10 @@ router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, asy
     if (loan.userId !== userId) return res.status(403).json({ error: true, message: "Forbidden" });
     if (!["approved", "disbursed"].includes(loan.status)) {
       return res.status(400).json({ error: true, message: `Cannot repay loan with status: ${loan.status}` });
+    }
+    const outstanding = Number(loan.amount) - Number(loan.amountRepaid);
+    if (Number(amount) > outstanding + 1e-6) {
+      return res.status(400).json({ error: true, message: `Repayment exceeds outstanding balance (${outstanding})` });
     }
 
     const loanWallet = await db.select().from(walletsTable).where(eq(walletsTable.userId, "system")).limit(1);
@@ -321,6 +340,7 @@ router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, asy
         currency:     loan.currency,
         description:  `Loan repayment – ${loan.id}`,
         skipFraudCheck: true,
+        idempotencyKey: `loan-repay:${userId}:${req.idempotencyKey}`,
       });
       txId = tx.id;
     }

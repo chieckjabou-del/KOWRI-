@@ -123,7 +123,7 @@ router.post("/transfer", walletAuth, requireIdempotencyKey, checkIdempotency, as
       fromWalletId, toWalletId,
       amount: numericAmount, currency,
       description: description ?? "P2P Transfer",
-      idempotencyKey: req.idempotencyKey,
+      idempotencyKey: `transfer:${req.auth!.userId}:${req.idempotencyKey}`,
     });
     await createNotification(req.auth!.userId, "transfer_sent", "Transfer Sent",
       `${numericAmount.toLocaleString()} ${currency} sent successfully.`);
@@ -132,6 +132,7 @@ router.post("/transfer", walletAuth, requireIdempotencyKey, checkIdempotency, as
     return res.status(201).json(body);
   } catch (err: any) {
     if (err.message?.includes("Insufficient")) return res.status(422).json({ error: "Insufficient balance" });
+    if (err.name === "CurrencyMismatchError" || err.name === "InvalidAmountError") return res.status(400).json({ error: err.message });
     return res.status(500).json({ error: "Transfer failed" });
   }
 });

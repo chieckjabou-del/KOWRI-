@@ -116,12 +116,16 @@ router.get("/", async (req, res, next) => {
 router.post("/", async (req, res, next) => {
   try {
     const {
-      name, description, contributionAmount, currency, frequency, maxMembers, adminUserId,
+      name, description, contributionAmount, currency, frequency, maxMembers,
       tontine_type, is_public, is_multi_amount, goal_description, goal_amount, merchant_id,
     } = req.body;
+    const adminUserId = req.auth!.userId;
 
-    if (!name || !contributionAmount || !currency || !frequency || !maxMembers || !adminUserId) {
-      return res.status(400).json({ error: true, message: "Missing required fields: name, contributionAmount, currency, frequency, maxMembers, adminUserId" });
+    if (!name || !contributionAmount || !currency || !frequency || !maxMembers) {
+      return res.status(400).json({ error: true, message: "Missing required fields: name, contributionAmount, currency, frequency, maxMembers" });
+    }
+    if (!Number.isFinite(Number(contributionAmount)) || Number(contributionAmount) <= 0) {
+      return res.status(400).json({ error: true, message: "contributionAmount must be a positive number" });
     }
 
     if (tontine_type && !VALID_TONTINE_TYPES.has(tontine_type)) {

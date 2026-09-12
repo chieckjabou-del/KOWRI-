@@ -11,26 +11,31 @@ import { runFraudCheck } from "./fraudEngine";
 import { guard } from "./killSwitch";
 import { computeFee } from "./feeEngine";
 
-export async function getWalletBalance(walletId: string): Promise<number> {
-  const [result] = await db
-    .select({
-      balance: sql<number>`
-        COALESCE(SUM(CAST(${ledgerEntriesTable.creditAmount} AS NUMERIC)), 0) -
-        COALESCE(SUM(CAST(${ledgerEntriesTable.debitAmount} AS NUMERIC)), 0)
-      `,
-    })
-    .from(ledgerEntriesTable)
-    .where(
-      sql`${ledgerEntriesTable.accountId} = ${walletId} AND ${ledgerEntriesTable.accountType} = 'wallet'`
-    );
-  return Number(result?.balance ?? 0);
+type DbClient = typeof db;
+
+export class CurrencyMismatchError extends Error {
+  constructor(walletId: string, expected: string, received: string) {
+    super(`Wallet ${walletId} is denominated in ${expected}, got ${received}`);
+    this.name = "CurrencyMismatchError";
+  }
 }
 
-export async function syncWalletBalance(
-  walletId: string,
-  txClient?: typeof db
-): Promise<number> {
-  const client = txClient ?? db;
+export class InvalidAmountError extends Error {
+  constructor(amount: unknown) {
+    super(`Invalid amount: ${String(amount)}`);
+    this.name = "InvalidAmountError";
+  }
+}
+
+function assertPositiveAmount(amount: number): void {
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
+    throw new InvalidAmountError(amount);
+  }
+}
+
+// Balance is only meaningful in the wallet's own currency; entries in any other
+// currency are excluded so a foreign-currency posting can never inflate it.
+async function ledgerBalance(client: DbClient, walletId: string, currency: string): Promise<number> {
   const [result] = await client
     .select({
       balance: sql<number>`
@@ -39,11 +44,47 @@ export async function syncWalletBalance(
       `,
     })
     .from(ledgerEntriesTable)
-    .where(
-      sql`${ledgerEntriesTable.accountId} = ${walletId} AND ${ledgerEntriesTable.accountType} = 'wallet'`
-    );
+    .where(and(
+      eq(ledgerEntriesTable.accountId, walletId),
+      eq(ledgerEntriesTable.accountType, "wallet"),
+      eq(ledgerEntriesTable.currency, currency),
+    ));
+  return Number(result?.balance ?? 0);
+}
 
-  const derived = Number(result?.balance ?? 0);
+async function lockWallets(tx: DbClient, walletIds: string[]): Promise<Map<string, string>> {
+  const ids = [...new Set(walletIds)].sort();
+  const placeholders = sql.join(ids.map((id) => sql`${id}`), sql`, `);
+  const result = await tx.execute(
+    sql`SELECT id, currency FROM wallets WHERE id IN (${placeholders}) ORDER BY id FOR UPDATE`
+  );
+  const rows = ((result as any).rows ?? []) as Array<{ id: string; currency: string }>;
+  const map = new Map<string, string>();
+  for (const row of rows) map.set(row.id, row.currency);
+  return map;
+}
+
+function assertWalletCurrency(currencies: Map<string, string>, walletId: string, currency: string): void {
+  const actual = currencies.get(walletId);
+  if (!actual) throw new Error(`Wallet ${walletId} not found`);
+  if (actual !== currency) throw new CurrencyMismatchError(walletId, actual, currency);
+}
+
+export async function getWalletBalance(walletId: string): Promise<number> {
+  const [wallet] = await db.select({ currency: walletsTable.currency }).from(walletsTable).where(eq(walletsTable.id, walletId)).limit(1);
+  if (!wallet) return 0;
+  return ledgerBalance(db, walletId, wallet.currency);
+}
+
+export async function syncWalletBalance(
+  walletId: string,
+  txClient?: DbClient
+): Promise<number> {
+  const client = txClient ?? db;
+  const [wallet] = await client.select({ currency: walletsTable.currency }).from(walletsTable).where(eq(walletsTable.id, walletId)).limit(1);
+  if (!wallet) throw new Error(`Wallet ${walletId} not found`);
+
+  const derived = await ledgerBalance(client, walletId, wallet.currency);
 
   await client
     .update(walletsTable)
@@ -59,7 +100,7 @@ export async function reconcileAllWallets(): Promise<
   const wallets = await db.select().from(walletsTable);
   const report = [];
   for (const w of wallets) {
-    const derived = await getWalletBalance(w.id);
+    const derived = await ledgerBalance(db, w.id, w.currency);
     const stored = Number(w.balance);
     const mismatch = Math.abs(stored - derived) > 0.01;
     report.push({ walletId: w.id, stored, derived, mismatch });
@@ -76,6 +117,7 @@ export async function processDeposit(params: {
   idempotencyKey?: string;
 }): Promise<typeof transactionsTable.$inferSelect> {
   const { walletId, amount, currency, reference, description, idempotencyKey } = params;
+  assertPositiveAmount(amount);
   const start = Date.now();
   const txId = generateId();
   const now = new Date();
@@ -83,10 +125,8 @@ export async function processDeposit(params: {
   let newBalanceAfterDeposit: number | undefined;
 
   await db.transaction(async (tx) => {
-    const lockResult = await tx.execute(
-      sql`SELECT id FROM wallets WHERE id = ${walletId} FOR UPDATE`
-    );
-    if ((lockResult as any).rows?.length === 0) throw new Error("Wallet not found");
+    const currencies = await lockWallets(tx as any, [walletId]);
+    assertWalletCurrency(currencies, walletId, currency);
 
     assertValidTransition("pending", "processing");
 
@@ -223,6 +263,8 @@ export async function processTransfer(params: {
   skipKycCheck?: boolean;
 }): Promise<typeof transactionsTable.$inferSelect> {
   const { fromWalletId, toWalletId, amount, currency, description, reference, idempotencyKey, skipRateLimitCheck, skipFraudCheck, skipKycCheck } = params;
+  assertPositiveAmount(amount);
+  if (fromWalletId === toWalletId) throw new Error("Cannot transfer to the same wallet");
   const start = Date.now();
 
   // ── INTERNAL TRANSFERS ARE ALWAYS FREE ────────────────────────────────────
@@ -247,22 +289,11 @@ export async function processTransfer(params: {
   const now = new Date();
 
   await db.transaction(async (tx) => {
-    const lockResult = await tx.execute(
-      sql`SELECT id FROM wallets WHERE id IN (${fromWalletId}, ${toWalletId}) ORDER BY id FOR UPDATE`
-    );
-    if ((lockResult as any).rows?.length < 2) throw new Error("One or both wallets not found");
+    const currencies = await lockWallets(tx as any, [fromWalletId, toWalletId]);
+    assertWalletCurrency(currencies, fromWalletId, currency);
+    assertWalletCurrency(currencies, toWalletId, currency);
 
-    const [balResult] = await tx
-      .select({
-        balance: sql<number>`
-          COALESCE(SUM(CAST(${ledgerEntriesTable.creditAmount} AS NUMERIC)), 0) -
-          COALESCE(SUM(CAST(${ledgerEntriesTable.debitAmount} AS NUMERIC)), 0)
-        `,
-      })
-      .from(ledgerEntriesTable)
-      .where(sql`${ledgerEntriesTable.accountId} = ${fromWalletId} AND ${ledgerEntriesTable.accountType} = 'wallet'`);
-
-    const availableBal = Number(balResult?.balance ?? 0);
+    const availableBal = await ledgerBalance(tx as any, fromWalletId, currency);
     if (availableBal < amount) throw new Error("Insufficient funds");
 
     assertValidTransition("pending", "processing");
@@ -349,6 +380,100 @@ export async function processTransfer(params: {
   return finalTx;
 }
 
+// ── processFxTransfer (cross-currency, fee-bearing) ───────────────────────────
+// Used for remittances. Each currency leg balances independently:
+//   fromCurrency: DEBIT sender (amount+fee) | CREDIT platform_fees (fee) | CREDIT platform_fx (amount)
+//   toCurrency:   DEBIT platform_fx (converted) | CREDIT recipient (converted)
+export async function processFxTransfer(params: {
+  fromWalletId: string;
+  toWalletId: string;
+  amount: number;
+  fee: number;
+  fromCurrency: string;
+  toCurrency: string;
+  rate: number;
+  description?: string;
+  reference?: string;
+  idempotencyKey?: string;
+  skipKycCheck?: boolean;
+  skipRateLimitCheck?: boolean;
+}): Promise<{ transaction: typeof transactionsTable.$inferSelect; amountReceived: number; totalDebit: number }> {
+  const { fromWalletId, toWalletId, amount, fee, fromCurrency, toCurrency, rate, description, idempotencyKey } = params;
+  assertPositiveAmount(amount);
+  if (!Number.isFinite(fee) || fee < 0) throw new InvalidAmountError(fee);
+  if (!Number.isFinite(rate) || rate <= 0) throw new Error(`Invalid FX rate: ${rate}`);
+  if (fromWalletId === toWalletId) throw new Error("Cannot transfer to the same wallet");
+
+  guard("outbound_transfers");
+  if (!params.skipKycCheck) await enforceKycLimit(fromWalletId, amount);
+  if (!params.skipRateLimitCheck) await checkRateLimit(fromWalletId, amount);
+
+  const totalDebit = Math.round((amount + fee) * 10000) / 10000;
+  const amountReceived = Math.round(amount * rate * 10000) / 10000;
+  const txId = generateId();
+  const ref = params.reference ?? generateReference();
+  const now = new Date();
+  const start = Date.now();
+
+  await db.transaction(async (tx) => {
+    const currencies = await lockWallets(tx as any, [fromWalletId, toWalletId]);
+    assertWalletCurrency(currencies, fromWalletId, fromCurrency);
+    assertWalletCurrency(currencies, toWalletId, toCurrency);
+
+    const availableBal = await ledgerBalance(tx as any, fromWalletId, fromCurrency);
+    if (availableBal < totalDebit) throw new Error("Insufficient funds");
+
+    await tx.insert(transactionsTable).values({
+      id: txId,
+      fromWalletId,
+      toWalletId,
+      amount: String(amount),
+      currency: fromCurrency,
+      type: "transfer",
+      status: "processing",
+      reference: ref,
+      description: description ?? "Cross-currency transfer",
+      idempotencyKey: idempotencyKey ?? null,
+      metadata: { fee, rate, toCurrency, amountReceived, totalDebit },
+    });
+
+    const base = { transactionId: txId, reference: ref, eventType: "fx_transfer" };
+    await tx.insert(ledgerEntriesTable).values([
+      { id: generateId(), ...base, accountId: fromWalletId, accountType: "wallet", debitAmount: String(totalDebit), creditAmount: "0", currency: fromCurrency, description: "Remittance debit (amount + fee)", entryType: "debit", walletId: fromWalletId },
+      { id: generateId(), ...base, accountId: "platform_fees", accountType: "platform", debitAmount: "0", creditAmount: String(fee), currency: fromCurrency, description: "Remittance fee", entryType: "credit", walletId: null },
+      { id: generateId(), ...base, accountId: "platform_fx", accountType: "platform", debitAmount: "0", creditAmount: String(amount), currency: fromCurrency, description: "FX source leg", entryType: "credit", walletId: null },
+      { id: generateId(), ...base, accountId: "platform_fx", accountType: "platform", debitAmount: String(amountReceived), creditAmount: "0", currency: toCurrency, description: `FX target leg @ ${rate}`, entryType: "debit", walletId: null },
+      { id: generateId(), ...base, accountId: toWalletId, accountType: "wallet", debitAmount: "0", creditAmount: String(amountReceived), currency: toCurrency, description: "Remittance credit", entryType: "credit", walletId: toWalletId },
+    ]);
+
+    await Promise.all([
+      syncWalletBalance(fromWalletId, tx as any),
+      syncWalletBalance(toWalletId, tx as any),
+    ]);
+
+    await tx.update(transactionsTable).set({ status: "completed", completedAt: now }).where(eq(transactionsTable.id, txId));
+  });
+
+  const [finalTx] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, txId));
+
+  await Promise.all([
+    audit({ action: "transaction.created", entity: "transaction", entityId: txId, metadata: { type: "fx_transfer", amount, fee, rate, fromCurrency, toCurrency, amountReceived, fromWalletId, toWalletId } }),
+    audit({ action: "fee.applied", entity: "transaction", entityId: txId, metadata: { feeAmount: fee, operationType: "diaspora_transfer" } }),
+    eventBus.publish("transaction.created", { txId, type: "transfer", amount, currency: fromCurrency, fromWalletId, toWalletId }),
+    eventBus.publish("wallet.balance.updated", { walletId: fromWalletId, currency: fromCurrency }),
+    eventBus.publish("wallet.balance.updated", { walletId: toWalletId, currency: toCurrency }),
+  ]);
+
+  setImmediate(() => {
+    runFraudCheck(fromWalletId, amount, fromCurrency).catch((err) =>
+      console.error("[FraudEngine] Post-commit check failed:", err)
+    );
+  });
+
+  recordMetric("transaction", Date.now() - start, "transfer");
+  return { transaction: finalTx, amountReceived, totalDebit };
+}
+
 // ── processWithdrawal (Cash-out) ──────────────────────────────────────────────
 // Moves money OUT of the platform. Fee engine is applied here.
 // Ledger entries (double-entry, balanced):
@@ -369,6 +494,7 @@ export async function processWithdrawal(params: {
   idempotencyKey?: string;
 }): Promise<{ transaction: typeof transactionsTable.$inferSelect; feeAmount: number; netAmount: number; rateBps: number }> {
   const { walletId, amount, currency, description, idempotencyKey, userTier = "bronze" } = params;
+  assertPositiveAmount(amount);
   const start = Date.now();
 
   guard("outbound_transfers");
@@ -381,22 +507,10 @@ export async function processWithdrawal(params: {
   const now  = new Date();
 
   await db.transaction(async (tx) => {
-    const lockResult = await tx.execute(
-      sql`SELECT id FROM wallets WHERE id = ${walletId} FOR UPDATE`
-    );
-    if ((lockResult as any).rows?.length === 0) throw new Error("Wallet not found");
+    const currencies = await lockWallets(tx as any, [walletId]);
+    assertWalletCurrency(currencies, walletId, currency);
 
-    const [balResult] = await tx
-      .select({
-        balance: sql<number>`
-          COALESCE(SUM(CAST(${ledgerEntriesTable.creditAmount} AS NUMERIC)), 0) -
-          COALESCE(SUM(CAST(${ledgerEntriesTable.debitAmount} AS NUMERIC)), 0)
-        `,
-      })
-      .from(ledgerEntriesTable)
-      .where(sql`${ledgerEntriesTable.accountId} = ${walletId} AND ${ledgerEntriesTable.accountType} = 'wallet'`);
-
-    const availableBal = Number(balResult?.balance ?? 0);
+    const availableBal = await ledgerBalance(tx as any, walletId, currency);
     if (availableBal < amount) throw new Error("Insufficient funds");
 
     assertValidTransition("pending", "processing");
@@ -496,6 +610,11 @@ export async function processWithdrawal(params: {
 
   recordMetric("transaction", Date.now() - start, "withdrawal");
   return { transaction: finalTx, feeAmount, netAmount, rateBps };
+}
+
+export function isDuplicateIdempotencyKey(err: unknown): boolean {
+  const e = err as { code?: string; constraint?: string; message?: string } | undefined;
+  return e?.code === "23505" && (e.constraint?.includes("idempotency") || e.message?.includes("idempotency") || false);
 }
 
 export async function withDeadlockRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {

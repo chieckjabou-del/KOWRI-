@@ -1,10 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import { db } from "@workspace/db";
 import { idempotencyKeysTable } from "@workspace/db";
-import { and, eq, gt } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { generateId } from "../lib/id";
-
-const IDEMPOTENCY_TTL_MS = 24 * 3600_000;
 
 declare global {
   namespace Express {
@@ -16,7 +14,14 @@ declare global {
   }
 }
 
-const inFlight = new Map<string, Promise<void>>();
+const IDEMPOTENCY_TTL_MS = 24 * 3600_000;
+const PENDING_MARKER = { __pending: true };
+
+interface StoredResponse {
+  __status?: number;
+  __pending?: boolean;
+  body?: unknown;
+}
 
 export function requireIdempotencyKey(req: Request, res: Response, next: NextFunction): void {
   const key = req.headers["idempotency-key"] as string | undefined;
@@ -41,6 +46,31 @@ export function requireIdempotencyKey(req: Request, res: Response, next: NextFun
   next();
 }
 
+// The key is reserved in the database before the handler runs, so two requests
+// carrying the same key can never both execute — across retries or instances.
+async function reserve(key: string, endpoint: string): Promise<"reserved" | "in_flight" | StoredResponse> {
+  const inserted = await db.insert(idempotencyKeysTable)
+    .values({ id: generateId(), key, endpoint, responseBody: PENDING_MARKER as any })
+    .onConflictDoNothing()
+    .returning({ id: idempotencyKeysTable.id });
+  if (inserted.length) return "reserved";
+
+  const [existing] = await db.select().from(idempotencyKeysTable)
+    .where(and(eq(idempotencyKeysTable.key, key), eq(idempotencyKeysTable.endpoint, endpoint)))
+    .limit(1);
+  if (!existing) return reserve(key, endpoint);
+
+  const expired = existing.createdAt.getTime() < Date.now() - IDEMPOTENCY_TTL_MS;
+  if (expired) {
+    await db.delete(idempotencyKeysTable).where(eq(idempotencyKeysTable.id, existing.id));
+    return reserve(key, endpoint);
+  }
+
+  const stored = existing.responseBody as StoredResponse;
+  if (stored && typeof stored === "object" && stored.__pending) return "in_flight";
+  return stored;
+}
+
 export function checkIdempotency(req: Request, res: Response, next: NextFunction): void {
   const key = req.idempotencyKey;
   if (!key) { next(); return; }
@@ -48,68 +78,55 @@ export function checkIdempotency(req: Request, res: Response, next: NextFunction
   // Scoped per caller so one user's key can never replay another user's cached response.
   const actor    = req.auth?.userId ?? "anonymous";
   const endpoint = `${req.method}:${req.baseUrl}${req.route?.path ?? req.path}|u:${actor}`;
-  const lockKey  = `${endpoint}::${key}`;
 
-  if (inFlight.has(lockKey)) {
-    res.status(409).json({
-      error: true,
-      message: "A request with this Idempotency-Key is currently being processed. Retry after it completes.",
-      code: "IDEMPOTENCY_IN_FLIGHT",
-    });
-    return;
-  }
-
-  let releaseLock!: () => void;
-  const lockPromise = new Promise<void>(resolve => { releaseLock = resolve; });
-  inFlight.set(lockKey, lockPromise);
-
-  db.select()
-    .from(idempotencyKeysTable)
-    .where(and(
-      eq(idempotencyKeysTable.key, key),
-      eq(idempotencyKeysTable.endpoint, endpoint),
-      gt(idempotencyKeysTable.createdAt, new Date(Date.now() - IDEMPOTENCY_TTL_MS)),
-    ))
-    .limit(1)
-    .then(([existing]) => {
-      if (existing) {
-        releaseLock();
-        inFlight.delete(lockKey);
-        res.setHeader("X-Idempotent-Replayed", "true");
-        res.setHeader("X-Idempotent-Key", key);
-        res.status(200).json(existing.responseBody);
+  reserve(key, endpoint)
+    .then((outcome) => {
+      if (outcome === "in_flight") {
+        res.status(409).json({
+          error: true,
+          message: "A request with this Idempotency-Key is currently being processed. Retry after it completes.",
+          code: "IDEMPOTENCY_IN_FLIGHT",
+        });
         return;
       }
 
-      req.idempotencyLockKey = lockKey;
+      if (outcome !== "reserved") {
+        res.setHeader("X-Idempotent-Replayed", "true");
+        res.setHeader("X-Idempotent-Key", key);
+        const status = typeof outcome.__status === "number" ? outcome.__status : 200;
+        const body = "body" in outcome ? outcome.body : outcome;
+        res.status(status).json(body);
+        return;
+      }
+
+      req.idempotencyLockKey = `${endpoint}::${key}`;
+
+      let capturedBody: unknown = undefined;
+      let captured = false;
+      const originalJson = res.json.bind(res);
+      res.json = ((body: unknown) => {
+        capturedBody = body;
+        captured = true;
+        return originalJson(body);
+      }) as Response["json"];
+
       req.saveIdempotentResponse = async (body: unknown) => {
-        try {
-          await db.insert(idempotencyKeysTable).values({
-            id: generateId(),
-            key,
-            endpoint,
-            responseBody: body as any,
-          }).onConflictDoNothing();
-        } catch (err) {
-          console.error("[Idempotency] Failed to store response:", err);
-        } finally {
-          releaseLock();
-          inFlight.delete(lockKey);
-        }
+        capturedBody = body;
+        captured = true;
       };
 
       res.on("finish", () => {
-        if (inFlight.has(lockKey)) {
-          releaseLock();
-          inFlight.delete(lockKey);
-        }
+        const success = res.statusCode >= 200 && res.statusCode < 300;
+        const persist = success && captured
+          ? db.update(idempotencyKeysTable)
+              .set({ responseBody: { __status: res.statusCode, body: capturedBody } as any })
+              .where(and(eq(idempotencyKeysTable.key, key), eq(idempotencyKeysTable.endpoint, endpoint)))
+          : db.delete(idempotencyKeysTable)
+              .where(and(eq(idempotencyKeysTable.key, key), eq(idempotencyKeysTable.endpoint, endpoint)));
+        Promise.resolve(persist).catch((err) => console.error("[Idempotency] Failed to finalize key:", err));
       });
 
       next();
     })
-    .catch(err => {
-      releaseLock();
-      inFlight.delete(lockKey);
-      next(err);
-    });
+    .catch(next);
 }

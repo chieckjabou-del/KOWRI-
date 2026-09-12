@@ -8,7 +8,7 @@ import {
 } from "@workspace/db";
 import { eq, and, sql, asc, ne, like } from "drizzle-orm";
 import { generateId } from "./id";
-import { processTransfer } from "./walletService";
+import { processTransfer, isDuplicateIdempotencyKey } from "./walletService";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
 import { randomBytes } from "crypto";
@@ -87,6 +87,8 @@ export async function runContributionCycle(tontineId: string): Promise<{
         currency,
         description:  `Tontine contribution – Round ${expectedRound}${yieldSurcharge > 0 ? ` (+${yieldSurcharge.toFixed(2)} yield)` : ""}`,
         skipFraudCheck: true,
+        // One debit per member per round, whichever path (scheduler or manual) runs first.
+        idempotencyKey: `tontine:${tontineId}:r${expectedRound}:m${member.id}`,
       });
       const memberUpdates: Record<string, any> = {
         contributionsCount: sql`${tontineMembersTable.contributionsCount} + 1`,
@@ -98,7 +100,11 @@ export async function runContributionCycle(tontineId: string): Promise<{
       await db.update(tontineMembersTable).set(memberUpdates).where(eq(tontineMembersTable.id, member.id));
       collected++;
       totalCollected += memberAmount;
-    } catch {
+    } catch (err) {
+      if (isDuplicateIdempotencyKey(err)) {
+        // Already collected for this round by a concurrent run — not a missed contribution.
+        continue;
+      }
       failed.push(member.userId);
 
       // ── Missed contribution tracking ──────────────────────────────────────
@@ -198,9 +204,13 @@ export async function runContributionCycle(tontineId: string): Promise<{
                 currency,
                 description:    `Tontine project auto-release: ${goal.goalDescription}`,
                 skipFraudCheck: true,
+                idempotencyKey: `tontine-goal:${goal.id}`,
               });
             } catch (e) {
-              console.error(`[tontineScheduler] vendor transfer failed for goal ${goal.id}:`, e);
+              if (!isDuplicateIdempotencyKey(e)) {
+                console.error(`[tontineScheduler] vendor transfer failed for goal ${goal.id}:`, e);
+                continue;
+              }
             }
           }
           await db.update(tontinePurchaseGoalsTable).set({
@@ -433,15 +443,28 @@ export async function buyTontinePosition(listingId: string, buyerId: string): Pr
   }
 
   try {
+    // The seller must still hold the slot they listed, and the buyer must not already be a member.
+    const [slot] = await db.select().from(tontineMembersTable).where(and(
+      eq(tontineMembersTable.tontineId, listing.tontineId),
+      eq(tontineMembersTable.payoutOrder, listing.payoutOrder),
+    ));
+    if (!slot || slot.userId !== listing.sellerId) throw new Error("Seller no longer holds this position");
+    if (slot.hasReceivedPayout !== 0) throw new Error("This position has already been paid out");
+    const [alreadyMember] = await db.select({ id: tontineMembersTable.id }).from(tontineMembersTable).where(and(
+      eq(tontineMembersTable.tontineId, listing.tontineId),
+      eq(tontineMembersTable.userId, buyerId),
+    ));
+    if (alreadyMember) throw new Error("Buyer is already a member of this tontine");
+
     const buyerWallets  = await db.select().from(walletsTable).where(and(eq(walletsTable.userId, buyerId),  eq(walletsTable.status, "active")));
     const sellerWallets = await db.select().from(walletsTable).where(and(eq(walletsTable.userId, listing.sellerId), eq(walletsTable.status, "active")));
 
     const prefer = (ws: typeof walletsTable.$inferSelect[]) =>
-      ws.find(w => w.walletType === "personal") ?? ws.find(w => Number(w.availableBalance) > 0) ?? ws[0];
+      ws.find(w => w.currency === listing.currency && w.walletType === "personal") ?? ws.find(w => w.currency === listing.currency);
 
     const buyerWallet  = prefer(buyerWallets);
     const sellerWallet = prefer(sellerWallets);
-    if (!buyerWallet || !sellerWallet) throw new Error("Wallet not found");
+    if (!buyerWallet || !sellerWallet) throw new Error(`Both parties need an active ${listing.currency} wallet`);
 
     const tx = await processTransfer({
       fromWalletId: buyerWallet.id,
@@ -450,15 +473,13 @@ export async function buyTontinePosition(listingId: string, buyerId: string): Pr
       currency:     listing.currency,
       description:  `Tontine position purchase – listing ${listingId}`,
       skipFraudCheck: true,
+      idempotencyKey: `tontine-position:${listingId}`,
     });
 
     await db.transaction(async (dbTx) => {
       await dbTx.update(tontineMembersTable)
         .set({ userId: buyerId })
-        .where(and(
-          eq(tontineMembersTable.tontineId, listing.tontineId),
-          eq(tontineMembersTable.payoutOrder, listing.payoutOrder),
-        ));
+        .where(eq(tontineMembersTable.id, slot.id));
 
       await dbTx.update(tontinePositionListingsTable).set({
         status: "sold", buyerId, soldAt: new Date(), transactionId: tx.id,

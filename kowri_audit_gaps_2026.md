@@ -322,8 +322,48 @@ Voir Partie 0 pour les urgences exploitables. Constats complémentaires (non cri
 
 **Reste ouvert pour les phases suivantes**
 - Pas encore de modèle de rôles en base (la clé admin partagée est une mesure transitoire).
-- Les routes tontines/pools/épargne sont authentifiées mais les vérifications de propriété fines (Partie 1, finding 2) sont traitées en Phase 2.
-- Rate-limit et verrou d'idempotence en mémoire : à déplacer vers un store partagé avant de scaler horizontalement.
+- Rate-limit des logins en mémoire : à déplacer vers un store partagé avant de scaler horizontalement.
+
+## Phase 2 — Intégrité financière (implémentée le 12 septembre 2026)
+
+**Grand livre (`lib/walletService.ts`)**
+- Le solde d'un wallet n'additionne plus que les écritures **dans sa propre devise** (`getWalletBalance`, `syncWalletBalance`, `reconcileAllWallets`, et le contrôle de solde interne des transferts).
+- `processDeposit` / `processTransfer` / `processWithdrawal` verrouillent le wallet **et** vérifient que la devise demandée est celle du wallet (`CurrencyMismatchError`) ; montant strictement positif obligatoire (`InvalidAmountError`) ; transfert vers soi-même refusé.
+- Nouveau `processFxTransfer` (multi-devises, avec frais) : chaque devise est équilibrée séparément — débit expéditeur (montant + frais) → `platform_fees` (frais) + `platform_fx` (montant) en devise source ; `platform_fx` → bénéficiaire (montant converti) en devise cible. Le taux et le montant converti sont conservés dans `transactions.metadata`.
+- Helper `isDuplicateIdempotencyKey` pour distinguer « déjà exécuté » d'un vrai échec.
+
+**Diaspora (`lib/diasporaService.ts`, `routes/diaspora.ts`)**
+- Le bénéficiaire reçoit désormais le **montant converti dans sa devise** et les **frais du corridor sont réellement prélevés** ; un taux de change absent fait échouer l'envoi (plus de repli 1:1 silencieux) ; bornes min/max du corridor appliquées ; devise du wallet source et du wallet destinataire vérifiées.
+- Toutes les routes diaspora sont scopées à la session (bénéficiaires, envois, virements récurrents) ; `/recurring/run` réservé admin ; clé d'idempotence propagée jusqu'au ledger.
+
+**Vecteurs de vol fermés**
+- Achat de position tontine : l'acheteur est **toujours** la session ; le vendeur doit encore détenir le slot ; l'acheteur ne peut pas déjà être membre ; wallets choisis dans la devise du listing ; clé `tontine-position:{listingId}`.
+- Rupture d'épargne : le plan doit appartenir à la session et le `targetWalletId` aussi (même devise) ; en cas d'échec du transfert le plan revient à `active` au lieu de rester bloqué en `maturing`.
+- Adjudication de sinistre : réservée au **manager du pool** (ou admin plateforme) ; `payoutAmount` plafonné au montant réclamé **et** à `claimLimit` ; wallet du réclamant choisi dans la devise du sinistre ; clé `insurance-claim:{claimId}`.
+- Pools d'investissement : `distributePoolReturns` ne crée plus de monnaie — il **alloue** les rendements aux positions et exige que le wallet du pool couvre principal + rendements ; réservé au manager ; le double paiement (distribution puis rachat) est supprimé, le rachat reste la seule sortie d'argent (clé `pool-redeem:{positionId}`). `managerId`/`userId`/`buyerId`/`sellerId`/`adjudicatorId` ne sont plus jamais lus depuis le corps de la requête.
+
+**Autorisations tontines (`routes/communityFinance.ts`)**
+- Helpers `requireTontineAdmin` / `isTontineMember` : activation, collecte, payout, config hybride, objectifs d'achat (création + libération), cibles/distribution stratégie, évaluation IA et application de l'ordre IA sont réservés à l'**admin de la tontine** ; enchères, votes et réclamations de solidarité aux **membres** ; un utilisateur ne peut inscrire/retirer que lui-même (sauf admin) ; on ne rejoint qu'une tontine `pending` ; `adminUserId` d'une nouvelle tontine = session.
+- Réclamations de solidarité : `req.auth` est réel — plus d'attribution `"anonymous"`, et le décaissement auto-approuvé fonctionne enfin.
+
+**Idempotence (`middleware/idempotency.ts`)**
+- Index unique `(key, endpoint)` ; la clé est **réservée en base avant** l'exécution du handler (plus de fenêtre TOCTOU, valable multi-instances) ; la réponse 2xx est **capturée automatiquement** (statut + corps) et rejouée à l'identique ; un échec libère la réservation ; expiration 24 h.
+- Clés dérivées poussées jusqu'au ledger (`transactions.idempotency_key`, unique) : cotisation tontine par membre et par round (`tontine:{id}:r{n}:m{member}` — un doublon concurrent n'est plus compté comme cotisation manquée), libération d'objectif (`tontine-goal:{id}`, réclamé atomiquement **avant** le transfert, statut restauré en cas d'échec, `transferId` enfin renseigné), rendement d'épargne quotidien (`savings-yield:{plan}:{jour}`), maturité (`savings-mature:{plan}`), décaissement de prêt (`loan-disburse:{loan}`), remboursement (plafonné au restant dû), transfert de float agent (`float:{id}` + **réservation atomique du float** et **reversal automatique** si l'étape comptable échoue au lieu d'un « FAILED » avec l'argent déjà parti).
+
+**Wallets / crédit**
+- `GET /wallets` scopé à l'utilisateur (admin peut filtrer par `userId`), `GET /wallets/:id` propriétaire ou admin, `POST /wallets` sur la session, `walletType` validé.
+- `POST /wallets/:id/deposit` (cash-in depuis le float plateforme, donc création de monnaie) réservé à la plateforme (`X-Admin-Key`) — aucun client ne l'appelait.
+- `POST /wallets/:id/transfer` vérifie la propriété du wallet source ; erreurs de devise renvoyées en 400.
+- Crédit : `userId` et propriété du wallet dérivés de la session pour l'emprunt et le remboursement.
+
+**Prérequis opérationnels**
+- Appliquer le schéma : nouvel index unique `idem_key_endpoint_uidx` sur `idempotency_keys`.
+- Les taux de change doivent être renseignés dans `exchange_rates` pour chaque corridor diaspora, sinon l'envoi est refusé (comportement voulu).
+
+**Reste ouvert**
+- Compensation réelle du saga de prêt (reversal du dépôt) → Phase 5.
+- Settlements/clearing toujours sans écriture ledger → Phase 5.
+- Frais marchand/tontine (`computeFee`) toujours non appliqués → à décider produit.
 
 ---
 

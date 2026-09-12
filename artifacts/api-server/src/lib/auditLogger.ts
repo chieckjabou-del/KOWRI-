@@ -15,6 +15,7 @@ export type AuditAction =
   | "fee.applied"
   | "tontine.goal.vendor_claim_expired"
   | "investment.pool.created"
+  | "investment.pool.returns_distributed"
   | "community.created"
   | "remittance.sent"
   | "fraud.alert.created"
