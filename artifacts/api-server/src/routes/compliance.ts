@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { kycRecordsTable, usersTable } from "@workspace/db";
 import { eq, sql, count, and } from "drizzle-orm";
-import { requireAdmin } from "../middleware/auth";
+import { requireAdmin, gateWrites } from "../middleware/auth";
 import { validateQueryParams, VALID_KYC_STATUSES } from "../middleware/validate";
 import { routeParamString } from "../lib/routeParams";
 import { audit } from "../lib/auditLogger";
@@ -12,6 +12,7 @@ const router = Router();
 
 // KYC records carry identity documents: compliance officers only.
 router.use(requireAdmin);
+router.use(gateWrites("kyc.review"));
 
 router.get("/kyc", validateQueryParams({ status: VALID_KYC_STATUSES }), async (req, res, next) => {
   try {

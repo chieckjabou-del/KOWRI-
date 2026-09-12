@@ -4,10 +4,11 @@ import { messageQueueTable } from "@workspace/db";
 import { desc, sql, count } from "drizzle-orm";
 import { messageQueue, MESSAGE_TOPICS, MessageProducer } from "../lib/messageQueue";
 
-import { requireAdmin } from "../middleware/auth";
+import { requireAdmin, gateWrites } from "../middleware/auth";
 
 const router = Router();
 router.use(requireAdmin);
+router.use(gateWrites("system.control"));
 
 router.get("/topics", (_req, res) => {
   return res.json({

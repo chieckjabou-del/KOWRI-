@@ -49,7 +49,15 @@ export type AuditAction =
   | "tontine.payout.crash_recovery.marked_paid"
   | "tontine.payout.crash_recovery.state_advanced"
   | "tontine.payout.crash_recovery.reset_for_retry"
-  | "tontine.goal.pending_vendor_claim";
+  | "tontine.goal.pending_vendor_claim"
+  | "admin.login"
+  | "admin.logout"
+  | "admin.bootstrap"
+  | "admin.account.created"
+  | "admin.account.updated"
+  | "admin.password.changed"
+  | "admin.password.reset"
+  | "admin.session.revoked";
 
 interface AuditEntry {
   action: AuditAction;

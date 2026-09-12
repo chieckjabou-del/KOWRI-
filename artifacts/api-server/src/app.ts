@@ -4,6 +4,8 @@ import router from "./routes";
 import { seedDatabase, patchTontineMembers } from "./lib/seed";
 import { seedFeeConfig } from "./lib/feeEngine";
 import { seedExchangeRates } from "./lib/fxEngine";
+import { bootstrapAdminFromEnv } from "./lib/adminAuth";
+import { checkSecretsAtBoot } from "./lib/secretsCheck";
 import { globalSanitizer, validatePagination } from "./middleware/validate";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { stickyPrimaryRequest, stickyPrimaryResponse } from "./middleware/stickyPrimary";
@@ -66,6 +68,8 @@ seedDatabase()
   .then(() => seedConnectors())
   .then(() => seedFeeConfig())
   .then(() => seedExchangeRates())
+  .then(() => bootstrapAdminFromEnv())
+  .then(() => checkSecretsAtBoot())
   .catch((err) => console.error("Seed/patch error:", err));
 
 export default app;

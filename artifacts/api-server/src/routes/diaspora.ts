@@ -10,12 +10,12 @@ import {
   seedCorridors,
 } from "../lib/diasporaService";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
-import { authenticate, requireAdmin, walletBelongsToUser } from "../middleware/auth";
+import { authenticate, requirePermission, walletBelongsToUser } from "../middleware/auth";
 import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
 
-router.post("/recurring/run", requireAdmin, async (req, res, next) => {
+router.post("/recurring/run", requirePermission("ledger.write"), async (req, res, next) => {
   try {
     const result = await runDueRecurringTransfers();
     return res.json({ success: true, ...result });

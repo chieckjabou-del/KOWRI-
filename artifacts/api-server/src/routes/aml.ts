@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { amlFlagsTable, complianceCasesTable } from "@workspace/db";
 import { eq, desc, sql, and } from "drizzle-orm";
 import { runAmlChecks } from "../lib/amlEngine";
-import { requireAdmin } from "../middleware/auth";
+import { requireAdmin, gateWrites } from "../middleware/auth";
 import { routeParamString } from "../lib/routeParams";
 import { audit } from "../lib/auditLogger";
 
@@ -11,6 +11,7 @@ const router = Router();
 
 // AML data is compliance-only.
 router.use(requireAdmin);
+router.use(gateWrites("aml.review"));
 
 type FlagRow = typeof amlFlagsTable.$inferSelect;
 

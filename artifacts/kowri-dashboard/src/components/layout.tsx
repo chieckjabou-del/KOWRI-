@@ -44,6 +44,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { motion, AnimatePresence } from "framer-motion";
+import { adminLogout, currentOperator, roleLabel, subscribeAdminSession } from "@/lib/adminAuth";
+
+function useOperator() {
+  const [operator, setOperator] = useState(currentOperator());
+  useEffect(() => subscribeAdminSession(() => setOperator(currentOperator())), []);
+  return operator;
+}
 
 const navItems = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
@@ -157,9 +164,9 @@ function AppSidebar({ location }: { location: string }) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-4 border-t border-border/50">
-        <Button variant="ghost" className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-xl px-3">
+        <Button variant="ghost" onClick={() => { void adminLogout(); }} className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-xl px-3">
           <LogOut className="w-5 h-5 mr-3" />
-          Sign Out
+          Se déconnecter
         </Button>
       </SidebarFooter>
     </Sidebar>
@@ -206,9 +213,9 @@ function DeveloperSidebar({ location }: { location: string }) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-4 border-t border-border/50">
-        <Button variant="ghost" className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-xl px-3">
+        <Button variant="ghost" onClick={() => { void adminLogout(); }} className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-xl px-3">
           <LogOut className="w-5 h-5 mr-3" />
-          Sign Out
+          Se déconnecter
         </Button>
       </SidebarFooter>
     </Sidebar>
@@ -255,9 +262,9 @@ function AdminSidebar({ location }: { location: string }) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-4 border-t border-border/50">
-        <Button variant="ghost" className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-xl px-3">
+        <Button variant="ghost" onClick={() => { void adminLogout(); }} className="w-full justify-start text-muted-foreground hover:text-foreground hover:bg-secondary/50 rounded-xl px-3">
           <LogOut className="w-5 h-5 mr-3" />
-          Sign Out
+          Se déconnecter
         </Button>
       </SidebarFooter>
     </Sidebar>
@@ -266,6 +273,7 @@ function AdminSidebar({ location }: { location: string }) {
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
+  const operator = useOperator();
   const isAdmin = location.startsWith("/admin");
   const isDeveloper = location.startsWith("/developer");
 
@@ -321,11 +329,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
               <div className="h-8 w-[1px] bg-border/50"></div>
               <div className="flex items-center gap-3 pl-2">
                 <div className="text-right hidden md:block">
-                  <div className="text-sm font-medium leading-none text-foreground">Admin User</div>
-                  <div className="text-xs text-muted-foreground mt-0.5">Super Admin</div>
+                  <div className="text-sm font-medium leading-none text-foreground">{operator?.name ?? "Non connecté"}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">{operator ? roleLabel(operator.role) : ""}</div>
                 </div>
                 <Avatar className="h-9 w-9 border-2 border-primary/20">
-                  <AvatarFallback className="bg-primary/10 text-primary font-bold">A</AvatarFallback>
+                  <AvatarFallback className="bg-primary/10 text-primary font-bold">{(operator?.name ?? "?").charAt(0).toUpperCase()}</AvatarFallback>
                 </Avatar>
               </div>
             </div>

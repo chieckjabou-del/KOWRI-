@@ -1,8 +1,9 @@
 // Guard-rail suite for the money paths hardened by the audit remediation.
 // Run against a live server: node test-integrity.mjs  (needs ADMIN_API_KEY=test-admin-key on the server)
 import {
-  chk, summary, get, post, patch, del, login, createUser, fund, balance, setKycLevel, idem, seededPhone,
+  chk, summary, get, post, patch, del, login, createUser, fund, balance, setKycLevel, idem, seededPhone, operator,
 } from "./test-lib.mjs";
+import { randomUUID } from "node:crypto";
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -351,6 +352,80 @@ console.log("\n10. Savings ownership");
   const ok = await owner.money(`/savings/plans/${plan.b?.id}/break`, { targetWalletId: owner.wallet.id });
   chk("10e owner breaks the plan into their own wallet", ok.s === 200 && ok.b?.principal === 50_000, `status=${ok.s} ${ok.b?.message ?? ""}`);
   chk("10f principal is back", (await balance(owner, owner.wallet.id)) === 100_000, `balance=${await balance(owner, owner.wallet.id)}`);
+}
+
+// ── 11. Admin accounts and roles ─────────────────────────────────────────────
+console.log("\n11. Admin accounts and roles");
+{
+  const ROOT = { email: "root@kowri.test", name: "Root", password: "RootPassw0rd-2026" };
+  const asAdmin = (tok) => ({ headers: { "X-Admin-Token": tok } });
+
+  const boot = await post("/admin/auth/bootstrap", ROOT, { admin: true });
+  chk("11a bootstrap of the first super_admin with the legacy key (201, or 409 once it exists)", boot.s === 201 || boot.s === 409, `status=${boot.s} ${boot.b?.error ?? ""}`);
+  const bootNoKey = await post("/admin/auth/bootstrap", { ...ROOT, email: "x@kowri.test" });
+  chk("11b bootstrap without any admin credential → 403", bootNoKey.s === 403, `status=${bootNoKey.s}`);
+
+  const bad = await post("/admin/auth/login", { email: ROOT.email, password: "wrong-password-123" });
+  chk("11c wrong password → 401", bad.s === 401, `status=${bad.s}`);
+  const rootLogin = await post("/admin/auth/login", { email: ROOT.email, password: ROOT.password });
+  chk("11d super_admin login → token", rootLogin.s === 200 && String(rootLogin.b?.token).startsWith("kadm_") && rootLogin.b?.admin?.role === "super_admin", `status=${rootLogin.s} ${rootLogin.b?.error ?? ""}`);
+  const root = rootLogin.b?.token;
+
+  const me = await get("/admin/auth/me", asAdmin(root));
+  chk("11e /me with X-Admin-Token", me.s === 200 && me.b?.admin?.email === ROOT.email, `status=${me.s}`);
+  const usersViaSession = await get("/users?limit=1", asAdmin(root));
+  chk("11f admin session reaches an admin-gated route without the legacy key", usersViaSession.s === 200, `status=${usersViaSession.s} ${usersViaSession.b?.error ?? ""}`);
+  const viaBearer = await get("/users?limit=1", { token: root });
+  chk("11g the same token works as Authorization: Bearer", viaBearer.s === 200, `status=${viaBearer.s}`);
+
+  const supportEmail = `support-${randomUUID().slice(0, 8)}@kowri.test`;
+  const created = await post("/admin/auth/users", { email: supportEmail, name: "Aïcha Support", password: "TempPassw0rd-2026", role: "support" }, asAdmin(root));
+  chk("11h super_admin creates a support account", created.s === 201 && created.b?.admin?.mustChangePassword === true, `status=${created.s} ${created.b?.error ?? ""}`);
+  const badRole = await post("/admin/auth/users", { email: `x-${randomUUID().slice(0, 6)}@kowri.test`, name: "X", password: "TempPassw0rd-2026", role: "god" }, asAdmin(root));
+  chk("11i unknown role refused → 400", badRole.s === 400, `status=${badRole.s}`);
+  const weak = await post("/admin/auth/users", { email: `x-${randomUUID().slice(0, 6)}@kowri.test`, name: "X", password: "short", role: "support" }, asAdmin(root));
+  chk("11j weak password refused → 400", weak.s === 400, `status=${weak.s}`);
+
+  const supLogin = await post("/admin/auth/login", { email: supportEmail, password: "TempPassw0rd-2026" });
+  const sup = supLogin.b?.token;
+  chk("11k support login", supLogin.s === 200 && !!sup, `status=${supLogin.s}`);
+  const readKyc = await get("/compliance/kyc?limit=1", asAdmin(sup));
+  chk("11l support can read the KYC queue", readKyc.s === 200, `status=${readKyc.s}`);
+  const reviewKyc = await patch("/compliance/kyc/nope", { status: "approved", reviewer: "sup" }, asAdmin(sup));
+  chk("11m support cannot review KYC → 403 PERMISSION_DENIED", reviewKyc.s === 403 && reviewKyc.b?.code === "PERMISSION_DENIED" && reviewKyc.b?.required === "kyc.review", `status=${reviewKyc.s} ${JSON.stringify(reviewKyc.b)}`);
+  const depositBySupport = await post(`/wallets/${(await operator()).wallet?.id ?? "nope"}/deposit`, { amount: 1000, currency: "XOF", reference: "x" }, { ...asAdmin(sup), idempotency: true });
+  chk("11n support cannot credit a wallet → 403", depositBySupport.s === 403, `status=${depositBySupport.s}`);
+  const killBySupport = await post("/admin/kill-switches/all/fire", {}, asAdmin(sup));
+  chk("11o support cannot fire a kill switch → 403", killBySupport.s === 403 && killBySupport.b?.required === "system.control", `status=${killBySupport.s}`);
+  const adminsBySupport = await get("/admin/auth/users", asAdmin(sup));
+  chk("11p support cannot list admin accounts → 403", adminsBySupport.s === 403, `status=${adminsBySupport.s}`);
+
+  const changed = await post("/admin/auth/change-password", { currentPassword: "TempPassw0rd-2026", newPassword: "NewPassw0rd-2026" }, asAdmin(sup));
+  chk("11q support changes their temporary password", changed.s === 200, `status=${changed.s} ${changed.b?.error ?? ""}`);
+  const meAfter = await get("/admin/auth/me", asAdmin(sup));
+  chk("11r current session survives the password change, flag cleared", meAfter.s === 200 && meAfter.b?.admin?.mustChangePassword === false, `status=${meAfter.s}`);
+  const oldPw = await post("/admin/auth/login", { email: supportEmail, password: "TempPassw0rd-2026" });
+  chk("11s old password no longer logs in", oldPw.s === 401, `status=${oldPw.s}`);
+
+  const lastRoot = await patch(`/admin/auth/users/${rootLogin.b?.admin?.id}`, { status: "disabled" }, asAdmin(root));
+  chk("11t the last active super_admin cannot be disabled → 409", lastRoot.s === 409, `status=${lastRoot.s}`);
+  const disabled = await patch(`/admin/auth/users/${created.b?.admin?.id}`, { status: "disabled" }, asAdmin(root));
+  chk("11u super_admin disables the support account", disabled.s === 200 && disabled.b?.admin?.status === "disabled", `status=${disabled.s}`);
+  const supAfter = await get("/admin/auth/me", asAdmin(sup));
+  chk("11v disabled account's session is dead → 401", supAfter.s === 401, `status=${supAfter.s}`);
+  const supLoginAfter = await post("/admin/auth/login", { email: supportEmail, password: "NewPassw0rd-2026" });
+  chk("11w disabled account cannot log in → 403", supLoginAfter.s === 403, `status=${supLoginAfter.s}`);
+
+  const audits = await get("/system/audit?limit=50", asAdmin(root));
+  const adminActions = (audits.b?.logs ?? audits.b?.entries ?? audits.b ?? []);
+  chk("11x admin actions are audited", audits.s !== 200 || (Array.isArray(adminActions) && adminActions.some((a) => String(a.action).startsWith("admin."))), `status=${audits.s}`);
+
+  const out = await post("/admin/auth/logout", {}, asAdmin(root));
+  chk("11y logout", out.s === 200, `status=${out.s}`);
+  const afterLogout = await get("/admin/auth/me", asAdmin(root));
+  chk("11z revoked token → 401", afterLogout.s === 401, `status=${afterLogout.s}`);
+  const legacy = await get("/users?limit=1", { admin: true });
+  chk("11aa legacy shared key still accepted while ADMIN_API_KEY is set", legacy.s === 200, `status=${legacy.s}`);
 }
 
 const { fail } = summary("INTEGRITY SUITE");

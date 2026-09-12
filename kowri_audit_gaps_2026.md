@@ -455,6 +455,29 @@ Toute la branche a été rejouée contre un PostgreSQL 16 local (schéma poussé
 
 **Prérequis pour rejouer** — `DATABASE_URL` vers une base vide ou de test, serveur sur le port 8080, `ADMIN_API_KEY=test-admin-key` ; lancer les suites depuis `artifacts/api-server` (sauf `test-phase6.mjs` depuis la racine).
 
+## Dette de sécurité résiduelle — comptes opérateurs et rotation des secrets (12 septembre 2026)
+
+Point 2 du plan de direction : la clé admin partagée (`X-Admin-Key`) était le seul accès au back-office, sans identité, sans révocation individuelle, sans distinction de rôle.
+
+**Modèle de rôles** (`lib/adminAuth.ts`, tables `admin_users` / `admin_sessions`, migration `0001`)
+- Comptes nominatifs (email + mot de passe scrypt salé, ≥ 12 caractères avec lettres et chiffres), sessions de 12 h par jeton `kadm_…` haché en base, transmis dans `X-Admin-Token` ou `Authorization: Bearer`.
+- Cinq rôles à permissions fixes : `super_admin` (tout), `compliance` (KYC, AML, gel de wallets, statut utilisateur), `operations` (cash-in, wallets, marchands, support), `support` (tickets), `auditor` (lecture seule). Les lectures du back-office restent ouvertes à tous les rôles ; chaque famille d'écriture exige sa permission (`requirePermission` / `gateWrites`), refus `403 PERMISSION_DENIED` avec la permission manquante.
+- Permissions appliquées : KYC (`kyc.review`), AML et alertes de risque (`aml.review`), dépôt plateforme / accrual épargne / envois récurrents (`ledger.write`), statut marchand (`merchants.manage`), statut wallet (`wallets.manage`), tickets (`support.manage`), kill switches, sagas, MQ, régions, simulateur, webhooks, frais, sécurité (`system.control`), gestion des comptes (`admins.manage`).
+- Routes `/api/admin/auth` : `login` (verrouillage 15 min après 5 échecs), `logout`, `me`, `change-password` (révoque les autres sessions), `sessions` + révocation, `bootstrap` (premier `super_admin`, uniquement table vide + clé legacy), `users` (création avec mot de passe provisoire, changement de rôle/statut, réinitialisation), `roles`, `introspect`. Impossible de rétrograder ou désactiver le dernier `super_admin` actif ; désactivation, changement de rôle et réinitialisation révoquent les sessions. Toutes les actions sont journalisées (`admin.*`).
+- `authenticate()` reconnaît une session admin : un opérateur atteint les routes « self ou admin » sans session produit, avec un pseudo-utilisateur qui ne correspond jamais à un propriétaire de wallet.
+- **Clé partagée en mode legacy** : toujours acceptée tant que `ADMIN_API_KEY` est définie (équivaut à un `super_admin` anonyme), avec avertissement au démarrage dès qu'un compte existe. La retirer termine la migration.
+
+**Rotation des secrets**
+- `docs/SECURITY_SECRETS.md` : inventaire des secrets, modèle d'accès, bootstrap, procédure de rotation par secret (retrait de la clé partagée, `SIGNING_SECRET`, compte opérateur compromis, `DATABASE_URL`, clés développeurs/webhooks) et calendrier.
+- `lib/secretsCheck.ts` au démarrage : `SIGNING_SECRET` absent ou court (jusqu'ici une clé aléatoire par processus, donc signatures invalides entre instances), `ADMIN_API_KEY` court ou encore actif après création de comptes, absence totale de credential admin, variables de bootstrap oubliées. En production, une erreur **bloque le démarrage** (`SECRETS_STRICT=false` pour contourner temporairement).
+- `artifacts/api-server/.env.example` documente chaque variable ; `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` créent le premier `super_admin` au premier boot.
+
+**Dashboard** — écran de connexion opérateur (`pages/AdminLogin.tsx`) devant tout le back-office (le portail développeur garde son propre modèle), changement de mot de passe provisoire imposé à la première connexion, identité et rôle réels dans l'en-tête, déconnexion effective, jeton attaché automatiquement aux appels `/api` et session purgée si le serveur la révoque. La clé `VITE_ADMIN_API_KEY` reste acceptée comme repli le temps de la migration.
+
+**Vérification** — bloc 11 de `test-integrity.mjs` (27 vérifications : bootstrap, login, permissions par rôle, mot de passe provisoire, dernier super_admin, désactivation, journal d'audit, logout, clé legacy). Suite complète : 651 vérifications, 0 échec.
+
+**Reste ouvert** — MFA sur les comptes opérateurs ; verrouillage anti-force-brute partagé entre instances ; écran de gestion des comptes dans le dashboard (aujourd'hui via l'API).
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

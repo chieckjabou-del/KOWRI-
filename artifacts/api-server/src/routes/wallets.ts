@@ -9,7 +9,7 @@ import { validatePagination, validateQueryParams, VALID_CURRENCIES } from "../mi
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
 import { audit } from "../lib/auditLogger";
-import { authenticate, isAdminRequest, requireAdmin, walletBelongsToUser } from "../middleware/auth";
+import { authenticate, isAdminRequest, requirePermission, walletBelongsToUser } from "../middleware/auth";
 
 const router = Router();
 
@@ -101,7 +101,7 @@ router.get("/:walletId", async (req, res, next) => {
 // Cash-in credits a wallet from platform float, so it is reserved to platform operators (agent/connector flows).
 router.post(
   "/:walletId/deposit",
-  requireAdmin,
+  requirePermission("ledger.write"),
   requireIdempotencyKey,
   checkIdempotency,
   async (req, res, next) => {

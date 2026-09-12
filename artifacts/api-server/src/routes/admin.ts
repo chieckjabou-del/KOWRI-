@@ -20,7 +20,7 @@ import {
 } from "../lib/killSwitch";
 import { rollback } from "../lib/actionExecutor";
 
-import { requireAdmin } from "../middleware/auth";
+import { requireAdmin, requirePermission } from "../middleware/auth";
 
 const router = Router();
 router.use(requireAdmin);
@@ -91,7 +91,7 @@ router.get("/reconcile", async (req, res, next) => {
   }
 });
 
-router.post("/patch-tontines", async (req, res, next) => {
+router.post("/patch-tontines", requirePermission("system.control"), async (req, res, next) => {
   try {
     const result = await patchTontineMembers();
     await audit({
@@ -111,7 +111,7 @@ router.post("/patch-tontines", async (req, res, next) => {
 
 const MERCHANT_STATUSES = new Set(["active", "suspended", "pending_approval"]);
 
-router.patch("/merchants/:merchantId/status", async (req, res, next) => {
+router.patch("/merchants/:merchantId/status", requirePermission("merchants.manage"), async (req, res, next) => {
   try {
     const merchantId = routeParamString(req, "merchantId")!;
     const { status, reason, operator = "admin" } = req.body ?? {};
@@ -148,7 +148,7 @@ router.patch("/merchants/:merchantId/status", async (req, res, next) => {
 
 const WALLET_STATUSES = new Set(["active", "frozen", "closed"]);
 
-router.patch("/wallets/:walletId/status", async (req, res, next) => {
+router.patch("/wallets/:walletId/status", requirePermission("wallets.manage"), async (req, res, next) => {
   try {
     const walletId = routeParamString(req, "walletId")!;
     const { status, reason, operator = "admin" } = req.body ?? {};
@@ -213,7 +213,7 @@ router.get("/kill-switches/:name", (req, res) => {
   }
 });
 
-router.post("/kill-switches/:name/fire", (req, res) => {
+router.post("/kill-switches/:name/fire", requirePermission("system.control"), (req, res) => {
   const name     = req.params.name as KillSwitchName;
   const operator = (req.body?.operator as string) ?? "admin";
   const reason   = (req.body?.reason   as string) ?? "manual fire";
@@ -222,7 +222,7 @@ router.post("/kill-switches/:name/fire", (req, res) => {
   return res.json({ switch: name, state: getSwitch(name).state, action: "fired", by: operator });
 });
 
-router.post("/kill-switches/:name/force", (req, res) => {
+router.post("/kill-switches/:name/force", requirePermission("system.control"), (req, res) => {
   const name     = req.params.name as KillSwitchName;
   const operator = (req.body?.operator as string) ?? "admin";
   const reason   = (req.body?.reason   as string) ?? "manual force-off";
@@ -231,7 +231,7 @@ router.post("/kill-switches/:name/force", (req, res) => {
   return res.json({ switch: name, state: getSwitch(name).state, action: "forced_off", by: operator });
 });
 
-router.post("/kill-switches/:name/lift", (req, res) => {
+router.post("/kill-switches/:name/lift", requirePermission("system.control"), (req, res) => {
   const name     = req.params.name as KillSwitchName;
   const operator = (req.body?.operator as string) ?? "admin";
 
@@ -239,7 +239,7 @@ router.post("/kill-switches/:name/lift", (req, res) => {
   return res.json({ switch: name, state: getSwitch(name).state, action: "lifted", by: operator });
 });
 
-router.post("/kill-switches/:name/recover", (req, res) => {
+router.post("/kill-switches/:name/recover", requirePermission("system.control"), (req, res) => {
   const name = req.params.name as KillSwitchName;
 
   const sw = getSwitch(name);
@@ -255,7 +255,7 @@ router.post("/kill-switches/:name/recover", (req, res) => {
   return res.json({ switch: name, state: getSwitch(name).state, action: "recovered" });
 });
 
-router.post("/kill-switches/:name/rollback", (req, res) => {
+router.post("/kill-switches/:name/rollback", requirePermission("system.control"), (req, res) => {
   const name     = req.params.name as KillSwitchName;
   const operator = (req.body?.operator as string) ?? "admin";
 
@@ -278,7 +278,7 @@ router.get("/fees", async (_req, res, next) => {
   }
 });
 
-router.post("/fees", async (req, res, next) => {
+router.post("/fees", requirePermission("system.control"), async (req, res, next) => {
   try {
     const {
       operationType,
@@ -324,9 +324,9 @@ router.post("/fees", async (req, res, next) => {
   }
 });
 
-router.patch("/fees/:id", async (req, res, next) => {
+router.patch("/fees/:id", requirePermission("system.control"), async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const id = routeParamString(req, "id")!;
     const {
       feeRateBps,
       minAmount,
@@ -368,9 +368,9 @@ router.patch("/fees/:id", async (req, res, next) => {
   }
 });
 
-router.delete("/fees/:id", async (req, res, next) => {
+router.delete("/fees/:id", requirePermission("system.control"), async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const id = routeParamString(req, "id")!;
 
     // Soft-delete only — fee rules are never hard-deleted (audit trail)
     const existing = await db.select({ id: feeConfigTable.id }).from(feeConfigTable).where(eq(feeConfigTable.id, id));

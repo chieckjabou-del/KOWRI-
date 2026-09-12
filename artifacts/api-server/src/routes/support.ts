@@ -7,7 +7,7 @@ import { supportTicketsTable } from "@workspace/db";
 import { eq, and, desc, sql } from "drizzle-orm";
 import { generateId }         from "../lib/id";
 import { createNotification } from "../lib/productWallet";
-import { authenticate, isAdminRequest, requireAdmin } from "../middleware/auth";
+import { authenticate, isAdminRequest, requirePermission } from "../middleware/auth";
 import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
@@ -160,7 +160,7 @@ router.get("/tickets/:id", async (req, res, next) => {
 });
 
 // ── PATCH /support/tickets/:id/resolve ───────────────────────────────────────
-router.patch("/tickets/:id/resolve", requireAdmin, async (req, res, next) => {
+router.patch("/tickets/:id/resolve", requirePermission("support.manage"), async (req, res, next) => {
   try {
     const { resolution, assignedTo } = req.body as { resolution: string; assignedTo?: string };
     if (!resolution) return res.status(400).json({ error: "resolution required" });
@@ -197,7 +197,7 @@ router.patch("/tickets/:id/resolve", requireAdmin, async (req, res, next) => {
 });
 
 // ── PATCH /support/tickets/:id/status ────────────────────────────────────────
-router.patch("/tickets/:id/status", requireAdmin, async (req, res, next) => {
+router.patch("/tickets/:id/status", requirePermission("support.manage"), async (req, res, next) => {
   try {
     const { status, assignedTo } = req.body as { status: string; assignedTo?: string };
     if (!status || !VALID_TICKET_STATUSES.has(status)) {

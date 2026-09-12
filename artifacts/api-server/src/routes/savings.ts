@@ -9,7 +9,7 @@ import {
 } from "../lib/savingsEngine";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
-import { authenticate, isAdminRequest, requireAdmin, walletBelongsToUser } from "../middleware/auth";
+import { authenticate, isAdminRequest, requirePermission, walletBelongsToUser } from "../middleware/auth";
 
 const router = Router();
 
@@ -90,7 +90,7 @@ router.get("/plans/:planId", async (req, res, next) => {
 });
 
 // Yield accrual is a scheduled platform operation, not a user action.
-router.post("/plans/:planId/accrue", requireAdmin, requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
+router.post("/plans/:planId/accrue", requirePermission("ledger.write"), requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const planId = routeParamString(req, "planId")!;
     const yieldAmount = await accrueYield(planId);

@@ -4,7 +4,7 @@ import { webhooksTable } from "@workspace/db";
 import { eq, desc, count } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { randomBytes } from "crypto";
-import { requireAdmin } from "../middleware/auth";
+import { requireAdmin, gateWrites } from "../middleware/auth";
 import { validateWebhookUrl } from "../lib/webhookUrl";
 import { SYSTEM_WEBHOOK_OWNER } from "../lib/webhookDispatcher";
 
@@ -26,6 +26,7 @@ router.get("/events", async (_req, res) => {
 
 // Platform-wide webhooks receive every event; tenant webhooks are managed via /developer and /merchant.
 router.use(requireAdmin);
+router.use(gateWrites("system.control"));
 
 router.get("/", async (req, res, next) => {
   try {
