@@ -132,6 +132,7 @@ export async function processDeposit(params: {
 }): Promise<typeof transactionsTable.$inferSelect> {
   const { walletId, amount, currency, reference, description, idempotencyKey, internal } = params;
   assertPositiveAmount(amount);
+  guard("all");
   const start = Date.now();
   const txId = generateId();
   const now = new Date();
@@ -628,6 +629,92 @@ export async function processWithdrawal(params: {
 
   recordMetric("transaction", Date.now() - start, "withdrawal");
   return { transaction: finalTx, feeAmount, netAmount, rateBps };
+}
+
+// ── reverseTransaction ────────────────────────────────────────────────────────
+// Books the mirror image of a completed deposit or transfer so a saga can undo the
+// money it moved. The original is marked "reversed"; the reversal is its own transaction.
+export async function reverseTransaction(params: {
+  transactionId: string;
+  reason: string;
+  idempotencyKey?: string;
+}): Promise<typeof transactionsTable.$inferSelect> {
+  const { transactionId, reason, idempotencyKey } = params;
+  const [original] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, transactionId));
+  if (!original) throw new Error(`Transaction ${transactionId} not found`);
+  if (original.status === "reversed") {
+    const [existing] = await db.select().from(transactionsTable)
+      .where(eq(transactionsTable.idempotencyKey, idempotencyKey ?? `reversal:${transactionId}`)).limit(1);
+    if (existing) return existing;
+    throw new Error(`Transaction ${transactionId} is already reversed`);
+  }
+  if (original.status !== "completed") throw new Error(`Only completed transactions can be reversed (status: ${original.status})`);
+  if (original.type !== "deposit" && original.type !== "transfer") {
+    throw new Error(`Reversal is not supported for ${original.type} transactions`);
+  }
+
+  const amount = Number(original.amount);
+  const currency = original.currency;
+  const reversalId = generateId();
+  const ref = generateReference();
+  const now = new Date();
+  const key = idempotencyKey ?? `reversal:${transactionId}`;
+
+  await db.transaction(async (tx) => {
+    const wallets = [original.fromWalletId, original.toWalletId].filter((w): w is string => !!w);
+    const locked = await lockWallets(tx as any, wallets);
+    // The wallet that received the original funds must still be able to give them back.
+    if (original.toWalletId) {
+      const w = locked.get(original.toWalletId);
+      if (!w) throw new Error(`Wallet ${original.toWalletId} not found`);
+      if (w.status === "closed") throw new WalletUnavailableError(original.toWalletId, w.status, "debit");
+      const bal = await ledgerBalance(tx as any, original.toWalletId, currency);
+      if (bal < amount) throw new Error("Insufficient funds to reverse");
+    }
+    if (original.fromWalletId) {
+      const w = locked.get(original.fromWalletId);
+      if (!w) throw new Error(`Wallet ${original.fromWalletId} not found`);
+      if (w.status === "closed") throw new WalletUnavailableError(original.fromWalletId, w.status, "credit");
+    }
+
+    await tx.insert(transactionsTable).values({
+      id: reversalId,
+      fromWalletId: original.toWalletId,
+      toWalletId: original.fromWalletId,
+      amount: String(amount),
+      currency,
+      type: original.type,
+      status: "processing",
+      reference: ref,
+      description: `Reversal of ${original.reference}: ${reason}`,
+      idempotencyKey: key,
+      metadata: { reversalOf: transactionId, reason },
+    });
+
+    const base = { transactionId: reversalId, reference: ref, eventType: "reversal", currency };
+    const entries: Array<typeof ledgerEntriesTable.$inferInsert> = [];
+    if (original.toWalletId) {
+      entries.push({ id: generateId(), ...base, accountId: original.toWalletId, accountType: "wallet", debitAmount: String(amount), creditAmount: "0", description: "Reversal debit", entryType: "debit", walletId: original.toWalletId });
+    }
+    if (original.fromWalletId) {
+      entries.push({ id: generateId(), ...base, accountId: original.fromWalletId, accountType: "wallet", debitAmount: "0", creditAmount: String(amount), description: "Reversal credit", entryType: "credit", walletId: original.fromWalletId });
+    } else {
+      entries.push({ id: generateId(), ...base, accountId: "platform_float", accountType: "platform", debitAmount: "0", creditAmount: String(amount), description: "Reversal — funds returned to platform float", entryType: "credit", walletId: null });
+    }
+    await tx.insert(ledgerEntriesTable).values(entries);
+
+    for (const w of wallets) await syncWalletBalance(w, tx as any);
+
+    await tx.update(transactionsTable).set({ status: "completed", completedAt: now }).where(eq(transactionsTable.id, reversalId));
+    await tx.update(transactionsTable).set({ status: "reversed" }).where(eq(transactionsTable.id, transactionId));
+  });
+
+  const [finalTx] = await db.select().from(transactionsTable).where(eq(transactionsTable.id, reversalId));
+  await Promise.all([
+    audit({ action: "transaction.reversed", entity: "transaction", entityId: transactionId, metadata: { reversalId, amount, currency, reason } }),
+    ...[original.fromWalletId, original.toWalletId].filter(Boolean).map((w) => eventBus.publish("wallet.balance.updated", { walletId: w, currency })),
+  ]);
+  return finalTx;
 }
 
 export function isDuplicateIdempotencyKey(err: unknown): boolean {

@@ -17,6 +17,7 @@ import {
   listPositionForSale, buyTontinePosition, computeNextDate, createSchedulerJob,
 } from "../lib/tontineScheduler";
 import { computeReputationScore, getReputationScore, computeTontineAIPriority } from "../lib/reputationEngine";
+import { leaveActiveTontine, cancelTontine, placeListingBid, acceptListingBid } from "../lib/tontineLifecycle";
 import { requireAuth } from "../lib/productAuth";
 import { routeParamString } from "../lib/routeParams";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
@@ -140,8 +141,16 @@ router.delete("/tontines/:tontineId/members/:userId", async (req, res, next) => 
     if (userId !== req.auth!.userId && !isTontineAdmin(req, tontine)) {
       return res.status(403).json({ error: true, message: "You can only remove yourself unless you administer this tontine" });
     }
+    if (tontine.status === "active") {
+      try {
+        const result = await leaveActiveTontine(tontineId, userId);
+        return res.json({ success: true, message: "Member left the active tontine", ...result });
+      } catch (err: any) {
+        return res.status(400).json({ error: true, message: err.message });
+      }
+    }
     if (tontine.status !== "pending") {
-      return res.status(400).json({ error: true, message: "Can only leave a tontine that is still pending" });
+      return res.status(400).json({ error: true, message: `Cannot leave a ${tontine.status} tontine` });
     }
 
     const [member] = await db.select().from(tontineMembersTable)
@@ -179,6 +188,19 @@ router.delete("/tontines/:tontineId/members/:userId", async (req, res, next) => 
 
     return res.json({ success: true, message: "Member removed from tontine", remainingMembers: newCount });
   } catch (err) { return next(err); }
+});
+
+router.post("/tontines/:tontineId/cancel", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
+  try {
+    const tontineId = routeParamString(req, "tontineId")!;
+    const tontine = await requireTontineAdmin(req, res, tontineId);
+    if (!tontine) return;
+    const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+    const result = await cancelTontine(tontineId, req.auth!.userId, reason);
+    return res.json({ success: true, tontineId, status: "cancelled", ...result });
+  } catch (err: any) {
+    return res.status(400).json({ error: true, message: err.message });
+  }
 });
 
 router.post("/tontines/:tontineId/collect", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
@@ -254,6 +276,9 @@ router.post("/tontines/:tontineId/bids", async (req, res, next) => {
 
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (tontine.status !== "pending") {
+      return res.status(400).json({ error: true, message: "Rotation bids are only accepted before activation; use the position market for an active tontine" });
+    }
     if (!(await isTontineMember(tontineId, userId))) {
       return res.status(403).json({ error: true, message: "Only members can bid on this tontine" });
     }
@@ -308,6 +333,43 @@ router.get("/tontines/:tontineId/positions/market", async (req, res, next) => {
       .orderBy(tontinePositionListingsTable.payoutOrder);
     return res.json({ listings: listings.map(l => ({ ...l, askPrice: Number(l.askPrice) })) });
   } catch (err) { return next(err); }
+});
+
+router.post("/tontines/positions/:listingId/bids", async (req, res, next) => {
+  try {
+    const listingId = routeParamString(req, "listingId")!;
+    const bid = await placeListingBid(listingId, req.auth!.userId, Number(req.body?.bidAmount));
+    return res.status(201).json({ ...bid, bidAmount: Number(bid.bidAmount) });
+  } catch (err: any) {
+    return res.status(400).json({ error: true, message: err.message });
+  }
+});
+
+// The seller sees every offer; a bidder only sees their own.
+router.get("/tontines/positions/:listingId/bids", async (req, res, next) => {
+  try {
+    const listingId = routeParamString(req, "listingId")!;
+    const [listing] = await db.select().from(tontinePositionListingsTable).where(eq(tontinePositionListingsTable.id, listingId));
+    if (!listing) return res.status(404).json({ error: true, message: "Listing not found" });
+    const isSeller = listing.sellerId === req.auth!.userId || isAdminRequest(req);
+    const bids = await db.select().from(tontineBidsTable)
+      .where(isSeller
+        ? eq(tontineBidsTable.listingId, listingId)
+        : and(eq(tontineBidsTable.listingId, listingId), eq(tontineBidsTable.userId, req.auth!.userId)))
+      .orderBy(desc(tontineBidsTable.bidAmount));
+    return res.json({ listingId, bids: bids.map(b => ({ ...b, bidAmount: Number(b.bidAmount) })) });
+  } catch (err) { return next(err); }
+});
+
+router.post("/tontines/positions/:listingId/bids/:bidId/accept", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
+  try {
+    const listingId = routeParamString(req, "listingId")!;
+    const bidId = routeParamString(req, "bidId")!;
+    const result = await acceptListingBid(listingId, bidId, req.auth!.userId);
+    return res.json({ success: true, listingId, bidId, ...result });
+  } catch (err: any) {
+    return res.status(400).json({ error: true, message: err.message });
+  }
 });
 
 router.post("/tontines/positions/:listingId/buy", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {

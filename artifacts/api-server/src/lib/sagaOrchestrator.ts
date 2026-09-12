@@ -3,6 +3,7 @@ import { sagasTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { generateId } from "./id";
 import { audit as auditLog } from "./auditLogger";
+import { guard } from "./killSwitch";
 
 export interface SagaStep<TCtx extends Record<string, unknown>> {
   name: string;
@@ -31,6 +32,7 @@ export class SagaOrchestrator {
     initialContext: TCtx,
     steps: SagaStep<TCtx>[]
   ): Promise<TCtx> {
+    guard("saga_creation");
     const sagaId = generateId();
     const completedSteps: Array<{ step: SagaStep<TCtx>; ctx: TCtx }> = [];
 

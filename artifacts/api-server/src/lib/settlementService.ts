@@ -4,6 +4,7 @@ import { eq, desc, count } from "drizzle-orm";
 import { generateId } from "./id";
 import { eventBus } from "./eventBus";
 import { audit as auditLog } from "./auditLogger";
+import { guard } from "./killSwitch";
 
 export type SettlementStatus = "pending" | "processing" | "settled" | "failed";
 
@@ -13,6 +14,7 @@ export async function createSettlement(
   currency: string,
   metadata?: Record<string, unknown>
 ): Promise<string> {
+  guard("settlements");
   const id = generateId();
 
   await db.insert(settlementsTable).values({
@@ -37,6 +39,7 @@ export async function createSettlement(
 }
 
 export async function processSettlement(settlementId: string): Promise<void> {
+  guard("settlements");
   const [settlement] = await db.select().from(settlementsTable).where(eq(settlementsTable.id, settlementId));
   if (!settlement) throw new Error(`Settlement ${settlementId} not found`);
   if (settlement.status !== "pending") throw new Error(`Settlement ${settlementId} is ${settlement.status}`);

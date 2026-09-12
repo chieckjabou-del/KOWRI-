@@ -6,7 +6,7 @@ import {
   merchantsTable, investmentPoolsTable, poolPositionsTable,
   tontineHybridCyclesTable, tontineSolidaryClaimsTable,
 } from "@workspace/db";
-import { eq, and, sql, asc, ne, like } from "drizzle-orm";
+import { eq, and, sql, asc, desc, ne, like, isNull } from "drizzle-orm";
 import { generateId } from "./id";
 import { processTransfer, isDuplicateIdempotencyKey } from "./walletService";
 import { eventBus } from "./eventBus";
@@ -52,6 +52,7 @@ export async function runContributionCycle(tontineId: string): Promise<{
   let totalCollected    = 0;
   let yieldCollected    = 0;
   const failed: string[] = [];
+  const collectedUserIds: string[] = [];
 
   for (const member of members) {
     if (member.contributionsCount >= expectedRound) {
@@ -100,6 +101,7 @@ export async function runContributionCycle(tontineId: string): Promise<{
       await db.update(tontineMembersTable).set(memberUpdates).where(eq(tontineMembersTable.id, member.id));
       collected++;
       totalCollected += memberAmount;
+      collectedUserIds.push(member.userId);
     } catch (err) {
       if (isDuplicateIdempotencyKey(err)) {
         // Already collected for this round by a concurrent run — not a missed contribution.
@@ -169,7 +171,10 @@ export async function runContributionCycle(tontineId: string): Promise<{
     await db.update(tontinesTable).set({ yieldPoolBalance: newBal, updatedAt: new Date() }).where(eq(tontinesTable.id, tontineId));
   }
 
-  await eventBus.publish("tontine.contributions.collected", { tontineId, collected, failed, round: expectedRound, yieldCollected });
+  await eventBus.publish("tontine.contributions.collected", {
+    tontineId, collected, failed, round: expectedRound, yieldCollected,
+    collectedUserIds, amount: defaultAmount, currency, tontineName: tontine.name,
+  });
 
   await createSchedulerJob("tontine_payout", tontineId, "tontine", new Date());
 
@@ -351,6 +356,7 @@ export async function runPayoutCycle(tontineId: string): Promise<{
     await eventBus.publish("tontine.payout.completed", {
       tontineId, round: newRound, recipientUserId: recipient.userId,
       payoutAmount: actualPayoutAmount, yieldShare, yieldOwed,
+      currency: tontine.currency, tontineName: tontine.name,
     });
 
     return { recipientUserId: recipient.userId, amount: actualPayoutAmount, round: newRound };
@@ -373,8 +379,10 @@ export function computeNextDate(frequency: string): Date {
 // Re-arms the contribution job for the next round, or closes the tontine after the last one.
 async function scheduleNextRound(tontineId: string, isComplete: boolean, nextPayoutDate: Date, completedRound: number): Promise<void> {
   if (isComplete) {
+    const [t] = await db.select({ name: tontinesTable.name }).from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    const members = await db.select({ userId: tontineMembersTable.userId }).from(tontineMembersTable).where(eq(tontineMembersTable.tontineId, tontineId));
     await audit({ action: "tontine.completed", entity: "tontine", entityId: tontineId, metadata: { rounds: completedRound } });
-    await eventBus.publish("tontine.completed", { tontineId, rounds: completedRound });
+    await eventBus.publish("tontine.completed", { tontineId, rounds: completedRound, tontineName: t?.name, memberIds: members.map(m => m.userId) });
     return;
   }
 
@@ -401,13 +409,52 @@ export async function assignPayoutOrder(tontineId: string, model: RotationModel)
   if (model === "random") {
     ordered = [...members].sort(() => (randomBytes(1)[0] % 2 === 0 ? 1 : -1));
   } else if (model === "auction") {
+    // Rotation auctions only consider pre-activation bids (not secondary-market offers),
+    // and a winning bid is actually paid into the pool — an unpaid bid does not rank.
+    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+    if (!tontine?.walletId) throw new Error("Tontine has no pool wallet for auction settlement");
     const bids = await db.select().from(tontineBidsTable)
-      .where(and(eq(tontineBidsTable.tontineId, tontineId), eq(tontineBidsTable.status, "pending")));
-    const bidMap = new Map(bids.map(b => [b.userId, Number(b.bidAmount)]));
-    ordered = [...members].sort((a, b) => (bidMap.get(b.userId) ?? 0) - (bidMap.get(a.userId) ?? 0));
-    await db.update(tontineBidsTable)
-      .set({ status: "resolved", resolvedAt: new Date() })
-      .where(eq(tontineBidsTable.tontineId, tontineId));
+      .where(and(eq(tontineBidsTable.tontineId, tontineId), eq(tontineBidsTable.status, "pending"), isNull(tontineBidsTable.listingId)))
+      .orderBy(desc(tontineBidsTable.bidAmount), asc(tontineBidsTable.createdAt));
+
+    const paid = new Map<string, { amount: number; desiredPosition: number }>();
+    for (const bid of bids) {
+      const alreadyPaid = paid.has(bid.userId);
+      if (alreadyPaid) {
+        await db.update(tontineBidsTable).set({ status: "rejected", resolvedAt: new Date() }).where(eq(tontineBidsTable.id, bid.id));
+        continue;
+      }
+      const wallets = (await db.select().from(walletsTable)
+        .where(and(eq(walletsTable.userId, bid.userId), eq(walletsTable.status, "active"))))
+        .filter(w => w.currency === tontine.currency && w.id !== tontine.walletId);
+      const wallet = wallets.find(w => w.walletType === "personal") ?? wallets[0];
+      try {
+        if (!wallet) throw new Error("No wallet in tontine currency");
+        const tx = await processTransfer({
+          fromWalletId: wallet.id, toWalletId: tontine.walletId,
+          amount: Number(bid.bidAmount), currency: tontine.currency,
+          description: `Tontine rotation bid – ${tontine.name}`,
+          skipFraudCheck: true, idempotencyKey: `tontine-bid:${bid.id}`,
+        });
+        await db.update(tontineBidsTable).set({ status: "accepted", resolvedAt: new Date(), transactionId: tx.id }).where(eq(tontineBidsTable.id, bid.id));
+        paid.set(bid.userId, { amount: Number(bid.bidAmount), desiredPosition: bid.desiredPosition });
+        await audit({ action: "tontine.bid.charged", entity: "tontine_bid", entityId: bid.id, metadata: { tontineId, userId: bid.userId, amount: Number(bid.bidAmount) } });
+      } catch (err) {
+        if (isDuplicateIdempotencyKey(err)) {
+          paid.set(bid.userId, { amount: Number(bid.bidAmount), desiredPosition: bid.desiredPosition });
+          continue;
+        }
+        await db.update(tontineBidsTable).set({ status: "failed", resolvedAt: new Date() }).where(eq(tontineBidsTable.id, bid.id));
+      }
+    }
+
+    // Highest paid bid picks first; ties resolve by the earlier bid, then original order.
+    ordered = [...members].sort((a, b) => {
+      const pa = paid.get(a.userId)?.amount ?? 0;
+      const pb = paid.get(b.userId)?.amount ?? 0;
+      if (pb !== pa) return pb - pa;
+      return a.payoutOrder - b.payoutOrder;
+    });
   } else {
     return;
   }
@@ -446,7 +493,11 @@ export async function listPositionForSale(params: {
   return listing;
 }
 
-export async function buyTontinePosition(listingId: string, buyerId: string): Promise<void> {
+export async function buyTontinePosition(
+  listingId: string,
+  buyerId: string,
+  opts: { price?: number; bidId?: string } = {}
+): Promise<{ transactionId: string; price: number }> {
   const claimed = await db.update(tontinePositionListingsTable)
     .set({ status: "processing" })
     .where(and(
@@ -489,12 +540,15 @@ export async function buyTontinePosition(listingId: string, buyerId: string): Pr
     const sellerWallet = prefer(sellerWallets);
     if (!buyerWallet || !sellerWallet) throw new Error(`Both parties need an active ${listing.currency} wallet`);
 
+    const price = opts.price ?? Number(listing.askPrice);
+    if (!Number.isFinite(price) || price <= 0) throw new Error("Invalid position price");
+
     const tx = await processTransfer({
       fromWalletId: buyerWallet.id,
       toWalletId:   sellerWallet.id,
-      amount:       Number(listing.askPrice),
+      amount:       price,
       currency:     listing.currency,
-      description:  `Tontine position purchase – listing ${listingId}`,
+      description:  `Tontine position purchase – listing ${listingId}${opts.bidId ? ` (bid ${opts.bidId})` : ""}`,
       skipFraudCheck: true,
       idempotencyKey: `tontine-position:${listingId}`,
     });
@@ -507,12 +561,22 @@ export async function buyTontinePosition(listingId: string, buyerId: string): Pr
       await dbTx.update(tontinePositionListingsTable).set({
         status: "sold", buyerId, soldAt: new Date(), transactionId: tx.id,
       }).where(eq(tontinePositionListingsTable.id, listingId));
+
+      if (opts.bidId) {
+        await dbTx.update(tontineBidsTable)
+          .set({ status: "accepted", resolvedAt: new Date(), transactionId: tx.id })
+          .where(eq(tontineBidsTable.id, opts.bidId));
+        await dbTx.update(tontineBidsTable)
+          .set({ status: "rejected", resolvedAt: new Date() })
+          .where(and(eq(tontineBidsTable.listingId, listingId), eq(tontineBidsTable.status, "pending")));
+      }
     });
 
     await eventBus.publish("tontine.position.sold", {
       tontineId: listing.tontineId, buyerId, sellerId: listing.sellerId,
-      payoutOrder: listing.payoutOrder, price: listing.askPrice,
+      payoutOrder: listing.payoutOrder, price, bidId: opts.bidId ?? null,
     });
+    return { transactionId: tx.id, price };
   } catch (err) {
     await db.update(tontinePositionListingsTable)
       .set({ status: "open" })
@@ -736,6 +800,10 @@ export async function runHybridCycle(tontineId: string): Promise<{
 
     await eventBus.publish("tontine.hybrid.cycle_completed", {
       tontineId, round, rotationAmount, investmentAmount, solidarityAmount, yieldAmount, yieldRecipients,
+    });
+    await eventBus.publish("tontine.payout.completed", {
+      tontineId, round, recipientUserId: recipient.userId, payoutAmount: rotationAmount,
+      currency, tontineName: tontine.name, hybrid: true,
     });
 
     return { recipientUserId: recipient.userId, amount: rotationAmount, round };

@@ -5,7 +5,7 @@ import { eq, and, sql, count, desc } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { validateQueryParams, VALID_LOAN_STATUSES } from "../middleware/validate";
 import { sagaOrchestrator } from "../lib/sagaOrchestrator";
-import { processDeposit, processTransfer } from "../lib/walletService";
+import { processDeposit, processTransfer, reverseTransaction } from "../lib/walletService";
 import { eventBus } from "../lib/eventBus";
 import { computeCreditScoreFromActivity } from "../lib/reputationEngine";
 import { requireAuth } from "../lib/productAuth";
@@ -181,7 +181,7 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
         {
           name: "disburse_funds",
           execute: async (ctx) => {
-            await processDeposit({
+            const tx = await processDeposit({
               walletId: ctx.walletId,
               amount: ctx.amount,
               currency: ctx.currency,
@@ -193,12 +193,15 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
             await db.update(loansTable)
               .set({ status: "disbursed" as any, disbursedAt: new Date() })
               .where(eq(loansTable.id, ctx.loanId));
-            return { ...ctx, disbursed: true };
+            return { ...ctx, disbursed: true, disbursementTxId: tx.id };
           },
+          // Undo the actual money movement, then record the loan as never having gone out.
           compensate: async (ctx) => {
-            await db.update(loansTable)
-              .set({ status: "defaulted" as any })
-              .where(eq(loansTable.id, ctx.loanId));
+            const txId = (ctx as any).disbursementTxId as string | undefined;
+            if (txId) {
+              await reverseTransaction({ transactionId: txId, reason: `Loan ${ctx.loanId} saga compensation`, idempotencyKey: `loan-disburse:${ctx.loanId}:reversal` });
+            }
+            await db.delete(loansTable).where(eq(loansTable.id, ctx.loanId));
           },
         },
         {

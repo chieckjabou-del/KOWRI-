@@ -400,6 +400,34 @@ Voir Partie 0 pour les urgences exploitables. Constats complémentaires (non cri
 - Alimentation automatique du graphe de fraude (`fraud_network_*`) par les transactions réelles et vrais algorithmes de graphe.
 - Génération planifiée / transmission des rapports SAR à un régulateur.
 
+## Phase 5 — Tontines complètes + fiabilisation infra (implémentée le 12 septembre 2026)
+
+**Cycle de vie tontine** (`lib/tontineLifecycle.ts`)
+- **Quitter une tontine active** : `DELETE /community/tontines/:id/members/:userId` fonctionne désormais aussi sur une tontine `active` — uniquement avant d'avoir reçu son payout (sinon la cagnotte serait lésée). Les cotisations versées sont remboursées depuis le wallet du pool moins une pénalité qui reste au groupe (`TONTINE_LEAVE_PENALTY_PCT`, défaut 10 %) ; refus si le pool ne peut pas honorer le remboursement ; `memberCount`/`totalRounds` ajustés et `payoutOrder` recompacté ; clé `tontine-leave:{tontine}:{membre}` ; audit `tontine.member.left` + notification.
+- **Annuler une tontine** : `POST /community/tontines/:id/cancel` (admin de la tontine) — transition atomique `pending|active → cancelled`, jobs scheduler en attente annulés, listings/enchères ouverts fermés, puis remboursement du pool **au prorata de ce que chaque membre est encore en droit de réclamer** (cotisations − payout déjà reçu, donc un membre déjà payé ne reçoit rien) ; clé `tontine-cancel:{tontine}:{membre}` ; audit `tontine.cancelled` + notification par membre.
+
+**Marché secondaire et enchères**
+- Colonne `tontine_bids.listing_id` (+ `transaction_id`) : une enchère peut maintenant viser un listing précis. `POST /community/tontines/positions/:listingId/bids` (offre d'un non-membre), `GET …/bids` (le vendeur voit tout, un enchérisseur ne voit que la sienne), `POST …/bids/:bidId/accept` (vendeur) → `buyTontinePosition` au **prix de l'enchère**, enchère marquée `accepted` avec l'id de transaction, les autres `rejected`. `desiredPosition` = `payoutOrder` du listing, donc enfin porteur de sens.
+- Enchères de rotation (`POST /tontines/:id/bids`) : refusées après activation ; lors d'une activation en mode `auction`, **chaque enchère gagnante est réellement payée** dans le pool (`tontine-bid:{id}`, audit `tontine.bid.charged`) — une enchère non payée ne classe plus ; tri par montant payé puis ancienneté ; les offres de marché secondaire ne sont plus résolues par erreur à l'activation.
+
+**Notifications** — le contrat d'événements est aligné sur les payloads réels : `tontine.payout.completed` (`recipientUserId`/`payoutAmount`, + devise et nom) et `tontine.contributions.collected` (nouveau `collectedUserIds`, + notification d'échec de prélèvement aux membres `failed`) déclenchent enfin des notifications ; le cycle hybride publie aussi son payout. Nouveaux abonnés : `tontine.completed`, `tontine.cancelled`, `tontine.member.left`, `kyc.verified/rejected`, `merchant.status.changed`, `wallet.status.changed`.
+
+**Résilience**
+- **Compensation réelle du saga de prêt** : nouveau `reverseTransaction()` dans `walletService` (écriture miroir d'un dépôt ou d'un transfert, original marqué `reversed`, clé d'idempotence, verrous et contrôle de solde) ; la compensation de `disburse_funds` **rembourse l'argent décaissé** puis supprime le prêt, au lieu de le marquer `defaulted` en laissant les fonds chez l'emprunteur.
+- **Kill switches enfin effectifs** : `guard("settlements")` sur création/traitement des règlements et sur soumission/règlement des lots de clearing ; `guard("saga_creation")` à l'entrée de tout saga ; `guard("all")` sur les dépôts (donc sur le décaissement de crédit). Le switch `all` arrête maintenant réellement tout mouvement.
+
+**Schéma** — `drizzle.config.ts` a un dossier `out: ./migrations` ; scripts `generate` / `migrate` ajoutés ; **migration initiale versionnée générée** (`lib/db/migrations`) — le schéma n'est plus déployé uniquement via `push --force`.
+
+**Prérequis opérationnels**
+- Appliquer les migrations (`pnpm --filter @workspace/db migrate`) ou `push` : colonnes `tontine_bids.listing_id` et `tontine_bids.transaction_id`.
+- Sur une base existante déjà en production, marquer la migration initiale comme appliquée (`__drizzle_migrations`) avant d'utiliser `migrate`, ou continuer avec `push` pour cette base uniquement.
+
+**Reste ouvert (hors périmètre des 5 phases)**
+- Modèle de rôles/permissions en base et écran de connexion admin.
+- Settlements/clearing toujours sans écritures ledger (le statut « réglé » ne correspond à aucun mouvement comptable) — décision produit/partenaires nécessaire.
+- Frais marchand/tontine/diaspora via `feeEngine` (seul le corridor diaspora facture aujourd'hui).
+- File de messages sans reprise au redémarrage, outbox désactivée par défaut (`OUTBOX_ENABLED`), multi-région et simulateur de panne restent des maquettes.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

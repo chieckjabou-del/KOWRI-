@@ -223,10 +223,13 @@ export const tontineBidsTable = pgTable("tontine_bids", {
   id:              text("id").primaryKey(),
   tontineId:       text("tontine_id").notNull(),
   userId:          text("user_id").notNull(),
+  // Set when the bid targets a secondary-market listing; null for pre-activation rotation auctions.
+  listingId:       text("listing_id"),
   bidAmount:       numeric("bid_amount", { precision: 20, scale: 4 }).notNull(),
   desiredPosition: integer("desired_position").notNull().default(1),
   status:          text("status").notNull().default("pending"),
   roundNumber:     integer("round_number").notNull().default(1),
+  transactionId:   text("transaction_id"),
   createdAt:       timestamp("created_at").notNull().defaultNow(),
   resolvedAt:      timestamp("resolved_at"),
 }, (t) => [
