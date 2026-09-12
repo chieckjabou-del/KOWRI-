@@ -9,6 +9,7 @@ import {
 import { eq, and, sql, asc, desc, ne, like, isNull } from "drizzle-orm";
 import { generateId } from "./id";
 import { processTransfer, isDuplicateIdempotencyKey } from "./walletService";
+import { pickDebitWallet } from "./walletSelection";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
 import { randomBytes } from "crypto";
@@ -72,13 +73,9 @@ export async function runContributionCycle(tontineId: string): Promise<{
       : 0;
     const totalDebit = memberAmount + yieldSurcharge;
 
-    const memberWallets = await db.select().from(walletsTable)
-      .where(and(eq(walletsTable.userId, member.userId), eq(walletsTable.status, "active")));
-    const wallet =
-      memberWallets.find(w => w.walletType === "personal") ??
-      memberWallets.find(w => w.walletType !== "tontine") ??
-      memberWallets[0];
-    if (!wallet || wallet.id === poolWalletId) { failed.push(member.userId); continue; }
+    // Debit only from a wallet in the tontine currency that can cover the contribution.
+    const wallet = await pickDebitWallet(member.userId, currency, totalDebit, poolWalletId);
+    if (!wallet) { failed.push(member.userId); continue; }
 
     try {
       await processTransfer({
@@ -424,10 +421,7 @@ export async function assignPayoutOrder(tontineId: string, model: RotationModel)
         await db.update(tontineBidsTable).set({ status: "rejected", resolvedAt: new Date() }).where(eq(tontineBidsTable.id, bid.id));
         continue;
       }
-      const wallets = (await db.select().from(walletsTable)
-        .where(and(eq(walletsTable.userId, bid.userId), eq(walletsTable.status, "active"))))
-        .filter(w => w.currency === tontine.currency && w.id !== tontine.walletId);
-      const wallet = wallets.find(w => w.walletType === "personal") ?? wallets[0];
+      const wallet = await pickDebitWallet(bid.userId, tontine.currency, Number(bid.bidAmount), tontine.walletId);
       try {
         if (!wallet) throw new Error("No wallet in tontine currency");
         const tx = await processTransfer({

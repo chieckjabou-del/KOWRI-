@@ -6,7 +6,7 @@ import { generateId } from "../lib/id";
 import { createSession } from "../lib/productAuth";
 import { hashPin, verifyPin, isLegacyPinHash, isValidPinFormat } from "../lib/pin";
 import { loginRateLimit } from "../lib/loginRateLimit";
-import { authenticate, merchantBelongsToUser, walletBelongsToUser } from "../middleware/auth";
+import { authenticate, walletBelongsToUser } from "../middleware/auth";
 import {
   getMerchantById, getMerchantPayments, getMerchantSettlements, getMerchantStats,
   createPaymentLink, getPaymentLinks, createInvoice, getInvoices, sendInvoice,
@@ -29,7 +29,9 @@ async function requireOwnedMerchant(req: Request, res: Response, next: NextFunct
   const merchantId = merchantIdFrom(req);
   if (!merchantId) { res.status(400).json({ error: "merchantId required" }); return; }
   try {
-    if (!(await merchantBelongsToUser(merchantId, req.auth!.userId))) {
+    const [merchant] = await db.select({ userId: merchantsTable.userId }).from(merchantsTable).where(eq(merchantsTable.id, merchantId)).limit(1);
+    if (!merchant) { res.status(404).json({ error: "Merchant not found" }); return; }
+    if (merchant.userId !== req.auth!.userId) {
       res.status(403).json({ error: "You do not own this merchant account" });
       return;
     }

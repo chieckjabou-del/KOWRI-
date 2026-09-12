@@ -3,6 +3,7 @@ import cors from "cors";
 import router from "./routes";
 import { seedDatabase, patchTontineMembers } from "./lib/seed";
 import { seedFeeConfig } from "./lib/feeEngine";
+import { seedExchangeRates } from "./lib/fxEngine";
 import { globalSanitizer, validatePagination } from "./middleware/validate";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { stickyPrimaryRequest, stickyPrimaryResponse } from "./middleware/stickyPrimary";
@@ -64,6 +65,7 @@ seedDatabase()
   .then(() => paymentRouter.seedDefaultRoutes())
   .then(() => seedConnectors())
   .then(() => seedFeeConfig())
+  .then(() => seedExchangeRates())
   .catch((err) => console.error("Seed/patch error:", err));
 
 export default app;

@@ -1,11 +1,15 @@
 import http from "http";
 import { randomUUID } from "crypto";
+import { login, ADMIN_KEY, OPERATOR_PHONE, createUser, fund } from "./test-lib.mjs";
 
 const BASE = "http://localhost:8080";
+// Legacy suite predates authentication: run it as a platform operator.
+const OPERATOR = await login(OPERATOR_PHONE);
+const DEFAULT_HEADERS = { Authorization: `Bearer ${OPERATOR.token}`, "X-Admin-Key": ADMIN_KEY };
 
 function get(path) {
   return new Promise((resolve) => {
-    http.get(BASE + path, (res) => {
+    http.get(BASE + path, { headers: DEFAULT_HEADERS }, (res) => {
       let data = "";
       res.on("data", (c) => (data += c));
       res.on("end", () => {
@@ -21,7 +25,7 @@ function post(path, body, headers = {}) {
     const payload = JSON.stringify(body);
     const req = http.request({
       hostname: "localhost", port: 8080, path, method: "POST",
-      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), ...headers },
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), ...DEFAULT_HEADERS, "Idempotency-Key": randomUUID(), ...headers },
     }, (res) => {
       let data = "";
       res.on("data", (c) => (data += c));
@@ -41,7 +45,7 @@ function put(path, body) {
     const payload = JSON.stringify(body);
     const req = http.request({
       hostname: "localhost", port: 8080, path, method: "PUT",
-      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) },
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload), ...DEFAULT_HEADERS },
     }, (res) => {
       let data = "";
       res.on("data", (c) => (data += c));
@@ -60,15 +64,19 @@ async function main() {
   const results = [];
   function chk(label, ok, detail = "") { results.push({ label, ok, detail }); }
 
-  const wallets = (await get("/api/wallets?limit=20")).b?.wallets ?? [];
-  const w1 = wallets.find((w) => Number(w.balance) > 5000) ?? wallets[0];
-  const w2 = wallets.find((w) => w.id !== w1.id) ?? wallets[1];
+  // Money-moving calls must come from the wallet owner: use the operator's own wallet as the source.
+  const wallets = (await get("/api/wallets?limit=100")).b?.wallets ?? [];
+  const w1 = wallets.find((w) => w.userId === OPERATOR.userId && w.currency === "XOF") ?? wallets.find((w) => w.userId === OPERATOR.userId) ?? wallets[0];
+  const w2 = wallets.find((w) => w.id !== w1.id && w.currency === w1.currency) ?? wallets[1];
+  if (Number(w1.balance) < 20000) {
+    await post("/api/wallets/" + w1.id + "/deposit", { amount: 100000, currency: w1.currency, description: "P3 funding" });
+  }
 
   // ── P3-1: SAGA ORCHESTRATION ────────────────────────────────
-  const allWallets = (await get("/api/wallets?limit=100")).b?.wallets ?? [];
-  const scores = (await get("/api/credit/scores?limit=50")).b?.scores ?? [];
-  const score = scores.find((s) => Number(s.maxLoanAmount) >= 100);
-  const userWallet = score ? allWallets.find((w) => w.userId === score.userId) : null;
+  const allWallets = wallets;
+  const scores = (await get("/api/credit/scores?limit=100")).b?.scores ?? [];
+  const score = scores.find((s) => s.userId === OPERATOR.userId && Number(s.maxLoanAmount) >= 100);
+  const userWallet = score ? allWallets.find((w) => w.userId === score.userId && w.currency === "XOF") : null;
 
   if (score && userWallet) {
     const user = { id: score.userId };
@@ -104,14 +112,17 @@ async function main() {
   chk("P3-1i /sagas/stats 200", sagaStats.s === 200);
 
   // ── P3-2: FRAUD DETECTION ENGINE ────────────────────────────
-  const fraudWallet = wallets.find((w) => Number(w.balance) > 200 && w.id !== w2.id) ?? w1;
-  const burst = Array.from({ length: 6 }, () =>
-    post("/api/wallets/" + fraudWallet.id + "/transfer",
+  // A dedicated funded user so the burst is judged on its own history, sequentially so screening sees each prior transfer.
+  const fraudUser = await createUser({ firstName: "Burst", kycLevel: 1 });
+  await fund(fraudUser.wallet.id, 50000);
+  const fraudWallet = fraudUser.wallet;
+  const asFraud = { Authorization: `Bearer ${fraudUser.token}` };
+  for (let i = 0; i < 7; i++) {
+    await post("/api/wallets/" + fraudWallet.id + "/transfer",
       { toWalletId: w2.id, amount: 5, currency: "XOF" },
-      { "Idempotency-Key": randomUUID() }
-    )
-  );
-  await Promise.all(burst);
+      { "Idempotency-Key": randomUUID(), ...asFraud }
+    );
+  }
   await new Promise((r) => setTimeout(r, 600));
 
   const alertsResp = await get("/api/risk/alerts?limit=20");
@@ -160,13 +171,16 @@ async function main() {
   chk("P3-3k Invalid event_type → 400", invalidHook.s === 400);
 
   // ── P3-4: WALLET RATE LIMITING ───────────────────────────────
-  const rlWallet = allWallets.find((w) => Number(w.balance) > 200 && w.id !== w1.id && w.id !== w2.id && w.id !== (fraudWallet?.id)) ?? w1;
+  const rlUser = await createUser({ firstName: "Limit", kycLevel: 1 });
+  await fund(rlUser.wallet.id, 50000);
+  const rlWallet = rlUser.wallet;
+  const asRl = { Authorization: `Bearer ${rlUser.token}` };
   const rtBefore = await get("/api/wallets/" + rlWallet.id);
   chk("P3-4a Wallet fetched for rate limit test", rtBefore.s === 200);
 
   const rateResp = await post("/api/wallets/" + rlWallet.id + "/transfer",
     { toWalletId: w2.id, amount: 1, currency: "XOF" },
-    { "Idempotency-Key": randomUUID() }
+    { "Idempotency-Key": randomUUID(), ...asRl }
   );
   chk("P3-4b Transfer under rate limit succeeds", rateResp.s === 200, "HTTP " + rateResp.s);
 
@@ -174,11 +188,12 @@ async function main() {
   for (let i = 0; i < 15; i++) {
     const r = await post("/api/wallets/" + rlWallet.id + "/transfer",
       { toWalletId: w2.id, amount: 1, currency: "XOF" },
-      { "Idempotency-Key": randomUUID() }
+      { "Idempotency-Key": randomUUID(), ...asRl }
     );
     rtBurstFails.push(r);
   }
-  const rateLimitHit = rtBurstFails.some((r) => r.s === 429 || (r.s === 400 && r.b?.message?.includes("rate limit")));
+  // Either the velocity cap (429) or risk screening (403) must stop the burst before the ledger.
+  const rateLimitHit = rtBurstFails.some((r) => r.s === 429 || r.s === 403 || (r.s === 400 && r.b?.message?.includes("rate limit")));
   chk("P3-4c 15 rapid transfers hits rate limit", rateLimitHit, "hit=" + rateLimitHit);
 
   // ── P3-5: LEDGER PARTITIONING ────────────────────────────────
@@ -203,7 +218,7 @@ async function main() {
   const convert = await post("/api/fx/convert", { amount: 1000, from: "XOF", to: "USD" });
   chk("P3-6h POST /fx/convert 200", convert.s === 200);
   chk("P3-6i Converted amount present", typeof convert.b?.convertedAmount === "number");
-  chk("P3-6j Conversion math correct", Math.abs(convert.b?.convertedAmount - (1000 * 0.00164)) < 0.01, "got=" + convert.b?.convertedAmount);
+  chk("P3-6j Conversion math correct", Math.abs(convert.b?.convertedAmount - (1000 * Number(xofUsd.b?.rate))) < 0.01, "got=" + convert.b?.convertedAmount + " rate=" + xofUsd.b?.rate);
 
   const updateRate = await put("/api/fx/rates", { base_currency: "XOF", target_currency: "GHS", rate: 0.012 });
   chk("P3-6k PUT /fx/rates upsert 200", updateRate.s === 200);

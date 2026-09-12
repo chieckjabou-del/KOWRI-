@@ -1,11 +1,39 @@
 import assert from "node:assert/strict";
+import { login, ADMIN_KEY, OPERATOR_PHONE } from "./artifacts/api-server/test-lib.mjs";
 
 const BASE = "http://localhost:8080/api";
+// Legacy suite predates authentication: run it as a platform operator.
+const OPERATOR = await login(OPERATOR_PHONE);
+const DEFAULT_HEADERS = { Authorization: `Bearer ${OPERATOR.token}`, "X-Admin-Key": ADMIN_KEY };
 let passed = 0;
 let failed = 0;
 const results = [];
 
+// Product routes are scoped to the acting user: once a wallet/merchant/developer session
+// has been obtained further down, calls to that product surface use it instead of the operator.
+function tokenFor(path) {
+  try {
+    if (path.startsWith("/wallet/") && walletToken) return walletToken;
+    if (path.startsWith("/merchant/") && merchantToken) return merchantToken;
+    if (path.startsWith("/developer/") && devToken) return devToken;
+  } catch { /* session variable not initialised yet */ }
+  return null;
+}
+
 async function req(method, path, body) {
+  const token = tokenFor(path);
+  const headers = { "Content-Type": "application/json", ...DEFAULT_HEADERS };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (method !== "GET") headers["Idempotency-Key"] = crypto.randomUUID();
+  const opts = { method, headers };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(`${BASE}${path}`, opts);
+  const text = await r.text();
+  try { return { status: r.status, body: JSON.parse(text) }; }
+  catch { return { status: r.status, body: text }; }
+}
+
+async function noAuthReq(method, path, body) {
   const opts = { method, headers: { "Content-Type": "application/json" } };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(`${BASE}${path}`, opts);
@@ -15,7 +43,9 @@ async function req(method, path, body) {
 }
 
 async function authReq(method, path, token, body) {
-  const opts = { method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } };
+  const headers = { "Content-Type": "application/json", "X-Admin-Key": ADMIN_KEY, Authorization: `Bearer ${token}` };
+  if (method !== "GET") headers["Idempotency-Key"] = crypto.randomUUID();
+  const opts = { method, headers };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(`${BASE}${path}`, opts);
   const text = await r.text();
@@ -70,7 +100,7 @@ let walletToken, walletUserId, walletId;
 
 await test("POST /wallet/create — create wallet user", async () => {
   const r = await req("POST", "/wallet/create", {
-    firstName: "Fatou", lastName: "Diallo", phone: `+221${ts}01`, country: "SN",
+    firstName: "Fatou", lastName: "Diallo", phone: `+221${ts}01`, country: "SN", pin: "1234",
   });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.ok(r.body.userId,   "userId missing");
@@ -83,7 +113,7 @@ await test("POST /wallet/create — create wallet user", async () => {
 
 await test("POST /wallet/create — duplicate phone → 409", async () => {
   const r = await req("POST", "/wallet/create", {
-    firstName: "Dup", lastName: "User", phone: `+221${ts}01`, country: "SN",
+    firstName: "Dup", lastName: "User", phone: `+221${ts}01`, country: "SN", pin: "1234",
   });
   assert.equal(r.status, 409, `expected 409 got ${r.status}`);
 });
@@ -95,7 +125,7 @@ await test("POST /wallet/create — missing fields → 400", async () => {
 });
 
 await test("POST /wallet/login — login with phone", async () => {
-  const r = await req("POST", "/wallet/login", { phone: `+221${ts}01`, pin: "000000" });
+  const r = await req("POST", "/wallet/login", { phone: `+221${ts}01`, pin: "1234" });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.ok(r.body.token,  "token missing");
   assert.ok(r.body.userId, "userId missing");
@@ -136,7 +166,7 @@ await test("GET /wallet/wallets — auth: get user wallets", async () => {
 });
 
 await test("GET /wallet/wallets — no auth → 401", async () => {
-  const r = await req("GET", "/wallet/wallets");
+  const r = await noAuthReq("GET", "/wallet/wallets");
   assert.equal(r.status, 401);
 });
 
@@ -159,7 +189,7 @@ let wallet2Id;
 
 await test("POST /wallet/create — create second wallet for transfers", async () => {
   const r = await req("POST", "/wallet/create", {
-    firstName: "Amadou", lastName: "Koné", phone: `+221${ts}02`, country: "SN",
+    firstName: "Amadou", lastName: "Koné", phone: `+221${ts}02`, country: "SN", pin: "1234",
   });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   wallet2Id = r.body.walletId;
@@ -193,8 +223,16 @@ await test("POST /wallet/qr/generate — no walletId → 400", async () => {
   assert.equal(r.status, 400);
 });
 
+// The payer must be the owner of the source wallet: log in as the second wallet user.
+let wallet2Token;
+await test("POST /wallet/login — second wallet user", async () => {
+  const r = await noAuthReq("POST", "/wallet/login", { phone: `+221${ts}02`, pin: "1234" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  wallet2Token = r.body.token;
+});
+
 await test("POST /wallet/qr/pay — decode QR and get payment details", async () => {
-  const r = await req("POST", "/wallet/qr/pay", {
+  const r = await authReq("POST", "/wallet/qr/pay", wallet2Token, {
     qrData: walletQrData, fromWalletId: wallet2Id,
   });
   assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -204,7 +242,7 @@ await test("POST /wallet/qr/pay — decode QR and get payment details", async ()
 });
 
 await test("POST /wallet/qr/pay — invalid qrData → 400", async () => {
-  const r = await req("POST", "/wallet/qr/pay", {
+  const r = await authReq("POST", "/wallet/qr/pay", wallet2Token, {
     qrData: "!invalid!", fromWalletId: wallet2Id,
   });
   assert.equal(r.status, 400);
@@ -242,7 +280,7 @@ await test("GET /wallet/notifications — auth: get notifications", async () => 
 });
 
 await test("GET /wallet/notifications — no auth → 401", async () => {
-  const r = await req("GET", "/wallet/notifications");
+  const r = await noAuthReq("GET", "/wallet/notifications");
   assert.equal(r.status, 401);
 });
 
@@ -266,7 +304,7 @@ let merchantToken, merchantId, merchantId2;
 await test("POST /merchant/create — create merchant account", async () => {
   const r = await req("POST", "/merchant/create", {
     businessName: "SenePay Solutions", businessType: "Fintech",
-    phone: `+221${ts}10`, firstName: "Ousmane", lastName: "Ba", country: "SN",
+    phone: `+221${ts}10`, firstName: "Ousmane", lastName: "Ba", country: "SN", pin: "1234",
   });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.ok(r.body.merchantId,   "merchantId missing");
@@ -286,13 +324,13 @@ await test("POST /merchant/create — missing required fields → 400", async ()
 await test("POST /merchant/create — duplicate phone → 409", async () => {
   const r = await req("POST", "/merchant/create", {
     businessName: "Dup", businessType: "Retail",
-    phone: `+221${ts}10`, firstName: "Dup", lastName: "Merchant", country: "SN",
+    phone: `+221${ts}10`, firstName: "Dup", lastName: "Merchant", country: "SN", pin: "1234",
   });
   assert.equal(r.status, 409);
 });
 
 await test("POST /merchant/login — merchant login", async () => {
-  const r = await req("POST", "/merchant/login", { phone: `+221${ts}10` });
+  const r = await req("POST", "/merchant/login", { phone: `+221${ts}10`, pin: "1234" });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.ok(r.body.token,        "token missing");
   assert.ok(r.body.merchantId,   "merchantId missing");
@@ -302,7 +340,7 @@ await test("POST /merchant/login — merchant login", async () => {
 await test("POST /merchant/create — create second active merchant for payments", async () => {
   const r = await req("POST", "/merchant/create", {
     businessName: "CIV Commerce", businessType: "Retail",
-    phone: `+221${ts}11`, firstName: "Ibrahim", lastName: "Touré", country: "CI",
+    phone: `+221${ts}11`, firstName: "Ibrahim", lastName: "Touré", country: "CI", pin: "1234",
   });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   merchantId2 = r.body.merchantId;
@@ -319,12 +357,17 @@ await test("GET /merchant/profile — auth: get merchant profile", async () => {
 });
 
 await test("GET /merchant/profile — no auth → 401", async () => {
-  const r = await req("GET", "/merchant/profile");
+  const r = await noAuthReq("GET", "/merchant/profile");
   assert.equal(r.status, 401);
 });
 
 await test("POST /merchant/payment — initiate payment (pending merchant)", async () => {
-  const r = await req("POST", "/merchant/payment", {
+  // Payments are initiated by the paying customer (wallet session), not the merchant.
+  // The first wallet session was revoked by the logout test above: open a fresh one.
+  const relogin = await noAuthReq("POST", "/wallet/login", { phone: `+221${ts}01`, pin: "1234" });
+  assert.equal(relogin.status, 200, `payer re-login failed: ${JSON.stringify(relogin.body)}`);
+  walletToken = relogin.body.token;
+  const r = await authReq("POST", "/merchant/payment", walletToken, {
     merchantId, fromWalletId: walletId, amount: 15000, currency: "XOF",
     description: "Product purchase",
   });
@@ -480,7 +523,7 @@ let devToken, devId, apiKey, keyId;
 await test("POST /developer/register — create developer account", async () => {
   const r = await req("POST", "/developer/register", {
     firstName: "Kwame", lastName: "Mensah",
-    phone: `+233${ts}20`, email: "kwame@kowri.dev", country: "GH",
+    phone: `+233${ts}20`, email: "kwame@kowri.dev", country: "GH", pin: "1234",
   });
   assert.equal(r.status, 201, JSON.stringify(r.body));
   assert.ok(r.body.developerId, "developerId missing");
@@ -500,13 +543,13 @@ await test("POST /developer/register — missing fields → 400", async () => {
 
 await test("POST /developer/register — duplicate phone → 409", async () => {
   const r = await req("POST", "/developer/register", {
-    firstName: "X", lastName: "Y", phone: `+233${ts}20`, country: "GH",
+    firstName: "X", lastName: "Y", phone: `+233${ts}20`, country: "GH", pin: "1234",
   });
   assert.equal(r.status, 409);
 });
 
 await test("POST /developer/login — developer login", async () => {
-  const r = await req("POST", "/developer/login", { phone: `+233${ts}20` });
+  const r = await req("POST", "/developer/login", { phone: `+233${ts}20`, pin: "1234" });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.ok(r.body.token,       "token missing");
   assert.ok(r.body.developerId, "developerId missing");
@@ -549,7 +592,7 @@ await test("GET /developer/api-keys — auth: list developer keys", async () => 
 });
 
 await test("GET /developer/api-keys — no auth → 401", async () => {
-  const r = await req("GET", "/developer/api-keys");
+  const r = await noAuthReq("GET", "/developer/api-keys");
   assert.equal(r.status, 401);
 });
 
@@ -592,10 +635,7 @@ await test("POST /developer/api-key/validate — revoked key → 401", async () 
 console.log("\n[KOWRI API Platform — Usage & Analytics]");
 
 await test("POST /developer/usage/track — track API usage", async () => {
-  const { apiKey: freshKey, keyId: freshKeyId } = (await (await fetch(`${BASE}/developer/api-key`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ developerId: devId, name: "Usage Test Key", planTier: "starter" }),
-  })).json());
+  const { keyId: freshKeyId } = (await authReq("POST", "/developer/api-key", devToken, { name: "Usage Test Key", planTier: "starter" })).body;
   const r = await req("POST", "/developer/usage/track", {
     apiKeyId: freshKeyId, endpoint: "/wallet/balance", method: "GET", statusCode: 200, responseMs: 45,
   });
@@ -616,9 +656,9 @@ await test("GET /developer/usage — get usage stats for developer", async () =>
   assert.ok(r.body.period, "period missing");
 });
 
-await test("GET /developer/usage — missing developerId → 400", async () => {
+await test("GET /developer/usage — developer is derived from the session", async () => {
   const r = await req("GET", "/developer/usage");
-  assert.equal(r.status, 400);
+  assert.equal(r.status, 200, JSON.stringify(r.body));
 });
 
 // ─── DEVELOPER — WEBHOOKS ──────────────────────────────────────────────
@@ -644,11 +684,11 @@ await test("POST /developer/webhook — non-http url → 400", async () => {
   assert.equal(r.status, 400);
 });
 
-await test("POST /developer/webhook — unknown developer → 404", async () => {
+await test("POST /developer/webhook — developerId in body is ignored (session wins)", async () => {
   const r = await req("POST", "/developer/webhook", {
-    developerId: "nonexistent", url: "https://example.com/hook",
+    developerId: "nonexistent", url: "https://example.com/hook-ignored-owner",
   });
-  assert.equal(r.status, 404);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
 });
 
 // ─── DEVELOPER — DOCS & SANDBOX ────────────────────────────────────────

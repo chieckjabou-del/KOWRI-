@@ -1,6 +1,11 @@
 import { randomUUID } from "crypto";
 
+import { login, ADMIN_KEY, OPERATOR_PHONE, setKycLevel } from "./test-lib.mjs";
+
 const BASE = "http://localhost:8080/api";
+// Legacy suite predates authentication: run it as a platform operator.
+const OPERATOR = await login(OPERATOR_PHONE);
+const DEFAULT_HEADERS = { Authorization: `Bearer ${OPERATOR.token}`, "X-Admin-Key": ADMIN_KEY };
 const results = [];
 let pass = 0, fail = 0;
 
@@ -14,7 +19,7 @@ function chk(name, ok, detail = "") {
 
 async function get(path) {
   try {
-    const r = await fetch(`${BASE}${path}`);
+    const r = await fetch(`${BASE}${path}`, { headers: DEFAULT_HEADERS });
     const b = await r.json().catch(() => null);
     return { s: r.status, b };
   } catch (e) { return { s: 0, b: null }; }
@@ -24,7 +29,7 @@ async function post(path, body, headers = {}) {
   try {
     const r = await fetch(`${BASE}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
+      headers: { "Content-Type": "application/json", ...DEFAULT_HEADERS, "Idempotency-Key": randomUUID(), ...headers },
       body: JSON.stringify(body),
     });
     const b = await r.json().catch(() => null);
@@ -36,7 +41,7 @@ async function patch(path, body) {
   try {
     const r = await fetch(`${BASE}${path}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...DEFAULT_HEADERS, "Idempotency-Key": randomUUID() },
       body: JSON.stringify(body),
     });
     const b = await r.json().catch(() => null);
@@ -46,7 +51,7 @@ async function patch(path, body) {
 
 async function del(path) {
   try {
-    const r = await fetch(`${BASE}${path}`, { method: "DELETE" });
+    const r = await fetch(`${BASE}${path}`, { method: "DELETE", headers: DEFAULT_HEADERS });
     const b = await r.json().catch(() => null);
     return { s: r.status, b };
   } catch (e) { return { s: 0, b: null }; }
@@ -68,16 +73,31 @@ console.log();
 // ── Seed: create two funded users ─────────────────────────────────────────────
 const ts = Date.now();
 
-const u1 = await post("/users", { phone: `+221700${String(ts).slice(-6)}`, firstName: "Alice", lastName: "Diallo", country: "SN", pin: "1234" });
-const u2 = await post("/users", { phone: `+221711${String(ts).slice(-6)}`, firstName: "Bob",   lastName: "Keita",  country: "SN", pin: "1234" });
+// User 1 is the operator session itself so ownership-checked routes (savings, pools, diaspora…) act on its own wallet.
+const u2Phone = `+221711${String(ts).slice(-6)}`;
+const u2 = await post("/users", { phone: u2Phone, firstName: "Bob",   lastName: "Keita",  country: "SN", pin: "1234" });
 
-const uid1 = u1.b?.id;
+const uid1 = OPERATOR.userId;
 const uid2 = u2.b?.id;
+// Calls that must come from user 2 (their wallet, their policy) override the operator token.
+const U2 = await login(u2Phone);
+// User 2 contributes, invests and insures in one run: lift the KYC-0 monthly ceiling.
+if (uid2) await setKycLevel(uid2, 2);
+const asU2 = { Authorization: `Bearer ${U2.token}` };
+// User 3 is an outsider who buys a tontine position on the secondary market.
+const u3Phone = `+221722${String(ts).slice(-6)}`;
+const u3 = await post("/users", { phone: u3Phone, firstName: "Cheikh", lastName: "Sy", country: "SN", pin: "1234" });
+const U3 = await login(u3Phone);
+const asU3 = { Authorization: `Bearer ${U3.token}` };
+{
+  const w3 = ((await get(`/wallets?userId=${u3.b?.id}&limit=5`)).b?.wallets ?? [])[0];
+  if (w3?.id) await deposit(w3.id, 200000);
+}
 
 let w1, w2;
-if (uid1) {
-  const wr = await post("/wallets", { userId: uid1, currency: "XOF", walletType: "personal" });
-  w1 = wr.b;
+{
+  const mine = (await get(`/wallets?userId=${uid1}&limit=50`)).b?.wallets ?? [];
+  w1 = mine.find((w) => w.currency === "XOF" && w.walletType === "personal") ?? mine[0];
   if (w1?.id) await deposit(w1.id, 5000000);
 }
 if (uid2) {
@@ -118,22 +138,22 @@ chk("P7-1h Schedule has 2 entries", schedule.b?.schedule?.length === 2);
 chk("P7-1i Schedule has frequency", !!schedule.b?.frequency);
 
 const bid = await post(`/community/tontines/${tontineId}/bids`, { userId: uid2, bidAmount: 5000, desiredPosition: 1 });
-chk("P7-1j POST bid → 201", bid.s === 201, `bidAmount=${bid.b?.bidAmount}`);
-chk("P7-1k Bid amount stored", bid.b?.bidAmount === 5000);
+chk("P7-1j POST rotation bid after activation → 400 (auction closes at activation)", bid.s === 400, `status=${bid.s} ${bid.b?.message ?? ""}`);
+chk("P7-1k Bid rejected without persisting", bid.b?.bidAmount === undefined);
 
 const listBids = await get(`/community/tontines/${tontineId}/bids`);
 chk("P7-1l GET bids → 200", listBids.s === 200);
 chk("P7-1m Bids array returned", Array.isArray(listBids.b?.bids));
 
 const collect = await post(`/community/tontines/${tontineId}/collect`, {});
-chk("P7-1n POST collect → 200", collect.s === 200, `collected=${collect.b?.collected}`);
+chk("P7-1n POST collect → 200", collect.s === 200 && collect.b?.collected >= 1, `collected=${collect.b?.collected} failed=${JSON.stringify(collect.b?.failed ?? collect.b?.message)}`);
 
 const payout = await post(`/community/tontines/${tontineId}/payout`, {});
 chk("P7-1o POST payout → 200", payout.s === 200, `round=${payout.b?.round ?? payout.b?.message}`);
 
 const listPos = await post(`/community/tontines/${tontineId}/positions/list`, {
-  sellerId: uid2, payoutOrder: 2, askPrice: 25000, currency: "XOF",
-});
+  payoutOrder: 2, askPrice: 25000, currency: "XOF",
+}, asU2);
 chk("P7-1p POST position listing → 201", listPos.s === 201, `askPrice=${listPos.b?.askPrice}`);
 const listingId = listPos.b?.id;
 
@@ -142,7 +162,7 @@ chk("P7-1q GET position market → 200", market.s === 200);
 chk("P7-1r Market listings array", Array.isArray(market.b?.listings));
 
 if (listingId) {
-  const buy = await post(`/community/tontines/positions/${listingId}/buy`, { buyerId: uid1 });
+  const buy = await post(`/community/tontines/positions/${listingId}/buy`, {}, asU3);
   chk("P7-1s Buy tontine position → 200", buy.s === 200, buy.b?.message ?? buy.b?.error);
 }
 
@@ -211,14 +231,14 @@ chk("P7-3i Has nav field", typeof getPool.b?.nav === "number");
 chk("P7-3j Has investorCount", typeof getPool.b?.investorCount === "number");
 
 const invest = await post(`/pools/investment/${investPoolId}/invest`, {
-  userId: uid2, fromWalletId: w2?.id, amount: 50000,
-});
+  fromWalletId: w2?.id, amount: 50000,
+}, asU2);
 chk("P7-3k POST invest → 201", invest.s === 201, `shares=${invest.b?.shares ?? invest.b?.message}`);
 chk("P7-3l investedAmount = 50000", invest.b?.investedAmount === 50000);
 
 const badInvest = await post(`/pools/investment/${investPoolId}/invest`, {
-  userId: uid2, fromWalletId: w2?.id, amount: 100,
-});
+  fromWalletId: w2?.id, amount: 100,
+}, asU2);
 chk("P7-3m Below min → 400", badInvest.s === 400);
 
 const nav = await get(`/pools/investment/${investPoolId}/nav`);
@@ -249,14 +269,14 @@ chk("P7-4e GET /pools/insurance/:id → 200", getIns.s === 200);
 chk("P7-4f Has claimLimit", typeof getIns.b?.claimLimit === "number");
 
 const joinIns = await post(`/pools/insurance/${insPoolId}/join`, {
-  userId: uid2, walletId: w2?.id,
-});
+  walletId: w2?.id,
+}, asU2);
 chk("P7-4g POST /join → 201", joinIns.s === 201, `policyId=${joinIns.b?.id?.slice(0,8) ?? joinIns.b?.message}`);
 const policyId = joinIns.b?.id;
 
 const dupJoin = await post(`/pools/insurance/${insPoolId}/join`, {
-  userId: uid2, walletId: w2?.id,
-});
+  walletId: w2?.id,
+}, asU2);
 chk("P7-4h Duplicate join → 400", dupJoin.s === 400);
 
 const listPolicies = await get(`/pools/insurance/${insPoolId}/policies`);
@@ -264,8 +284,8 @@ chk("P7-4i GET policies → 200", listPolicies.s === 200);
 chk("P7-4j At least 1 policy", listPolicies.b?.policies?.length >= 1);
 
 const fileClaim = await post(`/pools/insurance/${insPoolId}/claims`, {
-  policyId, userId: uid2, claimAmount: 100000, reason: "Medical emergency",
-});
+  policyId, claimAmount: 100000, reason: "Medical emergency",
+}, asU2);
 chk("P7-4k POST claim → 201", fileClaim.s === 201, `id=${fileClaim.b?.id?.slice(0,8) ?? fileClaim.b?.message}`);
 chk("P7-4l claimAmount = 100000", fileClaim.b?.claimAmount === 100000);
 const claimId = fileClaim.b?.id;
@@ -383,7 +403,7 @@ chk("P7-6k POST /join → 200", joinComm.s === 200);
 const earnings = await post(`/creator/communities/${communityId}/earnings`, {
   transactionAmount: 100000, currency: "XOF",
 });
-chk("P7-6l POST earnings → 200", earnings.s === 200);
+chk("P7-6l POST earnings → 200", earnings.s === 200, earnings.b?.message ?? "");
 chk("P7-6m Creator fee > 0", (earnings.b?.creatorFee ?? 0) > 0);
 chk("P7-6n Platform fee > 0", (earnings.b?.platformFee ?? 0) > 0);
 

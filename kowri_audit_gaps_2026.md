@@ -428,6 +428,33 @@ Voir Partie 0 pour les urgences exploitables. Constats complémentaires (non cri
 - Frais marchand/tontine/diaspora via `feeEngine` (seul le corridor diaspora facture aujourd'hui).
 - File de messages sans reprise au redémarrage, outbox désactivée par défaut (`OUTBOX_ENABLED`), multi-région et simulateur de panne restent des maquettes.
 
+## Vérification — exécution réelle des suites (12 septembre 2026)
+
+Toute la branche a été rejouée contre un PostgreSQL 16 local (schéma poussé par Drizzle, données de seed de l'application) avec le serveur démarré en `NODE_ENV=development` et une `ADMIN_API_KEY` de test.
+
+**Résultats finaux (6 suites, 624 vérifications, 0 échec)**
+
+| Suite | Périmètre | Résultat |
+|---|---|---|
+| `artifacts/api-server/test-integrity.mjs` (nouvelle) | flux d'argent : auth, propriété, devise, idempotence, plafond KYC, screening AML, gel/fermeture, marchand, cycle de vie tontine, marché des positions, épargne | 97 / 97 |
+| `test-phase3.mjs` | neobank (ledger, FX, limites, fraude) | 80 / 80 |
+| `test-phase4.mjs` | infra hyper-scale (sagas, shards, MQ) | 105 / 105 |
+| `test-phase5.mjs` | plateforme globale (multi-région, simulateur, connecteurs) | 116 / 116 |
+| `test-phase6.mjs` (racine) | produits wallet / marchand / développeur | 75 / 75 |
+| `test-phase7.mjs` | finance communautaire (tontines, pools, assurance, diaspora) | 151 / 151 |
+
+**Harnais** — `test-lib.mjs` centralise login, création d'utilisateurs, montée de KYC (soumission + approbation), dépôt d'amorçage et en-têtes admin. Les suites héritées, écrites avant l'authentification, ont été adaptées au nouveau modèle sans en diluer les assertions : session opérateur (utilisateur seed n°1, wallet XOF, KYC 2), `Idempotency-Key` sur toute écriture, appels « sans auth → 401 » réellement sans en-tête, actions au nom de l'utilisateur concerné (payeur, vendeur, enchérisseur) plutôt que de l'opérateur.
+
+**Ce que les suites ont révélé et qui a été corrigé dans le code**
+- **Prélèvement tontine sur le mauvais wallet** : le collecteur prenait le *premier* wallet « personnel » du membre sans regarder la devise ni le solde. Un membre avec deux wallets (ou un wallet XAF en tête) était marqué « cotisation manquée » alors qu'il était solvable. Nouveau `pickDebitWallet()` (`lib/walletSelection.ts`) : wallets actifs dans la devise de la tontine, hors pool, le premier qui couvre le montant (personnel d'abord) ; utilisé pour les cotisations et le paiement des enchères gagnantes.
+- **Taux de change absents au démarrage** : `seedExchangeRates()` amorce 24 paires de référence (EUR/USD/GBP ↔ XOF/XAF, GHS, NGN, KES…) sans écraser les taux déjà présents ; auparavant le corridor diaspora et la normalisation XOF du screening échouaient sur une base neuve.
+- **Erreurs métier du transfert renvoyées en 500** : `CurrencyMismatchError`, `WalletUnavailableError`, `InvalidAmountError` répondent maintenant 400 avec un `code` exploitable.
+- **Marchand inconnu = 403** : les routes produit marchand distinguent désormais 404 (marchand inexistant) et 403 (marchand d'un autre utilisateur).
+
+**Comportements confirmés comme corrects (et non des régressions)** — le plafond mensuel KYC 0 (100 000 XOF) qui bloque un utilisateur trop actif ; la limite horaire de volume qui se déclenche avant la règle AML de structuration (le transfert est refusé dans les deux cas, 429 ou 403) ; la révocation effective d'une session après `logout`.
+
+**Prérequis pour rejouer** — `DATABASE_URL` vers une base vide ou de test, serveur sur le port 8080, `ADMIN_API_KEY=test-admin-key` ; lancer les suites depuis `artifacts/api-server` (sauf `test-phase6.mjs` depuis la racine).
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

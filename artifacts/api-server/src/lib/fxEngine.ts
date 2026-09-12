@@ -43,6 +43,36 @@ export async function getAllRates(): Promise<
   }));
 }
 
+// Reference rates for every corridor the platform serves, loaded once on an empty table.
+// Operators are expected to keep them current through PUT /fx/rates.
+const SEED_RATES: Array<[string, string, number]> = [
+  ["EUR", "XOF", 655.957], ["XOF", "EUR", 1 / 655.957],
+  ["EUR", "XAF", 655.957], ["XAF", "EUR", 1 / 655.957],
+  ["USD", "XOF", 610],     ["XOF", "USD", 0.00164],
+  ["USD", "XAF", 610],     ["XAF", "USD", 0.00164],
+  ["GBP", "XOF", 770],     ["XOF", "GBP", 1 / 770],
+  ["XOF", "XAF", 1],       ["XAF", "XOF", 1],
+  ["XOF", "GHS", 0.012],   ["GHS", "XOF", 1 / 0.012],
+  ["GBP", "GHS", 19.5],    ["GHS", "GBP", 1 / 19.5],
+  ["USD", "NGN", 1500],    ["NGN", "USD", 1 / 1500],
+  ["USD", "KES", 129],     ["KES", "USD", 1 / 129],
+  ["XOF", "NGN", 2.45],    ["NGN", "XOF", 1 / 2.45],
+  ["USD", "EUR", 0.93],    ["EUR", "USD", 1 / 0.93],
+];
+
+export async function seedExchangeRates(): Promise<number> {
+  const existing = new Set((await db.select({ id: exchangeRatesTable.id }).from(exchangeRatesTable)).map((r) => r.id));
+  let seeded = 0;
+  for (const [from, to, rate] of SEED_RATES) {
+    const id = `fx-${from.toLowerCase()}-${to.toLowerCase()}`;
+    if (existing.has(id)) continue;
+    await upsertRate(id, from, to, Number(rate.toFixed(8)));
+    seeded += 1;
+  }
+  if (seeded > 0) console.log(`[FX] Seeded ${seeded} missing reference exchange rates`);
+  return seeded;
+}
+
 export async function upsertRate(
   id: string,
   baseCurrency: string,
