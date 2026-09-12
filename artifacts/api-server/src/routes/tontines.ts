@@ -5,6 +5,8 @@ import { eq, sql, count, and, or, inArray } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/productAuth";
 
+import { authenticate } from "../middleware/auth";
+
 const router = Router();
 
 const VALID_TONTINE_STATUSES = new Set(["pending", "active", "completed", "cancelled"]);
@@ -80,13 +82,7 @@ router.get("/public", async (req, res, next) => {
 });
 
 // ── All routes below require auth ──────────────────────────────────────────────
-router.use(async (req, res, next) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) {
-    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-  }
-  return next();
-});
+router.use(authenticate());
 
 router.get("/", async (req, res, next) => {
   try {

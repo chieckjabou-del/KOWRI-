@@ -2,7 +2,10 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 
+import { requireAdmin } from "../middleware/auth";
+
 const router = Router();
+router.use(requireAdmin);
 
 const REGIONS = [
   {

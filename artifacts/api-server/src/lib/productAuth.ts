@@ -28,7 +28,7 @@ export async function createSession(
   await db.insert(productSessionsTable).values({
     id:        sessionId,
     userId,
-    token,
+    token:     hashToken(token),
     type,
     deviceId:  opts.deviceId,
     ipAddress: opts.ipAddress,
@@ -49,7 +49,7 @@ export async function validateSession(token: string): Promise<{
   const rows = await db.select()
     .from(productSessionsTable)
     .where(and(
-      eq(productSessionsTable.token, token),
+      eq(productSessionsTable.token, hashToken(token)),
       gt(productSessionsTable.expiresAt, now),
     ))
     .limit(1);
@@ -64,8 +64,8 @@ export async function validateSession(token: string): Promise<{
 }
 
 export async function revokeSession(token: string): Promise<boolean> {
-  const result = await db.delete(productSessionsTable)
-    .where(eq(productSessionsTable.token, token));
+  await db.delete(productSessionsTable)
+    .where(eq(productSessionsTable.token, hashToken(token)));
   return true;
 }
 

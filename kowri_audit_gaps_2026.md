@@ -288,5 +288,44 @@ Voir Partie 0 pour les urgences exploitables. Constats complémentaires (non cri
 
 ---
 
+---
+
+# JOURNAL DES CORRECTIONS
+
+## Phase 1 — Sécurité critique (implémentée le 12 septembre 2026)
+
+**Socle d'authentification**
+- `middleware/auth.ts` : `authenticate(types?)` (pose `req.auth`), `requireAdmin` / `isAdminRequest` (clé partagée `ADMIN_API_KEY` via header `X-Admin-Key`, comparaison constant-time, refus si non configurée), `requireSelfOrAdmin`, `walletBelongsToUser`, `merchantBelongsToUser`.
+- `lib/pin.ts` : hashage scrypt salé pour tout nouveau PIN, vérification constant-time, compatibilité transparente avec les anciens hashs SHA-256 (rehash automatique au premier login réussi).
+- `lib/loginRateLimit.ts` : 5 échecs / 15 min par (IP, téléphone) → verrouillage 15 min, appliqué à tous les logins (`/auth/login`, `/users/login`, `/wallet/login`, `/merchant/login`, `/developer/login`).
+- `lib/productAuth.ts` : les tokens de session sont désormais stockés hashés (SHA-256) en base ; **les sessions existantes sont invalidées**.
+- `middleware/idempotency.ts` : clé scopée par utilisateur + chemin complet (`baseUrl`), expiration à 24 h.
+
+**Failles fermées (Partie 0)**
+- S1, S9 + login marchand : vérification effective du PIN sur `/wallet/login`, `/developer/login`, `/merchant/login`.
+- S2, S3, S4 : `/wallet/transfer`, `/wallet/qr/pay`, `/wallet/qr/generate`, `/wallet/balance`, `/wallet/transactions` exigent une session `wallet` **et** la propriété du wallet source.
+- S5 : `GET /users` réservé admin ; `GET /users/:id`, KYC, avatar réservés au propriétaire ou admin (S18).
+- S6, S8, S19 : `admin.ts`, `securityRoute.ts`, `failureSim.ts`, `mq.ts`, `multiRegion.ts`, `sagas.ts` derrière `requireAdmin`.
+- S7, S16 : `webhooks.ts` réservé admin (webhooks « système ») ; colonne `webhooks.owner_id` ajoutée ; `dispatchWebhooks` ne livre un événement qu'aux hooks système ou dont le propriétaire est concerné par l'événement ; validation anti-SSRF (`lib/webhookUrl.ts` : https obligatoire en prod, IP privées/loopback/link-local/metadata refusées, redirections non suivies). Nouveaux endpoints propriétaires : `GET/DELETE /developer/webhooks`, `GET /merchant/webhooks`.
+- S10 : plus aucun PIN stocké en clair (`/wallet/create`, `/merchant/create`, `/developer/register` hashent, PIN 4-6 chiffres obligatoire, plus de PIN par défaut `000000`).
+- S11, S12 : hash salé + comparaison constant-time + rate-limit.
+- S13 : `merchantProduct.ts` — profil, paiements, règlements, stats, liens, factures, QR réservés au marchand propriétaire ; `/merchant/payment` initié par le client (session `wallet` + propriété du wallet source).
+- S14 : `support.ts` — session requise, `userId` dérivé de la session, un utilisateur ne voit que ses tickets, résolution/statut réservés admin.
+- S15 : idempotence scopée par utilisateur avec expiration.
+- Bonus : `/wallet/verify/identity` ne s'auto-élève plus en `kycLevel=1` sans revue — crée un `kyc_records` en `pending` (contournement C2 fermé côté wallet) ; `POST /merchants` utilise l'identité de session ; `req.auth` est maintenant réellement posé sur tous les routeurs (débloque la logique morte des réclamations de solidarité) ; `package.json` de l'api-server réparé (JSON invalide qui empêchait tout build).
+
+**Prérequis opérationnels**
+- Définir `ADMIN_API_KEY` (secret fort) dans l'environnement du backend ; sans lui, toutes les routes admin renvoient 403.
+- Appliquer le schéma (`pnpm --filter @workspace/db push`) pour créer `webhooks.owner_id`.
+- Dashboard admin : la clé est injectée automatiquement sur les appels `/api/*` via `VITE_ADMIN_API_KEY` ou `sessionStorage.kowri_admin_key` (un écran de connexion admin reste à construire en Phase 3 avec le modèle de rôles).
+- Les utilisateurs déjà connectés devront se reconnecter (tokens hashés).
+
+**Reste ouvert pour les phases suivantes**
+- Pas encore de modèle de rôles en base (la clé admin partagée est une mesure transitoire).
+- Les routes tontines/pools/épargne sont authentifiées mais les vérifications de propriété fines (Partie 1, finding 2) sont traitées en Phase 2.
+- Rate-limit et verrou d'idempotence en mémoire : à déplacer vers un store partagé avant de scaler horizontalement.
+
+---
+
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*
 *Nombre total de findings : ~130, répartis en 6 audits indépendants.*

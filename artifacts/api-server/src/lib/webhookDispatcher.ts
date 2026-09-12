@@ -1,6 +1,6 @@
 import { createHmac } from "crypto";
 import { db } from "@workspace/db";
-import { webhooksTable } from "@workspace/db";
+import { webhooksTable, merchantsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 
 export type WebhookEventType =
@@ -11,6 +11,8 @@ export type WebhookEventType =
   | "fraud.alert.triggered"
   | "settlement.started"
   | "settlement.completed";
+
+export const SYSTEM_WEBHOOK_OWNER = "system";
 
 interface WebhookPayload {
   event: string;
@@ -53,6 +55,7 @@ async function sendWebhook(
       },
       body,
       signal: controller.signal,
+      redirect: "manual",
     });
 
     clearTimeout(timer);
@@ -70,6 +73,27 @@ async function sendWebhook(
   }
 }
 
+const OWNER_FIELDS = ["userId", "ownerId", "developerId", "fromUserId", "toUserId", "recipientUserId", "merchantUserId"];
+
+// A hook only receives an event if it is platform-owned or the event is about its owner.
+async function resolveEventOwners(data: Record<string, unknown>): Promise<Set<string>> {
+  const owners = new Set<string>();
+  for (const field of OWNER_FIELDS) {
+    const v = data[field];
+    if (typeof v === "string" && v) owners.add(v);
+  }
+  const merchantId = data.merchantId;
+  if (typeof merchantId === "string" && merchantId) {
+    const [merchant] = await db
+      .select({ userId: merchantsTable.userId })
+      .from(merchantsTable)
+      .where(eq(merchantsTable.id, merchantId))
+      .limit(1);
+    if (merchant) owners.add(merchant.userId);
+  }
+  return owners;
+}
+
 export async function dispatchWebhooks(
   eventType: WebhookEventType | string,
   data: Record<string, unknown>
@@ -82,6 +106,12 @@ export async function dispatchWebhooks(
 
     if (hooks.length === 0) return;
 
+    const owners = await resolveEventOwners(data);
+    const eligible = hooks.filter(
+      (hook) => hook.ownerId === SYSTEM_WEBHOOK_OWNER || (!!hook.ownerId && owners.has(hook.ownerId))
+    );
+    if (eligible.length === 0) return;
+
     const payload: WebhookPayload = {
       event: eventType,
       timestamp: new Date().toISOString(),
@@ -89,7 +119,7 @@ export async function dispatchWebhooks(
     };
 
     setImmediate(() => {
-      for (const hook of hooks) {
+      for (const hook of eligible) {
         sendWebhook(hook.url, hook.secret, eventType, payload).catch((err) =>
           console.error("[Webhook] Dispatch error:", err)
         );

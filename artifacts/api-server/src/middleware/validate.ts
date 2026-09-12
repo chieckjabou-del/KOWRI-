@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 
 const VALID_CURRENCIES       = new Set(["XOF", "XAF"]);
-const VALID_WALLET_STATUSES  = new Set(["active", "suspended", "frozen"]);
+const VALID_WALLET_STATUSES  = new Set(["active", "frozen", "closed"]);
+const VALID_MERCHANT_STATUSES = new Set(["active", "suspended", "pending_approval"]);
 const VALID_TX_STATUSES      = new Set(["pending", "processing", "completed", "failed", "reversed"]);
 const VALID_KYC_STATUSES     = new Set(["pending", "verified", "rejected", "expired"]);
 const VALID_LOAN_STATUSES    = new Set(["pending", "approved", "disbursed", "repaid", "defaulted"]);
@@ -80,4 +81,5 @@ export const globalSanitizer = (req: Request, res: Response, next: NextFunction)
 export {
   VALID_CURRENCIES, VALID_WALLET_STATUSES, VALID_TX_STATUSES,
   VALID_KYC_STATUSES, VALID_LOAN_STATUSES, VALID_USER_STATUSES,
+  VALID_MERCHANT_STATUSES,
 };

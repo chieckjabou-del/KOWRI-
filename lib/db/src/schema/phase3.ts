@@ -24,6 +24,7 @@ export const riskAlertsTable = pgTable("risk_alerts", {
 
 export const webhooksTable = pgTable("webhooks", {
   id:        text("id").primaryKey(),
+  ownerId:   text("owner_id"),
   url:       text("url").notNull(),
   eventType: text("event_type").notNull(),
   secret:    text("secret").notNull(),

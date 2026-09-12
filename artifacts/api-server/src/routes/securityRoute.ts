@@ -13,7 +13,10 @@ import {
   getSecurityPosture,
 } from "../lib/security";
 
+import { requireAdmin } from "../middleware/auth";
+
 const router = Router();
+router.use(requireAdmin);
 
 router.get("/posture", (_req, res) => {
   return res.json(getSecurityPosture());

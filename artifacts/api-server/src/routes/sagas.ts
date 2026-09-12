@@ -3,7 +3,10 @@ import { db } from "@workspace/db";
 import { sagasTable } from "@workspace/db";
 import { eq, desc, count, sql } from "drizzle-orm";
 
+import { requireAdmin } from "../middleware/auth";
+
 const router = Router();
+router.use(requireAdmin);
 
 router.get("/", async (req, res, next) => {
   try {

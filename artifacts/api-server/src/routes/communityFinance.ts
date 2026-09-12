@@ -21,15 +21,11 @@ import { requireAuth } from "../lib/productAuth";
 import { routeParamString } from "../lib/routeParams";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
+import { authenticate } from "../middleware/auth";
+
 const router = Router();
 
-router.use(async (req, res, next) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) {
-    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-  }
-  return next();
-});
+router.use(authenticate());
 
 router.post("/tontines/:tontineId/activate", async (req, res, next) => {
   try {

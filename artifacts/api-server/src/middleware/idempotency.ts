@@ -1,8 +1,10 @@
 import { Request, Response, NextFunction } from "express";
 import { db } from "@workspace/db";
 import { idempotencyKeysTable } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, gt } from "drizzle-orm";
 import { generateId } from "../lib/id";
+
+const IDEMPOTENCY_TTL_MS = 24 * 3600_000;
 
 declare global {
   namespace Express {
@@ -43,7 +45,9 @@ export function checkIdempotency(req: Request, res: Response, next: NextFunction
   const key = req.idempotencyKey;
   if (!key) { next(); return; }
 
-  const endpoint = `${req.method}:${req.route?.path ?? req.path}`;
+  // Scoped per caller so one user's key can never replay another user's cached response.
+  const actor    = req.auth?.userId ?? "anonymous";
+  const endpoint = `${req.method}:${req.baseUrl}${req.route?.path ?? req.path}|u:${actor}`;
   const lockKey  = `${endpoint}::${key}`;
 
   if (inFlight.has(lockKey)) {
@@ -61,7 +65,11 @@ export function checkIdempotency(req: Request, res: Response, next: NextFunction
 
   db.select()
     .from(idempotencyKeysTable)
-    .where(and(eq(idempotencyKeysTable.key, key), eq(idempotencyKeysTable.endpoint, endpoint)))
+    .where(and(
+      eq(idempotencyKeysTable.key, key),
+      eq(idempotencyKeysTable.endpoint, endpoint),
+      gt(idempotencyKeysTable.createdAt, new Date(Date.now() - IDEMPOTENCY_TTL_MS)),
+    ))
     .limit(1)
     .then(([existing]) => {
       if (existing) {

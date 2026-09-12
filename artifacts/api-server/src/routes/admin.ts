@@ -17,7 +17,10 @@ import {
 } from "../lib/killSwitch";
 import { rollback } from "../lib/actionExecutor";
 
+import { requireAdmin } from "../middleware/auth";
+
 const router = Router();
+router.use(requireAdmin);
 
 // ── Reconciliation ────────────────────────────────────────────────────────────
 
