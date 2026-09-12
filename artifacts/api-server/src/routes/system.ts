@@ -11,6 +11,7 @@ import { STATE_MACHINE_DIAGRAM } from "../lib/stateMachine";
 import { tracer } from "../lib/tracer";
 import { messageQueue } from "../lib/messageQueue";
 import { SERVICES } from "../services/index";
+import { experimentalModuleStatus } from "../middleware/experimental";
 
 const router = Router();
 
@@ -151,6 +152,8 @@ router.get("/health", async (_req, res, next) => {
           pendingSettlements: Number(pendingSettlements),
           openFraudAlerts: Number(openAlerts),
         },
+        // Demo modules with no real backing: off in production unless EXPERIMENTAL_MODULES enables them.
+        experimentalModules: experimentalModuleStatus(),
         memory: {
           heapUsedMb: Math.round(mem.heapUsed / 1024 / 1024),
           heapTotalMb: Math.round(mem.heapTotal / 1024 / 1024),

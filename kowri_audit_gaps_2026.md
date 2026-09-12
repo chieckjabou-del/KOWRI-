@@ -478,6 +478,15 @@ Point 2 du plan de direction : la clé admin partagée (`X-Admin-Key`) était le
 
 **Reste ouvert** — MFA sur les comptes opérateurs ; verrouillage anti-force-brute partagé entre instances ; écran de gestion des comptes dans le dashboard (aujourd'hui via l'API).
 
+## Modules maquettes gelés derrière un flag (12 septembre 2026)
+
+Point 3 du plan de direction. Cinq modules démontrent une capacité sans système réel derrière : **règlements partenaires** (statuts sans écriture ledger), **clearing** (netting calculé, rien comptabilisé), **connecteurs de paiement** (réponses simulées), **multi-région** (topologie en mémoire), **simulateur de panne** (injection de fautes dans le processus). Décision : **conserver le code, le garder actif en développement et en test, l'éteindre en production** tant qu'aucun n'est câblé à un système réel.
+
+- `middleware/experimental.ts` : les routeurs `/settlements`, `/clearing`, `/connectors`, `/regions`, `/failure-sim` répondent `503 MODULE_DISABLED` (avec le nom du module et la raison) quand le module est éteint.
+- Variable `EXPERIMENTAL_MODULES` : `all`, `none`, ou liste (`settlements,regions`). Non définie : tout est actif hors production, rien en production.
+- `GET /api/system/health` expose l'état de chaque module pour que le dashboard et l'exploitation voient ce qui est réel.
+- Réactiver un module en production doit s'accompagner d'un câblage réel : écritures ledger pour règlements/clearing, adaptateur fournisseur pour les connecteurs, réplication effective pour les régions ; le simulateur de panne n'a pas vocation à tourner en production.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*
