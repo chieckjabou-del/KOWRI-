@@ -104,21 +104,21 @@ export default function AdminKYC() {
     : records;
 
   const approveMutation = useMutation({
-    mutationFn: ({ userId, kycLevel }: { userId: string; kycLevel: number }) =>
-      fetch(`/api/users/${userId}/kyc`, {
+    mutationFn: ({ recordId }: { recordId: string }) =>
+      fetch(`/api/compliance/kyc/${recordId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "verified", kycLevel }),
+        body: JSON.stringify({ decision: "approve" }),
       }).then((r) => r.json()),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-kyc"] }),
   });
 
   const rejectMutation = useMutation({
-    mutationFn: ({ userId, rejectionReason }: { userId: string; rejectionReason: string }) =>
-      fetch(`/api/users/${userId}/kyc`, {
+    mutationFn: ({ recordId, rejectionReason }: { recordId: string; rejectionReason: string }) =>
+      fetch(`/api/compliance/kyc/${recordId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "rejected", rejectionReason }),
+        body: JSON.stringify({ decision: "reject", rejectionReason }),
       }).then((r) => r.json()),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin-kyc"] });
@@ -145,7 +145,7 @@ export default function AdminKYC() {
         <RejectModal
           record={rejectTarget}
           onClose={() => setRejectTarget(null)}
-          onConfirm={(reason) => rejectMutation.mutate({ userId: rejectTarget.userId, rejectionReason: reason })}
+          onConfirm={(reason) => rejectMutation.mutate({ recordId: rejectTarget.id, rejectionReason: reason })}
           isPending={rejectMutation.isPending}
         />
       )}
@@ -263,7 +263,7 @@ export default function AdminKYC() {
                       <Button size="sm" variant="outline"
                         className="h-8 text-xs rounded-xl border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 hover:text-emerald-400"
                         disabled={approveMutation.isPending}
-                        onClick={() => approveMutation.mutate({ userId: r.userId, kycLevel: r.kycLevel ?? 1 })}>
+                        onClick={() => approveMutation.mutate({ recordId: r.id })}>
                         <CheckCircle className="w-3.5 h-3.5 mr-1" /> Approuver
                       </Button>
                       <Button size="sm" variant="outline"

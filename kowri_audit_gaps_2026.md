@@ -365,6 +365,20 @@ Voir Partie 0 pour les urgences exploitables. Constats complémentaires (non cri
 - Settlements/clearing toujours sans écriture ledger → Phase 5.
 - Frais marchand/tontine (`computeFee`) toujours non appliqués → à décider produit.
 
+## Phase 3 — Machines à états câblées (implémentée le 12 septembre 2026)
+
+**Marchands** — `PATCH /admin/merchants/:id/status` (`active` | `suspended` | `pending_approval`, audité, événement `merchant.status.changed`). Un marchand peut enfin devenir `active` : `POST /merchant/payment` ne renvoie plus systématiquement 403.
+
+**KYC** — `routes/compliance.ts` est réservé aux officiers de conformité (`X-Admin-Key`, les dossiers contiennent des pièces d'identité) ; filtre `status` validé contre l'enum. Nouveau `PATCH /compliance/kyc/:recordId` `{ decision: "approve" | "reject", rejectionReason? }` : transition atomique `pending → verified | rejected` ; l'approbation est **le seul chemin** qui élève `users.kycLevel` (jamais abaissé) et fait passer un compte `pending_kyc` à `active` (audits `kyc.reviewed`, `user.status_changed`, événements `kyc.verified` / `kyc.rejected`). Le dashboard admin utilise ce nouvel endpoint (il appelait une route qui n'existait pas).
+
+**Wallets** — `PATCH /admin/wallets/:id/status` (`active` | `frozen` | `closed`, fermeture refusée tant que le solde n'est pas nul, réouverture d'un wallet fermé impossible, audité). Surtout, **le grand livre respecte enfin le statut** : `walletService` verrouille `status` avec la devise et refuse tout débit d'un wallet `frozen` et tout mouvement sur un wallet `closed` (`WalletUnavailableError`) — dépôt, transfert, transfert FX et retrait inclus.
+
+**Tontines** — après chaque payout (classique ou hybride), `scheduleNextRound` recrée le job `tontine_contribution` pour le round suivant (sans doublon si un job est déjà en attente) ; au dernier round la tontine passe en `completed` avec audit et événement `tontine.completed`. **La rotation automatique ne se fige plus après le round 1.** Clés d'idempotence sur les payouts (`tontine-payout:{id}:r{n}`, `tontine-hybrid:{id}:r{n}:rotation|investment|yield:{membre}`), wallets destinataires choisis dans la devise de la tontine, `hybrid` accepté par la route de création.
+
+**Reste ouvert**
+- Modèle de rôles en base (la clé admin partagée reste transitoire) et écran de connexion admin dans le dashboard.
+- Quitter/annuler une tontine active, résolution des enchères du marché secondaire, contrat d'événements des notifications → Phase 5.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

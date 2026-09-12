@@ -4,8 +4,11 @@ import { patchTontineMembers } from "../lib/seed";
 import { audit } from "../lib/auditLogger";
 import { generateId } from "../lib/id";
 import { db } from "@workspace/db";
-import { feeConfigTable, type FeeOperationType, type FeeUserTier } from "@workspace/db";
+import { feeConfigTable, merchantsTable, walletsTable, type FeeOperationType, type FeeUserTier } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { getWalletBalance } from "../lib/walletService";
+import { routeParamString } from "../lib/routeParams";
+import { eventBus } from "../lib/eventBus";
 import {
   getAllSwitches,
   getSwitch,
@@ -98,6 +101,90 @@ router.post("/patch-tontines", async (req, res, next) => {
       metadata: result,
     });
     return res.json(result);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── Merchant onboarding ───────────────────────────────────────────────────────
+// PATCH /admin/merchants/:merchantId/status — approve, suspend or reset a merchant
+
+const MERCHANT_STATUSES = new Set(["active", "suspended", "pending_approval"]);
+
+router.patch("/merchants/:merchantId/status", async (req, res, next) => {
+  try {
+    const merchantId = routeParamString(req, "merchantId")!;
+    const { status, reason, operator = "admin" } = req.body ?? {};
+    if (!MERCHANT_STATUSES.has(status)) {
+      return res.status(400).json({ error: `status must be one of: ${[...MERCHANT_STATUSES].join(", ")}` });
+    }
+
+    const [existing] = await db.select().from(merchantsTable).where(eq(merchantsTable.id, merchantId));
+    if (!existing) return res.status(404).json({ error: "Merchant not found" });
+    if (existing.status === status) return res.json({ merchant: existing, changed: false });
+
+    const [merchant] = await db.update(merchantsTable)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(merchantsTable.id, merchantId))
+      .returning();
+
+    await audit({
+      action: "merchant.status_changed",
+      entity: "merchant",
+      entityId: merchantId,
+      actor: String(operator),
+      metadata: { from: existing.status, to: status, reason: reason ?? null, userId: existing.userId },
+    });
+    await eventBus.publish("merchant.status.changed", { merchantId, userId: existing.userId, from: existing.status, to: status, reason: reason ?? null });
+
+    return res.json({ merchant: { ...merchant, totalRevenue: Number(merchant.totalRevenue) }, changed: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── Wallet risk actions ───────────────────────────────────────────────────────
+// PATCH /admin/wallets/:walletId/status — freeze (no debits), reactivate, or close (requires zero balance)
+
+const WALLET_STATUSES = new Set(["active", "frozen", "closed"]);
+
+router.patch("/wallets/:walletId/status", async (req, res, next) => {
+  try {
+    const walletId = routeParamString(req, "walletId")!;
+    const { status, reason, operator = "admin" } = req.body ?? {};
+    if (!WALLET_STATUSES.has(status)) {
+      return res.status(400).json({ error: `status must be one of: ${[...WALLET_STATUSES].join(", ")}` });
+    }
+
+    const [existing] = await db.select().from(walletsTable).where(eq(walletsTable.id, walletId));
+    if (!existing) return res.status(404).json({ error: "Wallet not found" });
+    if (existing.status === "closed" && status !== "closed") {
+      return res.status(409).json({ error: "A closed wallet cannot be reopened" });
+    }
+    if (existing.status === status) return res.json({ wallet: existing, changed: false });
+
+    if (status === "closed") {
+      const balance = await getWalletBalance(walletId);
+      if (balance > 0) {
+        return res.status(409).json({ error: `Wallet still holds ${balance} ${existing.currency}; move the funds out before closing` });
+      }
+    }
+
+    const [wallet] = await db.update(walletsTable)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(walletsTable.id, walletId))
+      .returning();
+
+    await audit({
+      action: "wallet.status_changed",
+      entity: "wallet",
+      entityId: walletId,
+      actor: String(operator),
+      metadata: { from: existing.status, to: status, reason: reason ?? null, userId: existing.userId },
+    });
+    await eventBus.publish("wallet.status.changed", { walletId, userId: existing.userId, from: existing.status, to: status, reason: reason ?? null });
+
+    return res.json({ wallet: { ...wallet, balance: Number(wallet.balance), availableBalance: Number(wallet.availableBalance) }, changed: true });
   } catch (err) {
     return next(err);
   }

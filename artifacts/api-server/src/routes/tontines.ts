@@ -10,7 +10,7 @@ import { authenticate } from "../middleware/auth";
 const router = Router();
 
 const VALID_TONTINE_STATUSES = new Set(["pending", "active", "completed", "cancelled"]);
-const VALID_TONTINE_TYPES    = new Set(["classic", "investment", "project", "solidarity", "business", "diaspora", "yield", "growth"]);
+const VALID_TONTINE_TYPES    = new Set(["classic", "investment", "project", "solidarity", "business", "diaspora", "yield", "growth", "hybrid"]);
 
 // ── Public discovery — no auth required ────────────────────────────────────────
 router.get("/public", async (req, res, next) => {

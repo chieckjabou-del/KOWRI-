@@ -27,6 +27,15 @@ export class InvalidAmountError extends Error {
   }
 }
 
+export class WalletUnavailableError extends Error {
+  constructor(walletId: string, status: string, direction: "debit" | "credit") {
+    super(`Wallet ${walletId} is ${status} and cannot be ${direction === "debit" ? "debited" : "credited"}`);
+    this.name = "WalletUnavailableError";
+  }
+}
+
+interface LockedWallet { currency: string; status: string }
+
 function assertPositiveAmount(amount: number): void {
   if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
     throw new InvalidAmountError(amount);
@@ -52,22 +61,26 @@ async function ledgerBalance(client: DbClient, walletId: string, currency: strin
   return Number(result?.balance ?? 0);
 }
 
-async function lockWallets(tx: DbClient, walletIds: string[]): Promise<Map<string, string>> {
+async function lockWallets(tx: DbClient, walletIds: string[]): Promise<Map<string, LockedWallet>> {
   const ids = [...new Set(walletIds)].sort();
   const placeholders = sql.join(ids.map((id) => sql`${id}`), sql`, `);
   const result = await tx.execute(
-    sql`SELECT id, currency FROM wallets WHERE id IN (${placeholders}) ORDER BY id FOR UPDATE`
+    sql`SELECT id, currency, status FROM wallets WHERE id IN (${placeholders}) ORDER BY id FOR UPDATE`
   );
-  const rows = ((result as any).rows ?? []) as Array<{ id: string; currency: string }>;
-  const map = new Map<string, string>();
-  for (const row of rows) map.set(row.id, row.currency);
+  const rows = ((result as any).rows ?? []) as Array<{ id: string; currency: string; status: string }>;
+  const map = new Map<string, LockedWallet>();
+  for (const row of rows) map.set(row.id, { currency: row.currency, status: row.status });
   return map;
 }
 
-function assertWalletCurrency(currencies: Map<string, string>, walletId: string, currency: string): void {
-  const actual = currencies.get(walletId);
-  if (!actual) throw new Error(`Wallet ${walletId} not found`);
-  if (actual !== currency) throw new CurrencyMismatchError(walletId, actual, currency);
+// A frozen wallet can still receive funds but never release them; a closed wallet does neither.
+function assertWalletUsable(wallets: Map<string, LockedWallet>, walletId: string, currency: string, direction: "debit" | "credit"): void {
+  const wallet = wallets.get(walletId);
+  if (!wallet) throw new Error(`Wallet ${walletId} not found`);
+  if (wallet.currency !== currency) throw new CurrencyMismatchError(walletId, wallet.currency, currency);
+  if (wallet.status === "closed" || (wallet.status === "frozen" && direction === "debit")) {
+    throw new WalletUnavailableError(walletId, wallet.status, direction);
+  }
 }
 
 export async function getWalletBalance(walletId: string): Promise<number> {
@@ -125,8 +138,8 @@ export async function processDeposit(params: {
   let newBalanceAfterDeposit: number | undefined;
 
   await db.transaction(async (tx) => {
-    const currencies = await lockWallets(tx as any, [walletId]);
-    assertWalletCurrency(currencies, walletId, currency);
+    const locked = await lockWallets(tx as any, [walletId]);
+    assertWalletUsable(locked, walletId, currency, "credit");
 
     assertValidTransition("pending", "processing");
 
@@ -289,9 +302,9 @@ export async function processTransfer(params: {
   const now = new Date();
 
   await db.transaction(async (tx) => {
-    const currencies = await lockWallets(tx as any, [fromWalletId, toWalletId]);
-    assertWalletCurrency(currencies, fromWalletId, currency);
-    assertWalletCurrency(currencies, toWalletId, currency);
+    const locked = await lockWallets(tx as any, [fromWalletId, toWalletId]);
+    assertWalletUsable(locked, fromWalletId, currency, "debit");
+    assertWalletUsable(locked, toWalletId, currency, "credit");
 
     const availableBal = await ledgerBalance(tx as any, fromWalletId, currency);
     if (availableBal < amount) throw new Error("Insufficient funds");
@@ -416,9 +429,9 @@ export async function processFxTransfer(params: {
   const start = Date.now();
 
   await db.transaction(async (tx) => {
-    const currencies = await lockWallets(tx as any, [fromWalletId, toWalletId]);
-    assertWalletCurrency(currencies, fromWalletId, fromCurrency);
-    assertWalletCurrency(currencies, toWalletId, toCurrency);
+    const locked = await lockWallets(tx as any, [fromWalletId, toWalletId]);
+    assertWalletUsable(locked, fromWalletId, fromCurrency, "debit");
+    assertWalletUsable(locked, toWalletId, toCurrency, "credit");
 
     const availableBal = await ledgerBalance(tx as any, fromWalletId, fromCurrency);
     if (availableBal < totalDebit) throw new Error("Insufficient funds");
@@ -507,8 +520,8 @@ export async function processWithdrawal(params: {
   const now  = new Date();
 
   await db.transaction(async (tx) => {
-    const currencies = await lockWallets(tx as any, [walletId]);
-    assertWalletCurrency(currencies, walletId, currency);
+    const locked = await lockWallets(tx as any, [walletId]);
+    assertWalletUsable(locked, walletId, currency, "debit");
 
     const availableBal = await ledgerBalance(tx as any, walletId, currency);
     if (availableBal < amount) throw new Error("Insufficient funds");
