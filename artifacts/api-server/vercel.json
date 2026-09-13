@@ -1,0 +1,4 @@
+{
+  "installCommand": "npx --yes pnpm@10.33.0 install --no-frozen-lockfile",
+  "buildCommand": "npx --yes pnpm@10.33.0 --filter @workspace/api-server run build"
+}
