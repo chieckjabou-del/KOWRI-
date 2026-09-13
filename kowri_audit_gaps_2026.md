@@ -538,6 +538,21 @@ Constats M3, M4, M6 et M10 de `kowri_audit_v2_2026.md`.
 
 **Reste ouvert** — Content-Security-Policy sur les front-ends servis par l'API (nécessite de retirer les styles et scripts en ligne des bundles).
 
+## Audit v2, chantier E — données et validation (13 septembre 2026)
+
+Constats M5, M7, M8, M11 et M12 de `kowri_audit_v2_2026.md` ; M9 différé (voir plus bas).
+
+- **Filtre d'entrée** (`middleware/validate.ts`) : l'apostrophe et le point-virgule isolés ne sont plus rejetés (les noms « N'Guessan », « D'Almeida » passent) ; le filtre, qui n'est qu'une défense en profondeur derrière les requêtes paramétrées, ne vise plus que les charges utiles réelles (marqueurs de commentaire, instructions empilées, `UNION SELECT`, tautologies `' OR '1'='1`, procédures `xp_`) et les balises ou gestionnaires d'événements HTML.
+- **Vérification du téléphone à l'inscription** (`lib/phoneVerification.ts`, `lib/sms.ts`, `routes/auth.ts`, table `phone_verifications`, migration `0002`) : `POST /auth/otp/request` envoie un code à 6 chiffres (10 min, 5 essais, 5 demandes par heure et par numéro, code haché en base), `POST /auth/otp/verify` rend un jeton de vérification (15 min, haché, consommé une seule fois), et les quatre routes d'inscription (`/users`, `/wallet/create`, `/merchant/create`, `/developer/register`) l'exigent quand `PHONE_VERIFICATION=required` (défaut en production ; `optional` ailleurs, où un jeton fourni est tout de même validé). Envoi par `SMS_PROVIDER` : `log` (développement), `http` (POST JSON vers n'importe quelle passerelle, `SMS_WEBHOOK_URL` + jeton), `none`. Hors production le code est renvoyé dans la réponse (`devCode`) pour les tests. `GET /auth/otp/policy` expose le mode aux clients.
+- **Purge des sessions** (`lib/sessionCleanup.ts`) : tâche quotidienne sous verrou inter-instances qui supprime les sessions produit et opérateur expirées ou révoquées depuis plus de `SESSION_RETENTION_DAYS` (7) et les codes de vérification de plus d'un jour ; première passe 30 s après le démarrage.
+- **Documents KYC chiffrés au repos** (`lib/fieldCrypto.ts`) : les quatre champs image (pièce, selfie, justificatif, second document) sont chiffrés en AES-256-GCM avec `KYC_ENCRYPTION_KEY` (obligatoire en production, dérivée de `SIGNING_SECRET` en développement) avant insertion, préfixe `enc:v1:` ; vérifié en base (préfixe présent). Déchiffrement uniquement sur `GET /compliance/kyc/:id` pour le réviseur, avec journal d'audit `kyc.documents_viewed` ; la lecture par l'utilisateur, la liste de conformité et la réponse de revue n'embarquent jamais les documents. Les lignes anciennes en clair restent lisibles jusqu'à resoumission.
+- **Reprise sur interblocage** (`lib/walletService.ts`) : les cinq transactions du grand livre passent par `withDeadlockRetry` (jusqu'à 3 tentatives sur `40P01`/`40001`), auparavant défini mais jamais utilisé.
+- **Annuaire** : `GET /users` exige explicitement `users.read`.
+- La revue des secrets au démarrage signale `KYC_ENCRYPTION_KEY` absente (bloquant en production), `PHONE_VERIFICATION` non requise en production, et l'absence de fournisseur SMS quand la vérification est requise (bloquant : personne ne pourrait s'inscrire).
+- Bloc 16 de `test-integrity.mjs` (13 vérifications) : politique exposée, demande de code, code faux, jeton bidon, inscription avec jeton et apostrophes, réutilisation du jeton refusée, charges d'injection toujours refusées, documents lisibles par le réviseur seul. Suites rejouées : 725 vérifications, 0 échec ; 339 routes sondées, 0 ouverte hors liste publique.
+
+**M9 différé, avec plan** — ajouter les clés étrangères manquantes exige d'abord un audit des lignes orphelines sur la base de production (un `ALTER TABLE … ADD FOREIGN KEY` échoue s'il en reste) ; à faire en migration dédiée avec script de détection. Le solde par wallet reste calculé par somme du grand livre ; la table `ledger_balance_summary` maintenue par déclencheur couvre le total global, la déclinaison par wallet est le pas suivant quand le volume l'imposera.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

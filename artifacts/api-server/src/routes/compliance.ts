@@ -7,6 +7,7 @@ import { validateQueryParams, VALID_KYC_STATUSES } from "../middleware/validate"
 import { routeParamString } from "../lib/routeParams";
 import { audit } from "../lib/auditLogger";
 import { eventBus } from "../lib/eventBus";
+import { decryptField } from "../lib/fieldCrypto";
 
 const router = Router();
 
@@ -68,7 +69,15 @@ router.get("/kyc/:recordId", async (req, res, next) => {
     const recordId = routeParamString(req, "recordId")!;
     const [record] = await db.select().from(kycRecordsTable).where(eq(kycRecordsTable.id, recordId));
     if (!record) return res.status(404).json({ error: "KYC record not found" });
-    return res.json({ record });
+    // Documents are decrypted here only, for the reviewer; every other read omits them.
+    await audit({ action: "kyc.documents_viewed", entity: "kyc_record", entityId: recordId, actor: req.admin?.email ?? "legacy-key", metadata: { userId: record.userId } });
+    return res.json({ record: {
+      ...record,
+      documentFront:  decryptField(record.documentFront),
+      selfie:         decryptField(record.selfie),
+      proofOfAddress: decryptField(record.proofOfAddress),
+      secondDocument: decryptField(record.secondDocument),
+    } });
   } catch (err) {
     return next(err);
   }
@@ -134,8 +143,9 @@ router.patch("/kyc/:recordId", async (req, res, next) => {
       userId: record.userId, recordId, kycLevel: record.kycLevel, rejectionReason: rejectionReason ?? null,
     });
 
+    const { documentFront: _df, selfie: _sf, proofOfAddress: _pa, secondDocument: _sd, ...reviewed } = result.updated;
     return res.json({
-      record: result.updated,
+      record: reviewed,
       user: result.user ? { id: result.user.id, status: result.user.status, kycLevel: result.user.kycLevel } : undefined,
     });
   } catch (err: any) {

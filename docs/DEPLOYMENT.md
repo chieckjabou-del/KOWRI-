@@ -33,7 +33,12 @@ Réseau et exploitation :
 - Arrêt : le serveur draine les requêtes en cours sur `SIGTERM` (délai `SHUTDOWN_TIMEOUT_S`, 15 s par défaut) ; configurer un délai d'arrêt au moins équivalent côté hébergeur.
 - Plusieurs instances : les tâches planifiées se coordonnent par verrou consultatif PostgreSQL, il est donc possible de lancer l'API en plusieurs réplicas sans double exécution des jobs.
 
-Migrations : `pnpm --filter @workspace/db migrate` (ou `push` sur une base de développement).
+Migrations : `pnpm --filter @workspace/db migrate` (ou `push` sur une base de développement). Trois migrations à ce jour : `0000` (schéma initial), `0001` (comptes opérateurs), `0002` (codes de vérification de téléphone).
+
+Inscription et données personnelles :
+
+- `PHONE_VERIFICATION=required` (défaut en production) impose un code SMS avant toute création de compte ; brancher une passerelle avec `SMS_PROVIDER=http`, `SMS_WEBHOOK_URL` (reçoit un POST JSON `{to, message}`) et `SMS_WEBHOOK_TOKEN`. Sans fournisseur, le démarrage en production est refusé.
+- `KYC_ENCRYPTION_KEY` (32 octets hex, `openssl rand -hex 32`) chiffre les documents d'identité en base. Obligatoire en production ; la perdre rend les documents déjà stockés illisibles, la conserver dans le gestionnaire de secrets au même titre que `SIGNING_SECRET`.
 
 Trésorerie plateforme : les prêts sont décaissés depuis les wallets de l'utilisateur système `kowri_treasury` (un par devise, créés à la demande) et remboursés vers eux. En production ces wallets démarrent à zéro : lister leurs identifiants avec `GET /api/admin/treasury`, puis les approvisionner avec `POST /api/wallets/:id/deposit` (permission `ledger.write`). Tant qu'une devise n'est pas approvisionnée, les demandes de prêt dans cette devise répondent `503 TREASURY_LIQUIDITY`. Hors production, XOF et XAF sont amorcés automatiquement au premier démarrage.
 

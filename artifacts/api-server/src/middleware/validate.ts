@@ -9,8 +9,12 @@ const VALID_KYC_STATUSES     = new Set(["pending", "verified", "rejected", "expi
 const VALID_LOAN_STATUSES    = new Set(["pending", "approved", "disbursed", "repaid", "defaulted"]);
 const VALID_USER_STATUSES    = new Set(["active", "suspended", "pending_kyc"]);
 
-const XSS_PATTERN  = /<[^>]*>|javascript:|on\w+\s*=/i;
-const SQLI_PATTERN = /('|--|;|\/\*|\*\/|xp_|UNION\s+SELECT|DROP\s+TABLE|INSERT\s+INTO|DELETE\s+FROM)/i;
+// Defence in depth only: every query is parameterised through Drizzle, so this
+// filter targets injection *payloads* (comment markers, stacked statements,
+// classic tautologies) and must not reject ordinary text. Apostrophes are legal
+// input — N'Guessan, D'Almeida and O'Neil are real names.
+const XSS_PATTERN  = /<\s*\/?\s*(script|iframe|img|svg|object|embed|link|meta|style|body|form)\b|javascript:|\bon(load|error|click|mouseover|focus|blur)\s*=/i;
+const SQLI_PATTERN = /(--\s|\/\*|\*\/|;\s*(drop|delete|insert|update|alter|truncate|exec|xp_)\b|\bunion\s+(all\s+)?select\b|\bdrop\s+table\b|\binsert\s+into\b|\bdelete\s+from\b|'\s*(or|and)\s+['\d]+\s*=\s*['\d]+|\bxp_\w+)/i;
 
 function isMalicious(value: string): boolean {
   return XSS_PATTERN.test(value) || SQLI_PATTERN.test(value);

@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { consumeVerification } from "../lib/phoneVerification";
 import { db } from "@workspace/db";
 import { usersTable, walletsTable, kycRecordsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -60,6 +61,8 @@ router.post("/create", async (req, res) => {
   try {
     const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
     if (existing[0]) return res.status(409).json({ error: "Phone already registered" });
+    const gate = await consumeVerification(String(phone), req.body?.verificationToken);
+    if (gate) return res.status(gate.status).json({ error: true, code: gate.code, message: gate.message });
     const userId   = generateId("usr");
     const walletId = generateId("wal");
     await db.insert(usersTable).values({

@@ -18,6 +18,8 @@ const PUBLIC = [
   ["POST", /^\/users$/],                       // registration
   ["POST", /^\/users\/login$/],
   ["POST", /^\/auth\/login$/],
+  ["GET",  /^\/auth\/otp\/policy$/],           // phone verification before registration
+  ["POST", /^\/auth\/otp\/(request|verify)$/],
   ["POST", /^\/wallet\/(login|create|logout)$/], // logout without a token is a no-op
   ["POST", /^\/merchant\/(login|create)$/],
   ["POST", /^\/developer\/(register|login)$/],

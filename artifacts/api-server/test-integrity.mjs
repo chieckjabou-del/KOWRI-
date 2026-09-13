@@ -620,5 +620,44 @@ console.log("\n11. Admin accounts and roles");
   chk("15f malformed JSON body → 400 MALFORMED_JSON", malformed.status === 400 && (await malformed.json().catch(() => ({}))).code === "MALFORMED_JSON", `status=${malformed.status}`);
 }
 
+// ── 16. Registration verification, input filter, KYC documents at rest ───────
+{
+  const admin = await adminOpts();
+  const policy = await get("/auth/otp/policy");
+  chk("16a verification policy exposed", policy.s === 200 && ["required", "optional"].includes(policy.b?.phoneVerification), `policy=${policy.b?.phoneVerification}`);
+
+  const phone = uniquePhone();
+  const req1 = await post("/auth/otp/request", { phone });
+  chk("16b OTP requested (dev code returned outside production)", req1.s === 200 && req1.b?.sent === true && /^\d{6}$/.test(req1.b?.devCode ?? ""), `status=${req1.s} ${JSON.stringify(req1.b)}`);
+  const wrong = await post("/auth/otp/verify", { phone, code: "000000" });
+  chk("16c wrong code → 401 OTP_INVALID", wrong.s === 401 && wrong.b?.code === "OTP_INVALID", `status=${wrong.s} code=${wrong.b?.code}`);
+  const badToken = await post("/users", { phone, firstName: "Otp", lastName: "User", country: "CI", pin: "1234", verificationToken: "pv_bogus" });
+  chk("16d registration with a bogus token → 403 PHONE_VERIFICATION_INVALID", badToken.s === 403 && badToken.b?.code === "PHONE_VERIFICATION_INVALID", `status=${badToken.s} code=${badToken.b?.code}`);
+  const ok = await post("/auth/otp/verify", { phone, code: req1.b?.devCode });
+  chk("16e correct code → verification token", ok.s === 200 && typeof ok.b?.verificationToken === "string", `status=${ok.s}`);
+  const reg = await post("/users", { phone, firstName: "N'Guessan", lastName: "D'Almeida", country: "CI", pin: "1234", verificationToken: ok.b?.verificationToken });
+  chk("16f registration with the token succeeds, apostrophes accepted in names", reg.s === 201 && reg.b?.firstName === "N'Guessan" && reg.b?.lastName === "D'Almeida", `status=${reg.s} ${JSON.stringify(reg.b).slice(0, 160)}`);
+  const reuse = await post("/users", { phone: uniquePhone(), firstName: "Re", lastName: "Use", country: "CI", pin: "1234", verificationToken: ok.b?.verificationToken });
+  chk("16g the token cannot be reused for another number → 403", reuse.s === 403, `status=${reuse.s}`);
+  const payload = await get(`/users?limit=5&status=active'%20OR%20'1'='1`, admin);
+  chk("16h a classic injection payload is still refused", payload.s === 400, `status=${payload.s}`);
+  const comment = await get(`/users?limit=5&search=x--%20y`, admin);
+  chk("16i SQL comment marker is still refused", comment.s === 400, `status=${comment.s}`);
+
+  const owner = await login(phone);
+  const submit = await owner.post(`/users/${owner.userId}/kyc`, {
+    kycLevel: 1, documentType: "national_id", documentNumber: "CI-777", fullName: "N'Guessan D'Almeida", dateOfBirth: "1990-01-01",
+    documentFront: "data:image/png;base64,FRONT", selfie: "data:image/png;base64,SELFIE",
+  });
+  chk("16j KYC with documents submitted", submit.s === 201, `status=${submit.s} ${submit.b?.message ?? ""}`);
+  const recordId = submit.b?.record?.id;
+  const stored = await get(`/compliance/kyc/${recordId}`, admin);
+  chk("16k reviewer reads the documents in clear", stored.s === 200 && stored.b?.record?.documentFront === "data:image/png;base64,FRONT" && stored.b?.record?.selfie === "data:image/png;base64,SELFIE", `status=${stored.s}`);
+  const mine = await owner.get(`/users/${owner.userId}/kyc`);
+  chk("16l the user's own KYC read never carries the documents", mine.s === 200 && mine.b?.record && !("documentFront" in mine.b.record) && !("selfie" in mine.b.record), `keys=${Object.keys(mine.b?.record ?? {}).join(",")}`);
+  const reviewed = await patch(`/compliance/kyc/${recordId}`, { decision: "approve" }, admin);
+  chk("16m the review response omits the documents", reviewed.s === 200 && !("documentFront" in (reviewed.b?.record ?? {})), `status=${reviewed.s}`);
+}
+
 const { fail } = summary("INTEGRITY SUITE");
 process.exit(fail ? 1 : 0);

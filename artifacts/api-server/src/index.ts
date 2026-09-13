@@ -9,6 +9,7 @@ import { logIncident }                                    from "./lib/incidentSt
 import { getPendingJobs, runContributionCycle, runPayoutCycle, distributeToTargets, runHybridCycle, recoverStuckPayouts } from "./lib/tontineScheduler";
 import { runDailyReconciliation, runMonthlyAchievements } from "./lib/liquidityEngine";
 import { withInstanceLock }                               from "./lib/instanceLock";
+import { purgeExpiredSessions }                           from "./lib/sessionCleanup";
 import { db, pool }                                       from "@workspace/db";
 import { tontinePositionListingsTable, schedulerJobsTable } from "@workspace/db";
 import { eq, and, lt, isNotNull }                         from "drizzle-orm";
@@ -156,6 +157,12 @@ const server = app.listen(port, () => {
   startOutboxWorker();
   startTontineScheduler();
   startAgentScheduler();
+  // Daily housekeeping: expired/revoked sessions and stale verification codes.
+  every(24 * 60 * 60 * 1000, async () => {
+    try { await withInstanceLock("session_cleanup", async () => { await purgeExpiredSessions(); }); }
+    catch (err: any) { logIncident({ type: "housekeeping", action: "session_cleanup", result: err?.message ?? "unknown" }); }
+  });
+  setTimeout(() => { void withInstanceLock("session_cleanup", async () => { await purgeExpiredSessions(); }).catch(() => undefined); }, 30_000).unref();
   // Hydrate kill switch cache from DB before starting autopilot so the first
   // cycle sees operator-set state rather than the in-memory defaults.
   initKillSwitches()

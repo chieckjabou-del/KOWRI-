@@ -12,6 +12,12 @@ import { guard } from "./killSwitch";
 import { computeFee } from "./feeEngine";
 import { toReferenceCurrency, REFERENCE_CURRENCY } from "./fxEngine";
 
+// Every ledger transaction is retried on deadlock/serialization failure; the
+// callback only contains writes that are rolled back with the transaction, so a
+// retry never double-posts.
+const runTx: typeof db.transaction = ((fn: Parameters<typeof db.transaction>[0], cfg?: Parameters<typeof db.transaction>[1]) =>
+  withDeadlockRetry(() => db.transaction(fn, cfg))) as typeof db.transaction;
+
 type DbClient = typeof db;
 
 export class CurrencyMismatchError extends Error {
@@ -142,7 +148,7 @@ export async function processDeposit(params: {
 
   let newBalanceAfterDeposit: number | undefined;
 
-  await db.transaction(async (tx) => {
+  await runTx(async (tx) => {
     const locked = await lockWallets(tx as any, [walletId]);
     assertWalletUsable(locked, walletId, currency, "credit");
 
@@ -324,7 +330,7 @@ export async function processTransfer(params: {
   // Screening runs before any lock or write: a blocked transfer never touches the ledger.
   await assertTransactionAllowed({ walletId: fromWalletId, transactionId: txId, amount, currency, kind: "transfer", internal: skipFraudCheck });
 
-  await db.transaction(async (tx) => {
+  await runTx(async (tx) => {
     const locked = await lockWallets(tx as any, [fromWalletId, toWalletId]);
     assertWalletUsable(locked, fromWalletId, currency, "debit");
     assertWalletUsable(locked, toWalletId, currency, "credit");
@@ -445,7 +451,7 @@ export async function processFxTransfer(params: {
 
   await assertTransactionAllowed({ walletId: fromWalletId, transactionId: txId, amount, currency: fromCurrency, kind: "fx_transfer" });
 
-  await db.transaction(async (tx) => {
+  await runTx(async (tx) => {
     const locked = await lockWallets(tx as any, [fromWalletId, toWalletId]);
     assertWalletUsable(locked, fromWalletId, fromCurrency, "debit");
     assertWalletUsable(locked, toWalletId, toCurrency, "credit");
@@ -539,7 +545,7 @@ export async function processWithdrawal(params: {
 
   await assertTransactionAllowed({ walletId, transactionId: txId, amount, currency, kind: "withdrawal", internal });
 
-  await db.transaction(async (tx) => {
+  await runTx(async (tx) => {
     const locked = await lockWallets(tx as any, [walletId]);
     assertWalletUsable(locked, walletId, currency, "debit");
 
@@ -674,7 +680,7 @@ export async function reverseTransaction(params: {
   const now = new Date();
   const key = idempotencyKey ?? `reversal:${transactionId}`;
 
-  await db.transaction(async (tx) => {
+  await runTx(async (tx) => {
     const wallets = [original.fromWalletId, original.toWalletId].filter((w): w is string => !!w);
     const locked = await lockWallets(tx as any, wallets);
     // The wallet that received the original funds must still be able to give them back.

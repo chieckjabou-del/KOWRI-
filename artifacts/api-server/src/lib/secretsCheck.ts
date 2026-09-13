@@ -46,6 +46,19 @@ export async function reviewSecrets(env: NodeJS.ProcessEnv = process.env): Promi
   if (production && env.DATABASE_URL && /localhost|127\.0\.0\.1/.test(env.DATABASE_URL)) {
     findings.push({ level: "warn", message: "DATABASE_URL points at localhost in production" });
   }
+  if (!env.KYC_ENCRYPTION_KEY || !/^[0-9a-f]{64}$/i.test(env.KYC_ENCRYPTION_KEY)) {
+    findings.push({
+      level: production ? "error" : "warn",
+      message: "KYC_ENCRYPTION_KEY missing or not a 64-hex-character key: identity documents cannot be encrypted at rest (openssl rand -hex 32)",
+    });
+  }
+  const verification = (env.PHONE_VERIFICATION ?? (production ? "required" : "optional")).toLowerCase();
+  if (production && verification !== "required") {
+    findings.push({ level: "warn", message: "PHONE_VERIFICATION is not 'required': accounts can be created without proving control of the phone number" });
+  }
+  if (production && verification === "required" && (env.SMS_PROVIDER ?? "none").toLowerCase() === "none") {
+    findings.push({ level: "error", message: "PHONE_VERIFICATION is required but no SMS provider is configured (SMS_PROVIDER=http + SMS_WEBHOOK_URL): nobody can register" });
+  }
   if (production && !env.CORS_ORIGINS) {
     findings.push({ level: "warn", message: "CORS_ORIGINS is not set: cross-origin browser calls are refused (expected when the API serves the front-ends itself)" });
   }

@@ -8,8 +8,10 @@ import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate
 import { createSession } from "../lib/productAuth";
 import { hashPin, verifyPin, isLegacyPinHash, isValidPinFormat } from "../lib/pin";
 import { loginRateLimit } from "../lib/loginRateLimit";
-import { authenticate, requireAdmin, requireSelfOrAdmin } from "../middleware/auth";
+import { authenticate, requireAdmin, requireSelfOrAdmin, requirePermission } from "../middleware/auth";
 import { routeParamString } from "../lib/routeParams";
+import { consumeVerification } from "../lib/phoneVerification";
+import { encryptField } from "../lib/fieldCrypto";
 
 const router = Router();
 type UserRow = InferSelectModel<typeof usersTable>;
@@ -30,7 +32,7 @@ router.get("/me", authenticate(), async (req, res) => {
   }
 });
 
-router.get("/", requireAdmin, validateQueryParams({ status: VALID_USER_STATUSES }), async (req, res, next) => {
+router.get("/", requireAdmin, requirePermission("users.read"), validateQueryParams({ status: VALID_USER_STATUSES }), async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
@@ -83,6 +85,9 @@ router.post("/", async (req, res, next) => {
     if (!isValidPinFormat(String(pin))) {
       return res.status(400).json({ error: "Bad request", message: "Le PIN doit contenir 4 à 6 chiffres" });
     }
+    // Proof of control of the phone number (POST /auth/otp/request + /verify).
+    const gate = await consumeVerification(String(phone), req.body?.verificationToken);
+    if (gate) return res.status(gate.status).json({ error: true, code: gate.code, message: gate.message });
 
     const id = generateId();
 
@@ -245,10 +250,11 @@ router.post("/:userId/kyc", authenticate(), requireSelfOrAdmin(), async (req, re
       documentNumber: documentNumber ?? null,
       fullName:       fullName ?? null,
       dateOfBirth:    dateOfBirth ?? null,
-      documentFront:  documentFront ?? null,
-      selfie:         selfie ?? null,
-      proofOfAddress: proofOfAddress ?? null,
-      secondDocument: secondDocument ?? null,
+      // Identity documents are encrypted at rest (lib/fieldCrypto.ts).
+      documentFront:  encryptField(documentFront),
+      selfie:         encryptField(selfie),
+      proofOfAddress: encryptField(proofOfAddress),
+      secondDocument: encryptField(secondDocument),
       status:         "pending",
     }).returning();
 

@@ -22,6 +22,7 @@ export type AuditAction =
   | "aml.flag.reviewed"
   | "wallet.status_changed"
   | "kyc.reviewed"
+  | "kyc.documents_viewed"
   | "user.status_changed"
   | "community.created"
   | "remittance.sent"
