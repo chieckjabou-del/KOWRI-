@@ -5,8 +5,13 @@ import { db } from "@workspace/db";
 import { fxRateHistoryTable, exchangeRatesTable } from "@workspace/db";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { messageQueue, MESSAGE_TOPICS } from "../lib/messageQueue";
+import { authenticate, requirePermission } from "../middleware/auth";
 
 const router = Router();
+
+// Published rates are public (the mobile app shows them before login); quoting a
+// conversion needs a session, and anything that writes rates or history needs
+// an operator with system.control.
 
 router.get("/rates", async (_req, res, next) => {
   try {
@@ -28,7 +33,7 @@ router.get("/rates/:from/:to", async (req, res, next) => {
   }
 });
 
-router.post("/convert", async (req, res, next) => {
+router.post("/convert", authenticate(), async (req, res, next) => {
   try {
     const { amount, from, to } = req.body;
     if (!amount || !from || !to) {
@@ -55,7 +60,7 @@ router.post("/convert", async (req, res, next) => {
   }
 });
 
-router.put("/rates", async (req, res, next) => {
+router.put("/rates", requirePermission("system.control"), async (req, res, next) => {
   try {
     const { base_currency, target_currency, rate, source = "manual" } = req.body;
     if (!base_currency || !target_currency || !rate) {
@@ -97,7 +102,7 @@ router.get("/rates/history/:from/:to", async (req, res, next) => {
   } catch (err) { return next(err); }
 });
 
-router.post("/rates/snapshot", async (req, res, next) => {
+router.post("/rates/snapshot", requirePermission("system.control"), async (req, res, next) => {
   try {
     const rates = await getAllRates();
     const entries = rates.map((r) => ({

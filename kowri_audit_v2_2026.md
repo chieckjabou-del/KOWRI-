@@ -111,6 +111,8 @@ Fichier : `lib/liquidityEngine.ts` (`executeFloatTransfer`, `submitReconciliatio
 
 ## 6. Plan de remédiation proposé (par ordre)
 
+État : chantier A **livré le 13 septembre 2026** (voir le journal dans `kowri_audit_gaps_2026.md` ; suite `test-gating.mjs`, 335 routes, 0 ouverte). C1, C2, C3, E1, F5 et M1 sont clos.
+
 1. **Chantier A — fermer les routes ouvertes** (C1, C2, C3, E1, F5) : ajouter `authenticate()` + `requirePermission` sur agents, fx, fx/liquidity, analytics, system, system/report, regulatory, fraud/intel, warroom, payment-routes, archive, product/architecture ; supprimer `/api/debug-build` ou le mettre derrière `requireAdmin` ; appliquer `experimental()` **et** `requireAdmin` sur settlements/connectors/clearing. Adapter les appels de l'application mobile (les écrans agents devront passer par une session agent authentifiée). Ajouter un test qui parcourt tous les routeurs et échoue si une route de mutation répond autre chose que 401/403 sans jeton.
 2. **Chantier B — crédit** (E2, E3) : filtrer par `req.auth.userId`, créer un wallet plateforme identifié (`kowri_treasury`) et l'utiliser pour décaissement et remboursement, propager les erreurs au `errorHandler`.
 3. **Chantier C — argent et devises** (E4, E5, E6, E7, M2) : plafonds KYC convertis par devise, limiteur par devise, payout de tontine basé sur le solde réel encaissé avec rejeu automatique, `executeFloatTransfer` dans une transaction unique, colonne d'idempotence dédiée pour les agents, parts de pool sur la valeur réelle.

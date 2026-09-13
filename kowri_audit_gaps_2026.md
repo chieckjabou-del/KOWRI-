@@ -487,6 +487,18 @@ Point 3 du plan de direction. Cinq modules démontrent une capacité sans systè
 - `GET /api/system/health` expose l'état de chaque module pour que le dashboard et l'exploitation voient ce qui est réel.
 - Réactiver un module en production doit s'accompagner d'un câblage réel : écritures ledger pour règlements/clearing, adaptateur fournisseur pour les connecteurs, réplication effective pour les régions ; le simulateur de panne n'a pas vocation à tourner en production.
 
+## Audit v2, chantier A — fermeture des routes ouvertes (13 septembre 2026)
+
+Constats C1, C2, C3, E1 et F5 de `kowri_audit_v2_2026.md`. Des sondes HTTP sans credential avaient prouvé la création d'un agent et la fixation de son solde cash par n'importe qui.
+
+- **Réseau d'agents** (`routes/agents.ts`) : `authenticate()` sur tout le routeur ; `requireAgentAccess` sur chaque route `/:id/…` (l'utilisateur lié à l'agent ou un opérateur, sinon 403 ; 404 si l'agent n'existe pas) ; création d'agent, vue par zones et rebalance réservées à `wallets.manage` ; enregistrement d'anomalie et rafraîchissement du score de confiance réservés à `aml.review` ; la liste `GET /agents` est filtrée sur l'utilisateur courant sauf pour un opérateur. La création exige désormais un `userId` existant (le wallet lié ne peut plus pointer vers un identifiant d'agent, ce qui violait la clé étrangère).
+- **FX** (`routes/fx.ts`) : lecture des taux publique (affichée avant connexion), `POST /convert` avec session, `PUT /rates` et `POST /rates/snapshot` avec `system.control`. `/fx/liquidity` : opérateur en lecture, `system.control` en écriture.
+- **Routeurs internes montés avec `requireAdmin`** dans `routes/index.ts` : analytics, system, system/report, product/architecture, warroom, et avec `gateWrites` : regulatory et fraud/intel (`aml.review`), payment-routes, archive, settlements, connectors, clearing (`system.control`, en plus du gel `experimental()`).
+- `GET /api/debug-build` et `GET /api/admin/auth/roles` réservés aux opérateurs ; `GET /webhooks/events` passé derrière le garde du routeur.
+- **Suite de non-régression** `artifacts/api-server/test-gating.mjs` : énumère statiquement toutes les routes montées (335) et les appelle sans credential ; échoue dès qu'une route hors liste publique explicite (inscription, connexions, taux FX, catalogue public des tontines, docs développeur) répond autre chose que 401/403. Résultat : 335 routes, 0 ouverte.
+- Bloc 12 de `test-integrity.mjs` (15 vérifications) : création d'agent refusée sans credential et à un simple utilisateur, `userId` obligatoire, cash et liquidité inaccessibles à un autre utilisateur, accessibles à l'utilisateur lié, liste cloisonnée, vue par zones et anomalies réservées aux opérateurs, 404 sur agent inconnu.
+- Suites rejouées : 666 vérifications, 0 échec. L'application mobile (écran Agent) envoie déjà le jeton de session et reste fonctionnelle ; le back-office passe par le jeton opérateur.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

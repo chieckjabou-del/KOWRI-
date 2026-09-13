@@ -20,13 +20,13 @@ const VALID_EVENT_TYPES = [
   "settlement.completed",
 ];
 
-router.get("/events", async (_req, res) => {
-  return res.json({ supportedEvents: VALID_EVENT_TYPES });
-});
-
 // Platform-wide webhooks receive every event; tenant webhooks are managed via /developer and /merchant.
 router.use(requireAdmin);
 router.use(gateWrites("system.control"));
+
+router.get("/events", async (_req, res) => {
+  return res.json({ supportedEvents: VALID_EVENT_TYPES });
+});
 
 router.get("/", async (req, res, next) => {
   try {

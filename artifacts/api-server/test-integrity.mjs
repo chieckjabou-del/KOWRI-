@@ -2,6 +2,7 @@
 // Run against a live server: node test-integrity.mjs  (needs ADMIN_API_KEY=test-admin-key on the server)
 import {
   chk, summary, get, post, patch, del, login, createUser, fund, balance, setKycLevel, idem, seededPhone, operator,
+  adminOpts, uniquePhone,
 } from "./test-lib.mjs";
 import { randomUUID } from "node:crypto";
 
@@ -426,6 +427,46 @@ console.log("\n11. Admin accounts and roles");
   chk("11z revoked token → 401", afterLogout.s === 401, `status=${afterLogout.s}`);
   const legacy = await get("/users?limit=1", { admin: true });
   chk("11aa legacy shared key still accepted while ADMIN_API_KEY is set", legacy.s === 200, `status=${legacy.s}`);
+}
+
+// ── 12. Agent network ownership ──────────────────────────────────────────────
+{
+  const owner = await createUser({ firstName: "Agent", lastName: "Owner" });
+  const other = await createUser({ firstName: "Other", lastName: "User" });
+  const admin = await adminOpts();
+
+  const anon = await post("/agents", { userId: owner.userId, name: "Anon agent", type: "AGENT", phone: uniquePhone(), zone: "Abidjan" });
+  chk("12a creating an agent without a credential → 401", anon.s === 401, `status=${anon.s}`);
+  const byUser = await owner.post("/agents", { userId: owner.userId, name: "Self agent", type: "AGENT", phone: uniquePhone(), zone: "Abidjan" });
+  chk("12b a user cannot create an agent → 403", byUser.s === 403, `status=${byUser.s}`);
+  const noUser = await post("/agents", { name: "Orphan", type: "AGENT", phone: uniquePhone(), zone: "Abidjan" }, admin);
+  chk("12c operator must link the agent to a user → 400", noUser.s === 400, `status=${noUser.s}`);
+  const created = await post("/agents", { userId: owner.userId, name: "Owned agent", type: "AGENT", phone: uniquePhone(), zone: "Abidjan" }, admin);
+  chk("12d operator creates an agent linked to the user", created.s === 201 && created.b?.agent?.userId === owner.userId, `status=${created.s}`);
+  const agentId = created.b?.agent?.id ?? "nope";
+
+  const anonCash = await post(`/agents/${agentId}/cash-update`, { cashBalance: 5_000_000 });
+  chk("12e cash-update without a credential → 401", anonCash.s === 401, `status=${anonCash.s}`);
+  const otherCash = await other.post(`/agents/${agentId}/cash-update`, { cashBalance: 5_000_000 });
+  chk("12f another user cannot set the agent's cash → 403", otherCash.s === 403, `status=${otherCash.s}`);
+  const otherRead = await other.get(`/agents/${agentId}/liquidity`);
+  chk("12g another user cannot read the agent's liquidity → 403", otherRead.s === 403, `status=${otherRead.s}`);
+  const ownerCash = await owner.post(`/agents/${agentId}/cash-update`, { cashBalance: 150_000 });
+  chk("12h the linked user updates their own cash count", ownerCash.s === 200 && ownerCash.b?.cashBalance === 150_000, `status=${ownerCash.s}`);
+  const ownerRead = await owner.get(`/agents/${agentId}/liquidity`);
+  chk("12i the linked user reads their own liquidity", ownerRead.s === 200 && Number(ownerRead.b?.cashBalance) === 150_000, `status=${ownerRead.s}`);
+  const otherList = await other.get(`/agents?userId=${owner.userId}`);
+  chk("12j listing is scoped to the caller even with a userId filter", otherList.s === 200 && (otherList.b?.agents ?? []).every((a) => a.userId === other.userId) && !(otherList.b?.agents ?? []).some((a) => a.id === agentId), `status=${otherList.s} count=${otherList.b?.count}`);
+  const ownerList = await owner.get("/agents");
+  chk("12k the linked user sees their agent in the list", ownerList.s === 200 && (ownerList.b?.agents ?? []).some((a) => a.id === agentId), `status=${ownerList.s}`);
+  const zonesByUser = await owner.get("/agents/zones");
+  chk("12l the network zone view is operator-only → 403", zonesByUser.s === 403, `status=${zonesByUser.s}`);
+  const anomalyByOwner = await owner.post(`/agents/${agentId}/anomalies`, { type: "CASH_MISMATCH", severity: "LOW", description: "self-report" });
+  chk("12m an agent cannot record its own anomaly → 403", anomalyByOwner.s === 403, `status=${anomalyByOwner.s}`);
+  const adminRead = await get(`/agents/${agentId}`, admin);
+  chk("12n operator reads any agent", adminRead.s === 200 && adminRead.b?.agent?.id === agentId, `status=${adminRead.s}`);
+  const missing = await owner.get("/agents/does-not-exist/liquidity");
+  chk("12o unknown agent → 404", missing.s === 404, `status=${missing.s}`);
 }
 
 const { fail } = summary("INTEGRITY SUITE");

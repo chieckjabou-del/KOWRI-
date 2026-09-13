@@ -38,9 +38,9 @@ async function requireAdminSession(req: Request, res: Response, next: NextFuncti
   }
 }
 
-// ── Public ────────────────────────────────────────────────────────────────────
+// ── Public: login only ────────────────────────────────────────────────────────
 
-router.get("/roles", (_req, res) => {
+router.get("/roles", requireAdmin, (_req, res) => {
   res.json({ roles: ROLES.map((role) => ({ role, permissions: ROLE_PERMISSIONS[role] })) });
 });
 

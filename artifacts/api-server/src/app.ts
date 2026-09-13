@@ -8,6 +8,7 @@ import { bootstrapAdminFromEnv } from "./lib/adminAuth";
 import { checkSecretsAtBoot } from "./lib/secretsCheck";
 import { globalSanitizer, validatePagination } from "./middleware/validate";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
+import { requireAdmin } from "./middleware/auth";
 import { stickyPrimaryRequest, stickyPrimaryResponse } from "./middleware/stickyPrimary";
 import { paymentRouter } from "./lib/paymentRouter";
 import { seedConnectors } from "./lib/connectors";
@@ -32,7 +33,8 @@ app.get("/api/health", (_req, res) => {
   return res.json({ service: "kowri-backend", status: "running" });
 });
 
-app.get("/api/debug-build", async (req, res) => {
+// Reveals filesystem layout: operators only.
+app.get("/api/debug-build", requireAdmin, async (req, res) => {
   const fs   = await import("fs");
   const path = await import("path");
   const cwd  = process.cwd();
