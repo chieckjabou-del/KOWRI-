@@ -42,7 +42,7 @@ Chaque `vercel.json` force l'installation et le build via pnpm (`npx pnpm@10.33.
 
 Réglages requis côté Vercel pour les deux projets front-end :
 
-- « Include source files outside of the Root Directory » activé (le build a besoin de la racine du workspace pour `pnpm-workspace.yaml`, les catalogues et `lib/*`).
-- Node.js 24.x (Node 20 est déprécié par Vercel à partir du 1er octobre 2026).
+- « Include source files outside of the Root Directory » activé (le build a besoin de la racine du workspace pour `pnpm-workspace.yaml`, les catalogues et `lib/*`). Ce réglage n'est pas pilotable depuis le dépôt.
+- Node.js 24 : imposé par `engines.node` dans le `package.json` de chaque artefact, ce qui prime sur le réglage du projet Vercel (Node 20 est déprécié par Vercel à partir du 1er octobre 2026).
 
 Limite : une prévisualisation Vercel n'embarque pas l'API. Les appels `/api` y échouent tant qu'aucune réécriture vers l'URL de l'API n'est configurée (ou `VITE_API_BASE` pour la file hors-ligne). Ces prévisualisations servent à vérifier l'interface, pas les parcours de bout en bout.
