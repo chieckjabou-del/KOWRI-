@@ -36,8 +36,8 @@ Le dépôt est relié à trois projets Vercel. Leur rôle :
 |---|---|---|
 | `kowri-dashboard` | `artifacts/kowri-dashboard` | prévisualisation statique du back-office (projet créé le 13 septembre 2026, réglages par défaut corrects) |
 | `kowri-kowri-dashboard` | `artifacts/kowri-app` | malgré son nom, prévisualisation statique de l'**application mobile** (seul ancien projet dont les réglages sont bons) ; à renommer `kowri-app-web` |
-| `kowri-app` | `artifacts/kowri-app` | **à supprimer** : exclut les fichiers hors répertoire racine, donc ne peut pas installer le workspace |
-| `kowri-api-server` | `artifacts/api-server` | **à supprimer** : les builds sont ignorés (`ignoreCommand` dans `artifacts/api-server/vercel.json`) |
+| `kowri-app` | `artifacts/kowri-app` | **à conserver** : porte le seul déploiement de production réussi de l'application mobile (build d'avril 2026, encore servi sur son URL). Ses builds de branche échouent car le projet exclut les fichiers hors répertoire racine ; activer ce réglage dans Vercel pour qu'il rebâtisse |
+| `kowri-api-server` | `artifacts/api-server` | **supprimable** : aucun déploiement n'a jamais réussi, aucun domaine personnalisé ; les builds sont ignorés (`ignoreCommand` dans `artifacts/api-server/vercel.json`). Exporter ses variables d'environnement avant suppression |
 
 Chaque `vercel.json` force l'installation et le build via pnpm (`npx pnpm@10.33.0`), car Vercel retombe sur npm sans lockfile et npm ne comprend pas les protocoles `workspace:` / `catalog:`.
 
