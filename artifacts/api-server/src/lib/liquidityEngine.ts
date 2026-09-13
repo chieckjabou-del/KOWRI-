@@ -25,6 +25,8 @@ import { processTransfer, isDuplicateIdempotencyKey } from "./walletService";
 import { logIncident }             from "./incidentStore";
 import { createNotification }      from "./productWallet";
 import { audit }                   from "./auditLogger";
+import { assertModuleEnabled }     from "./launchScope";
+import { guard }                   from "./killSwitch";
 
 // A float transfer the sending agent cannot cover: a client refusal, never a crash.
 export class InsufficientFloatError extends Error {
@@ -249,6 +251,8 @@ export async function executeFloatTransfer(
   // same request can never move the float a second time.
   idempotencyKey?: string,
 ): Promise<string> {
+  assertModuleEnabled("agents");
+  guard("agent_operations");
   const [fromWallet, toWallet] = await Promise.all([
     getAgentWallet(fromAgentId),
     getAgentWallet(toAgentId),

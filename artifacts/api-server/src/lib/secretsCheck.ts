@@ -1,4 +1,7 @@
 import { countAdmins, mfaRequired } from "./adminAuth";
+import { cashInLimits, CASH_IN_LIMIT_ENV } from "./cashIn";
+import { launchModulesConfigured, unknownLaunchModules } from "./launchScope";
+import { alertingConfigured } from "./alerting";
 
 // Boot-time review of the secrets the platform runs on. Findings are logged
 // once; in production, errors abort startup unless SECRETS_STRICT=false.
@@ -70,6 +73,47 @@ export async function reviewSecrets(env: NodeJS.ProcessEnv = process.env): Promi
   }
   if (production && env.ALLOW_DEMO_SEED === "true") {
     findings.push({ level: "error", message: "ALLOW_DEMO_SEED=true in production: demo accounts with a known PIN would be created" });
+  }
+
+  // ── Launch configuration ──────────────────────────────────────────────────
+  // A production process must state its launch scope and its cash-in limits
+  // explicitly: a forgotten variable must never silently mean "everything on"
+  // or "the developer default".
+  if (production && !launchModulesConfigured(env)) {
+    findings.push({ level: "error", message: "LAUNCH_MODULES is not set: state the launch scope explicitly (none | all | comma-separated modules)" });
+  }
+  const unknown = unknownLaunchModules(env);
+  if (unknown.length > 0) {
+    findings.push({ level: production ? "error" : "warn", message: `LAUNCH_MODULES names unknown module(s): ${unknown.join(", ")}` });
+  }
+  if (production) {
+    const missing = CASH_IN_LIMIT_ENV.filter((name) => !env[name] || env[name]!.trim() === "");
+    if (missing.length > 0) {
+      findings.push({ level: "error", message: `Cash-in limits must be set explicitly in production: ${missing.join(", ")}` });
+    }
+  }
+  try {
+    const limits = cashInLimits();
+    if (limits.secondApprovalThreshold > limits.maxPerOperation) {
+      findings.push({ level: production ? "error" : "warn", message: "CASH_IN_SECOND_APPROVAL_THRESHOLD is above CASH_IN_MAX_PER_OPERATION: no request would ever need a second approver" });
+    }
+    if (limits.maxPerOperation > limits.dailyPerInitiator || limits.maxPerOperation > limits.dailyPerBeneficiary || limits.dailyPerBeneficiary > limits.dailyPlatform || limits.dailyPerInitiator > limits.dailyPlatform) {
+      findings.push({ level: production ? "error" : "warn", message: "Cash-in limits are not nested (per operation ≤ daily per operator/beneficiary ≤ daily platform)" });
+    }
+    if (limits.expiryHours > 72) {
+      findings.push({ level: "warn", message: `CASH_IN_EXPIRY_HOURS=${limits.expiryHours}: an undecided cash-in request stays open for more than three days` });
+    }
+  } catch (err) {
+    findings.push({ level: production ? "error" : "warn", message: `Cash-in limits are invalid: ${err instanceof Error ? err.message : String(err)}` });
+  }
+  if (production && !alertingConfigured(env)) {
+    findings.push({ level: "error", message: "ALERT_WEBHOOK_URL is not set: reconciliation anomalies and kill-switch events would only be written to the database, nobody would be paged" });
+  }
+  if (production && env.EXPERIMENTAL_MODULES && env.EXPERIMENTAL_MODULES.trim() !== "") {
+    findings.push({ level: "warn", message: `EXPERIMENTAL_MODULES=${env.EXPERIMENTAL_MODULES} in production: prototype modules are exposed` });
+  }
+  if (production && env.SECRETS_STRICT === "false") {
+    findings.push({ level: "warn", message: "SECRETS_STRICT=false: configuration errors will not stop the process" });
   }
 
   return findings;

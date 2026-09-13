@@ -40,6 +40,7 @@ export async function createSettlement(
 
 export async function processSettlement(settlementId: string): Promise<void> {
   guard("settlements");
+  guard("external_rails");
   const [settlement] = await db.select().from(settlementsTable).where(eq(settlementsTable.id, settlementId));
   if (!settlement) throw new Error(`Settlement ${settlementId} not found`);
   if (settlement.status !== "pending") throw new Error(`Settlement ${settlementId} is ${settlement.status}`);

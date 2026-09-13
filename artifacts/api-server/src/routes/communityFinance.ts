@@ -1319,10 +1319,15 @@ router.get("/reputation/:userId/badges", async (req, res, next) => {
 
 router.get("/scheduler/jobs", async (req, res, next) => {
   try {
+    // Optional ?entityId= narrows the page to one tontine's jobs; ?limit= up to 500.
+    const entityId = typeof req.query.entityId === "string" && req.query.entityId ? req.query.entityId : undefined;
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 50));
+    const where = entityId ? eq(schedulerJobsTable.entityId, entityId) : undefined;
     const jobs = await db.select().from(schedulerJobsTable)
+      .where(where)
       .orderBy(desc(schedulerJobsTable.scheduledAt))
-      .limit(50);
-    const [{ total }] = await db.select({ total: count() }).from(schedulerJobsTable);
+      .limit(limit);
+    const [{ total }] = await db.select({ total: count() }).from(schedulerJobsTable).where(where);
     return res.json({ jobs, total: Number(total) });
   } catch (err) { return next(err); }
 });

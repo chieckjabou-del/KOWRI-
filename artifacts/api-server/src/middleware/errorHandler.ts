@@ -33,6 +33,11 @@ export function errorHandler(
     return;
   }
 
+  if (err instanceof Error && err.name === "ModuleDisabledError") {
+    res.status(503).json({ error: true, code: "MODULE_NOT_IN_LAUNCH_SCOPE", module: (err as any).module, message: err.message });
+    return;
+  }
+
   if (err instanceof AppError) {
     res.status(err.statusCode).json({ error: true, message: err.message });
     return;

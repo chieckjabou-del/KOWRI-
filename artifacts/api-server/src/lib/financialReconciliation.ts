@@ -47,6 +47,7 @@ import { TREASURY_USER_ID } from "./treasury";
 import { getOutboxStats } from "./outboxWorker";
 import { logIncident } from "./incidentStore";
 import { audit } from "./auditLogger";
+import { sendAlert } from "./alerting";
 
 const STUCK_TX_MINUTES = 5;
 const STUCK_FLOAT_MINUTES = 2;
@@ -320,6 +321,11 @@ export async function scheduledFinancialReconciliation(): Promise<FinancialRepor
   if (!report.ok) {
     for (const a of report.anomalies) logIncident({ type: "financial_reconciliation", action: "anomaly", result: a });
     console.warn(`[Reconciliation] ${report.anomalies.length} anomaly(ies): ${report.anomalies.join(" | ")}`);
+    await sendAlert({
+      severity: "critical", type: "reconciliation.anomaly",
+      message: `Financial reconciliation found ${report.anomalies.length} anomaly(ies)`,
+      data: { anomalies: report.anomalies.slice(0, 20), supply: report.supply },
+    });
   }
   await audit({ action: "reconciliation.report", entity: "system", entityId: "financial", metadata: { ok: report.ok, anomalies: report.anomalies, supply: report.supply } });
   return report;

@@ -1,6 +1,6 @@
 import app from "./app";
 import { startOutboxWorker, stopOutboxWorker }             from "./lib/outboxWorker";
-import { initKillSwitches }                              from "./lib/killSwitch";
+import { initKillSwitches, startKillSwitchSync, stopKillSwitchSync } from "./lib/killSwitch";
 import { startAutopilot, stopAutopilot }                  from "./lib/autopilot";
 import { seedLedgerBalanceSummary, installLedgerTrigger } from "./lib/ledgerBalanceSeeder";
 import { rehydrateAutopilotState }                        from "./lib/autopilotStateStore";
@@ -12,6 +12,8 @@ import { withInstanceLock }                               from "./lib/instanceLo
 import { purgeExpiredSessions }                           from "./lib/sessionCleanup";
 import { scheduledFinancialReconciliation }              from "./lib/financialReconciliation";
 import { expireCashInRequests }                          from "./lib/cashIn";
+import { isLaunchModuleEnabled }                         from "./lib/launchScope";
+import { alert }                                         from "./lib/alerting";
 import { db, pool }                                       from "@workspace/db";
 import { tontinePositionListingsTable, schedulerJobsTable } from "@workspace/db";
 import { eq, and, lt, isNotNull }                         from "drizzle-orm";
@@ -56,6 +58,7 @@ function every(ms: number, fn: () => Promise<void> | void): void {
 function startAgentScheduler() {
   // ── Daily reconciliation at 20:00 ─────────────────────────────────────────
   every(60_000, async () => {
+    if (!isLaunchModuleEnabled("agents")) return;
     const now = new Date();
     if (now.getHours() === 20 && now.getMinutes() < 1) {
       try {
@@ -68,6 +71,7 @@ function startAgentScheduler() {
 
   // ── Monthly achievement check — first day of each month at 08:00 ──────────
   every(60_000, async () => {
+    if (!isLaunchModuleEnabled("agents")) return;
     const now = new Date();
     if (now.getDate() === 1 && now.getHours() === 8 && now.getMinutes() < 1) {
       try {
@@ -80,6 +84,9 @@ function startAgentScheduler() {
 }
 
 async function tontineSchedulerTick(): Promise<void> {
+  // Outside the launch scope the scheduler does not touch jobs at all: they
+  // stay pending and run once the module is enabled by an explicit decision.
+  if (!isLaunchModuleEnabled("tontines")) return;
   // ── 1. Expire stale position listings ─────────────────────────────────
   await db.update(tontinePositionListingsTable)
     .set({ status: "expired" })
@@ -168,7 +175,7 @@ const server = app.listen(port, () => {
   // Hydrate kill switch cache from DB before starting autopilot so the first
   // cycle sees operator-set state rather than the in-memory defaults.
   initKillSwitches()
-    .then(() => installLedgerTrigger())
+    .then(() => { startKillSwitchSync(); return installLedgerTrigger(); })
     .then(() => seedLedgerBalanceSummary())
     .then(() => rehydrateAutopilotState())
     .then(() => recoverStuckPayouts().catch((err) =>
@@ -187,7 +194,14 @@ const server = app.listen(port, () => {
       });
       // Cash-in requests nobody decided on are closed; they can never execute afterwards.
       every(5 * 60 * 1000, async () => {
-        try { await withInstanceLock("cash_in_expiry", async () => { await expireCashInRequests(); }); }
+        try {
+          await withInstanceLock("cash_in_expiry", async () => {
+            const expired = await expireCashInRequests();
+            // A request that expired was never decided: the approval queue is
+            // not being worked. The on-call operator must know.
+            if (expired > 0) alert({ severity: "warning", type: "cash_in.expired", message: `${expired} cash-in request(s) expired without a decision`, data: { expired } });
+          });
+        }
         catch (err: any) { logIncident({ type: "cash_in", action: "expiry", result: `error: ${err?.message}` }); }
       });
       every(6 * 60 * 60 * 1000, async () => {
@@ -239,6 +253,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   force.unref();
 
   for (const t of timers) clearInterval(t);
+  stopKillSwitchSync();
   try { stopOutboxWorker(); } catch (err) { console.error("[Shutdown] outbox worker:", err); }
   try { stopAutopilot(); } catch (err) { console.error("[Shutdown] autopilot:", err); }
 

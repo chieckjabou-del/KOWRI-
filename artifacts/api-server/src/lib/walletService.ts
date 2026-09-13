@@ -9,6 +9,7 @@ import { recordMetric } from "./metrics";
 import { checkRateLimit, RateLimitExceededError } from "./rateLimiter";
 import { assertTransactionAllowed } from "./riskScreening";
 import { guard } from "./killSwitch";
+import { assertModuleEnabled } from "./launchScope";
 import { computeFee } from "./feeEngine";
 import { toReferenceCurrency, REFERENCE_CURRENCY } from "./fxEngine";
 
@@ -607,6 +608,10 @@ export async function processWithdrawal(params: {
   const amount = normalizeAmount(params.amount);
   const start = Date.now();
 
+  // Cash-out is outside the launch scope until an external rail is proven:
+  // the module gate and its own kill switch sit in front of the generic one.
+  assertModuleEnabled("cash_out");
+  guard("cash_out");
   guard("outbound_transfers");
 
   // Compute fee BEFORE the transaction — async DB read, non-blocking to hot path

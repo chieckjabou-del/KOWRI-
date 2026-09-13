@@ -58,6 +58,7 @@ export type AuditAction =
   | "liquidity.float.recovered"
   | "liquidity.float.reverted"
   | "reconciliation.report"
+  | "alerts.test"
   | "tontine.solidarity.claim_disbursed"
   | "tontine.payout.already_paid"
   | "admin.bootstrap"

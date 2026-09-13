@@ -24,7 +24,7 @@ Pour servir aussi les interfaces depuis l'API, construire les front-ends avant l
 pnpm --filter @workspace/api-server run build:frontends
 ```
 
-Variables d'environnement : voir `artifacts/api-server/.env.example` et `docs/SECURITY_SECRETS.md` (`DATABASE_URL`, `SIGNING_SECRET`, bootstrap du premier compte opérateur, `EXPERIMENTAL_MODULES`).
+Variables d'environnement : voir `artifacts/api-server/.env.example` et `docs/SECURITY_SECRETS.md` (`DATABASE_URL`, `SIGNING_SECRET`, bootstrap du premier compte opérateur, `EXPERIMENTAL_MODULES`). Pour un lancement contrôlé, partir de `.env.launch.example` à la racine : en production le processus **refuse de démarrer** sans `LAUNCH_MODULES`, sans les sept limites `CASH_IN_*` explicites et sans `ALERT_WEBHOOK_URL` (voir `AKWE_LAUNCH_READINESS_GATE.md`).
 
 Réseau et exploitation :
 

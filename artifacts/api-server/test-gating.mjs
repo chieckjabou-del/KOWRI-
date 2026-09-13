@@ -15,6 +15,7 @@ const BASE = process.env.BASE ?? "http://localhost:8080/api";
 // Routes that are legitimately reachable without a credential.
 const PUBLIC = [
   ["GET",  /^\/health(z)?$/],
+  ["GET",  /^\/health\/launch-scope$/],      // launch scope and kill switch states (no secrets)
   ["POST", /^\/users$/],                       // registration
   ["POST", /^\/users\/login$/],
   ["POST", /^\/auth\/login$/],

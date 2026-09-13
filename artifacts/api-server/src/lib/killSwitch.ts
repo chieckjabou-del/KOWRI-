@@ -19,6 +19,7 @@ import { db } from "@workspace/db";
 import { killSwitchesTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { audit } from "./auditLogger";
+import { alert } from "./alerting";
 
 export type KillSwitchName =
   | "outbound_transfers"
@@ -27,6 +28,15 @@ export type KillSwitchName =
   | "saga_creation"
   | "outbox_dispatch"
   | "replica_reads"
+  // Financial kill switches (launch readiness gate): each one stops a family
+  // of money movements at the service level, whoever the caller is.
+  | "cash_in"          // initiation and approval of cash-in requests (no money is created)
+  | "credit"           // loan disbursement and repayment
+  | "agent_operations" // agent float transfers and cash declarations
+  | "creator_earnings" // creator earnings declarations
+  | "cash_out"         // cash-out to an external rail (service guard; no route exists)
+  | "external_rails"   // provider settlements, connectors, clearing
+  | "fx"               // currency conversion and remittances
   | "all";
 
 export type KillSwitchState = "ENABLED" | "TRIGGERED" | "FORCED_OFF";
@@ -61,6 +71,13 @@ export const ALL_SWITCHES: KillSwitchName[] = [
   "saga_creation",
   "outbox_dispatch",
   "replica_reads",
+  "cash_in",
+  "credit",
+  "agent_operations",
+  "creator_earnings",
+  "cash_out",
+  "external_rails",
+  "fx",
   "all",
 ];
 
@@ -123,6 +140,48 @@ export async function initKillSwitches(): Promise<void> {
   );
 }
 
+// ── Cross-instance propagation ───────────────────────────────────────────────
+// Each API instance keeps its own cache. Without this loop a switch fired on
+// one instance would leave every other instance open until it restarts. Every
+// few seconds each instance re-reads the table and adopts any row changed
+// after its own last local change: a disabled row becomes FORCED_OFF here
+// (conservative — only a manual lift, on any instance, re-enables it) and an
+// enabled row clears a local TRIGGERED/FORCED_OFF that another instance lifted.
+let syncTimer: NodeJS.Timeout | null = null;
+
+export async function syncKillSwitchesFromDb(): Promise<string[]> {
+  const rows = await db.select().from(killSwitchesTable);
+  const changed: string[] = [];
+  for (const row of rows) {
+    const name = row.name as KillSwitchName;
+    if (!ALL_SWITCHES.includes(name)) continue;
+    const local = get(name);
+    const dbEnabled = row.enabled;
+    if (dbEnabled === (local.state === "ENABLED")) continue;
+    // Older than (or concurrent with) our own last change: ours is still being persisted.
+    if (row.updatedAt.getTime() <= local.firedAt) continue;
+    store.set(name, {
+      name, state: dbEnabled ? "ENABLED" : "FORCED_OFF", reason: row.reason ?? "",
+      triggeredBy: "peer-instance", firedAt: row.updatedAt.getTime(),
+    });
+    changed.push(`${name}→${dbEnabled ? "ENABLED" : "FORCED_OFF"}`);
+  }
+  if (changed.length) console.warn(`[KillSwitch] adopted from DB: ${changed.join(", ")}`);
+  return changed;
+}
+
+export function startKillSwitchSync(intervalMs = Number(process.env.KILL_SWITCH_SYNC_MS ?? 5000)): void {
+  if (syncTimer) return;
+  syncTimer = setInterval(() => {
+    syncKillSwitchesFromDb().catch((err) => console.error("[KillSwitch] sync failed:", err instanceof Error ? err.message : err));
+  }, Math.max(1000, intervalMs));
+  syncTimer.unref();
+}
+
+export function stopKillSwitchSync(): void {
+  if (syncTimer) { clearInterval(syncTimer); syncTimer = null; }
+}
+
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function get(name: KillSwitchName): SwitchEntry {
@@ -152,6 +211,7 @@ export function fire(name: KillSwitchName, reason: string, triggeredBy = "autopi
   console.warn(`[KillSwitch] FIRED   switch=${name} reason=${reason} by=${triggeredBy}`);
   writeAudit("FIRE", name, triggeredBy, { reason, previousState: "ENABLED" });
   persistSwitch(name, "TRIGGERED", reason);
+  alert({ severity: "critical", type: "kill_switch.fired", message: `Kill switch ${name} fired by ${triggeredBy}: ${reason}`, data: { switch: name, reason, triggeredBy } });
 }
 
 /** Operator manually locks a switch. Cannot be undone by autopilot. */
@@ -165,6 +225,7 @@ export function forceOff(name: KillSwitchName, operator: string, reason: string)
   console.warn(`[KillSwitch] FORCED_OFF switch=${name} reason=${reason} by=${operator}`);
   writeAudit("FORCE_OFF", name, operator, { reason, previousState: prev });
   persistSwitch(name, "FORCED_OFF", reason);
+  alert({ severity: "critical", type: "kill_switch.forced_off", message: `Kill switch ${name} locked by ${operator}: ${reason}`, data: { switch: name, reason, operator, previousState: prev } });
 }
 
 /**
@@ -191,6 +252,7 @@ export function manualLift(name: KillSwitchName, operator: string): void {
   console.info(`[KillSwitch] LIFTED  switch=${name} by=${operator} previousState=${prev}`);
   writeAudit("MANUAL_LIFT", name, operator, { previousState: prev });
   persistSwitch(name, "ENABLED", "");
+  alert({ severity: "warning", type: "kill_switch.lifted", message: `Kill switch ${name} lifted by ${operator} (was ${prev})`, data: { switch: name, operator, previousState: prev } });
 }
 
 /**

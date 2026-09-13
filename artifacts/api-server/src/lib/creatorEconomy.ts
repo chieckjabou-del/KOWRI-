@@ -7,6 +7,8 @@ import { eq, and, sql } from "drizzle-orm";
 import { generateId } from "./id";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
+import { assertModuleEnabled } from "./launchScope";
+import { guard } from "./killSwitch";
 
 export async function createCommunity(params: {
   name: string; description?: string; creatorId: string; handle: string;
@@ -102,6 +104,8 @@ export async function joinCommunity(communityId: string, userId: string): Promis
 export async function distributeCreatorEarnings(communityId: string, transactionAmount: number, currency: string, declaredBy: string): Promise<{
   platformFee: number; creatorFee: number; credited: false; settlement: string;
 }> {
+  assertModuleEnabled("creator_earnings");
+  guard("creator_earnings");
   if (!Number.isFinite(transactionAmount) || transactionAmount <= 0) throw new Error("transactionAmount must be a positive number");
   const [community] = await db.select().from(creatorCommunitiesTable)
     .where(eq(creatorCommunitiesTable.id, communityId));

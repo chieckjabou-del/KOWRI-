@@ -270,7 +270,7 @@ console.log("\n8. Tontine lifecycle");
   const payout = await admin.money(`/community/tontines/${tontineId}/payout`, {});
   chk("8q payout pays round 1 recipient the pot of the remaining members", payout.s === 200 && payout.b?.round === 1 && payout.b?.amount === 20_000, `status=${payout.s} amount=${payout.b?.amount}`);
 
-  const jobs = await admin.get("/community/scheduler/jobs");
+  const jobs = await admin.get(`/community/scheduler/jobs?entityId=${tontineId}`);
   const nextJob = (jobs.b?.jobs ?? []).find((j) => j.entityId === tontineId && j.jobType === "tontine_contribution" && j.status === "pending");
   chk("8r the next contribution round is scheduled automatically", !!nextJob, `jobs=${(jobs.b?.jobs ?? []).filter((j) => j.entityId === tontineId).map((j) => `${j.jobType}:${j.status}`).join(",")}`);
 

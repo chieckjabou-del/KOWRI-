@@ -23,6 +23,7 @@ import { eventBus } from "./eventBus";
 import { toReferenceCurrency } from "./fxEngine";
 import { processDeposit, normalizeAmount, withDeadlockRetry, type DbClient } from "./walletService";
 import type { AdminIdentity } from "./adminAuth";
+import { guard } from "./killSwitch";
 
 function envNumber(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -38,17 +39,29 @@ export interface CashInLimits {
   dailyPerInitiator: number;      // sum of one operator's live requests per UTC day
   dailyPerBeneficiary: number;    // sum per beneficiary user (all wallets) per UTC day
   dailyPlatform: number;          // sum of all live requests per UTC day
+  dailyCountPerBeneficiary: number; // number of live requests per beneficiary per UTC day
   expiryHours: number;            // a request nobody decided on expires
 }
 
+// The env names every limit is read from — the secrets review checks that a
+// production process has each one set explicitly (no default in production).
+export const CASH_IN_LIMIT_ENV = [
+  "CASH_IN_MAX_PER_OPERATION", "CASH_IN_SECOND_APPROVAL_THRESHOLD", "CASH_IN_DAILY_LIMIT_PER_OPERATOR",
+  "CASH_IN_DAILY_LIMIT_PER_BENEFICIARY", "CASH_IN_DAILY_LIMIT_PLATFORM", "CASH_IN_DAILY_COUNT_PER_BENEFICIARY",
+  "CASH_IN_EXPIRY_HOURS",
+] as const;
+
 export function cashInLimits(): CashInLimits {
   return {
-    maxPerOperation:         envNumber("CASH_IN_MAX_PER_OPERATION", 10_000_000),
-    secondApprovalThreshold: envNumber("CASH_IN_SECOND_APPROVAL_THRESHOLD", 1_000_000),
-    dailyPerInitiator:       envNumber("CASH_IN_DAILY_LIMIT_PER_OPERATOR", 50_000_000),
-    dailyPerBeneficiary:     envNumber("CASH_IN_DAILY_LIMIT_PER_BENEFICIARY", 20_000_000),
-    dailyPlatform:           envNumber("CASH_IN_DAILY_LIMIT_PLATFORM", 500_000_000),
-    expiryHours:             envNumber("CASH_IN_EXPIRY_HOURS", 24),
+    maxPerOperation:          envNumber("CASH_IN_MAX_PER_OPERATION", 10_000_000),
+    secondApprovalThreshold:  envNumber("CASH_IN_SECOND_APPROVAL_THRESHOLD", 1_000_000),
+    dailyPerInitiator:        envNumber("CASH_IN_DAILY_LIMIT_PER_OPERATOR", 50_000_000),
+    dailyPerBeneficiary:      envNumber("CASH_IN_DAILY_LIMIT_PER_BENEFICIARY", 20_000_000),
+    dailyPlatform:            envNumber("CASH_IN_DAILY_LIMIT_PLATFORM", 500_000_000),
+    // Development default is deliberately loose (the suites fire dozens of
+    // requests at one wallet); production must set it explicitly (5 proposed).
+    dailyCountPerBeneficiary: envNumber("CASH_IN_DAILY_COUNT_PER_BENEFICIARY", 100),
+    expiryHours:              envNumber("CASH_IN_EXPIRY_HOURS", 24),
   };
 }
 
@@ -96,6 +109,7 @@ export async function initiateCashIn(input: {
   initiator: AdminIdentity; ip?: string;
 }): Promise<ReturnType<typeof publicCashIn>> {
   const { initiator } = input;
+  guard("cash_in");
   requireNamedOperator(initiator, "ledger.write");
   const limits = cashInLimits();
 
@@ -142,15 +156,19 @@ export async function initiateCashIn(input: {
       SELECT
         COALESCE(SUM(amount_reference) FILTER (WHERE initiated_by = ${initiator.adminId}), 0)::text AS by_initiator,
         COALESCE(SUM(amount_reference) FILTER (WHERE user_id = ${wallet.userId}), 0)::text AS by_beneficiary,
+        COUNT(*) FILTER (WHERE user_id = ${wallet.userId})::text AS count_beneficiary,
         COALESCE(SUM(amount_reference), 0)::text AS platform
       FROM cash_in_requests
       WHERE status IN ('PENDING_APPROVAL', 'APPROVED', 'EXECUTED')
-        AND initiated_at >= date_trunc('day', now() AT TIME ZONE 'utc')`)) as any).rows as Array<{ by_initiator: string; by_beneficiary: string; platform: string }>;
+        AND initiated_at >= date_trunc('day', now() AT TIME ZONE 'utc')`)) as any).rows as Array<{ by_initiator: string; by_beneficiary: string; count_beneficiary: string; platform: string }>;
     if (Number(today.by_initiator) + amountReference > limits.dailyPerInitiator) {
       throw new CashInError(409, "CASH_IN_LIMIT_OPERATOR", `Daily limit per operator exceeded (${limits.dailyPerInitiator} XOF-equivalent)`);
     }
     if (Number(today.by_beneficiary) + amountReference > limits.dailyPerBeneficiary) {
       throw new CashInError(409, "CASH_IN_LIMIT_BENEFICIARY", `Daily limit per beneficiary exceeded (${limits.dailyPerBeneficiary} XOF-equivalent)`);
+    }
+    if (Number(today.count_beneficiary) + 1 > limits.dailyCountPerBeneficiary) {
+      throw new CashInError(409, "CASH_IN_LIMIT_BENEFICIARY_COUNT", `Daily number of cash-ins per beneficiary exceeded (${limits.dailyCountPerBeneficiary})`);
     }
     if (Number(today.platform) + amountReference > limits.dailyPlatform) {
       throw new CashInError(409, "CASH_IN_LIMIT_PLATFORM", `Daily platform cash-in limit exceeded (${limits.dailyPlatform} XOF-equivalent)`);
@@ -213,6 +231,7 @@ function assertOpen(row: CashInRequest): void {
 }
 
 export async function approveCashIn(requestId: string, approver: AdminIdentity, opts: { reason?: string; ip?: string } = {}) {
+  guard("cash_in");
   requireNamedOperator(approver, "ledger.approve");
   const [current] = await db.select().from(cashInRequestsTable).where(eq(cashInRequestsTable.id, requestId)).limit(1);
   if (!current) throw new CashInError(404, "CASH_IN_NOT_FOUND", "Cash-in request not found");

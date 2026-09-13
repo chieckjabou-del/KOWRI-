@@ -20,6 +20,7 @@ import {
   type KillSwitchName,
 } from "../lib/killSwitch";
 import { rollback } from "../lib/actionExecutor";
+import { sendAlert, alertingStats } from "../lib/alerting";
 
 import { requireAdmin, requirePermission } from "../middleware/auth";
 import { listTreasuryWallets } from "../lib/treasury";
@@ -126,6 +127,10 @@ router.get("/reconcile", async (req, res, next) => {
 
 router.post("/patch-tontines", requirePermission("system.control"), async (req, res, next) => {
   try {
+    // Demo-fixture repair: does not exist where demo fixtures do not.
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_SEED !== "true") {
+      return res.status(404).json({ error: true, message: `Route ${req.method} ${req.originalUrl} not found` });
+    }
     const result = await patchTontineMembers();
     await audit({
       action: "admin.patch_tontines",
@@ -235,6 +240,24 @@ router.patch("/wallets/:walletId/status", requirePermission("wallets.manage"), a
 
 router.get("/kill-switches", (_req, res) => {
   return res.json({ switches: getAllSwitches() });
+});
+
+// ── Alerting ──────────────────────────────────────────────────────────────────
+// GET  /admin/alerts/status — is the outbound channel configured, delivery counters
+// POST /admin/alerts/test   — send a signed test alert (proves the channel end to end)
+router.get("/alerts/status", (_req, res) => {
+  return res.json(alertingStats());
+});
+
+router.post("/alerts/test", requirePermission("system.control"), async (req, res) => {
+  const who = req.admin?.email ?? "admin";
+  const delivered = await sendAlert({
+    severity: "info", type: "alert.test",
+    message: `Test alert requested by ${who}`,
+    data: { requestedBy: who, note: typeof req.body?.note === "string" ? req.body.note.slice(0, 200) : undefined },
+  });
+  await audit({ action: "alerts.test", entity: "system", entityId: "alerting", metadata: { delivered, by: who } });
+  return res.status(delivered ? 200 : 503).json({ delivered, ...alertingStats() });
 });
 
 router.get("/kill-switches/:name", (req, res) => {

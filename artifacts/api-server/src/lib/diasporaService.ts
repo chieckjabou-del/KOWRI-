@@ -9,6 +9,8 @@ import { processFxTransfer } from "./walletService";
 import { getRate, assertNoArbitrage } from "./fxEngine";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
+import { assertModuleEnabled } from "./launchScope";
+import { guard } from "./killSwitch";
 
 const SEED_CORRIDORS = [
   { fromCountry: "FR", toCountry: "SN", fromCurrency: "EUR", toCurrency: "XOF", processorId: "wise_global",    flatFee: "500",    percentFee: "0.5", estimatedMins: 30  },
@@ -72,6 +74,8 @@ export async function sendRemittance(params: {
   amount: number; fromCurrency: string; toCurrency: string;
   description?: string; idempotencyKey?: string;
 }): Promise<{ txId: string; amountSent: number; amountReceived: number; fee: number; totalDebit: number; rate: number; corridor?: string }> {
+  assertModuleEnabled("fx");
+  guard("fx");
   if (!Number.isFinite(params.amount) || params.amount <= 0) throw new Error("amount must be a positive number");
 
   const [bene] = await db.select().from(beneficiariesTable)
@@ -176,6 +180,8 @@ export async function createRecurringTransfer(params: {
 }
 
 export async function runDueRecurringTransfers(): Promise<{ ran: number; failed: number }> {
+  assertModuleEnabled("fx");
+  guard("fx");
   const now = new Date();
   const due = await db.select().from(recurringTransfersTable)
     .where(and(eq(recurringTransfersTable.status, "active"),

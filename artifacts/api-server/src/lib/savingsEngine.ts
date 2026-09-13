@@ -5,6 +5,7 @@ import { generateId } from "./id";
 import { processTransfer, processDeposit, isDuplicateIdempotencyKey } from "./walletService";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
+import { assertModuleEnabled } from "./launchScope";
 
 const RATE_BY_TIER: Record<string, number> = {
   bronze:   6,
@@ -24,6 +25,7 @@ export async function createSavingsPlan(params: {
   name: string; amount: number; currency: string; termDays: number;
   earlyBreakPenalty?: number; idempotencyKey?: string;
 }): Promise<typeof savingsPlansTable.$inferSelect> {
+  assertModuleEnabled("savings");
   const annualRate = await getRateForUser(params.userId);
 
   const maturityDate = new Date();
@@ -65,6 +67,7 @@ export async function createSavingsPlan(params: {
 }
 
 export async function accrueYield(planId: string): Promise<number> {
+  assertModuleEnabled("savings");
   const [plan] = await db.select().from(savingsPlansTable).where(eq(savingsPlansTable.id, planId));
   if (!plan) throw new Error(`Savings plan ${planId} not found`);
   if (plan.status !== "active") return 0;
@@ -105,6 +108,7 @@ export async function accrueYield(planId: string): Promise<number> {
 export async function matureSavingsPlan(planId: string, targetWalletId: string, ownerId: string): Promise<{
   principal: number; yield: number; total: number; penalty: number;
 }> {
+  assertModuleEnabled("savings");
   const [target] = await db.select({ userId: walletsTable.userId, currency: walletsTable.currency })
     .from(walletsTable).where(eq(walletsTable.id, targetWalletId)).limit(1);
   if (!target || target.userId !== ownerId) throw new Error("Target wallet not found");

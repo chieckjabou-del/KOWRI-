@@ -22,6 +22,8 @@ class TreasuryLiquidityError extends Error {
 
 import { authenticate, walletBelongsToUser, isAdminRequest, requireSelfOrAdmin } from "../middleware/auth";
 import { getTreasuryWallet } from "../lib/treasury";
+import { assertModuleEnabled } from "../lib/launchScope";
+import { guard } from "../lib/killSwitch";
 
 const router = Router();
 
@@ -131,6 +133,8 @@ router.get("/loans", validateQueryParams({ status: VALID_LOAN_STATUSES }), async
 
 router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
+    assertModuleEnabled("credit");
+    guard("credit");
     const { walletId, amount, currency, termDays, purpose } = req.body;
     const userId = req.auth!.userId;
     if (!walletId || !amount || !currency || !termDays) {
@@ -385,6 +389,8 @@ router.get("/loans/:loanId/repayments", async (req, res, next) => {
 
 router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
+    assertModuleEnabled("credit");
+    guard("credit");
     const { walletId, amount } = req.body;
     const userId = req.auth!.userId;
     if (!walletId || !amount) {

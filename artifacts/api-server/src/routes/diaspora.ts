@@ -151,6 +151,8 @@ router.post("/send", requireIdempotencyKey, checkIdempotency, async (req, res, n
     });
     return res.status(201).json({ success: true, ...result });
   } catch (err: any) {
+    // Scope and kill-switch refusals keep their 503 semantics.
+    if (err?.name === "ModuleDisabledError" || err?.name === "KillSwitchError") return next(err);
     return res.status(400).json({ error: true, message: err.message });
   }
 });

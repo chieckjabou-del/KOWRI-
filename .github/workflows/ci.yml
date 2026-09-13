@@ -128,6 +128,9 @@ jobs:
       - name: Disaster recovery and corruption proof (backup, restore, second instance, key loss, injected corruptions)
         working-directory: artifacts/api-server
         run: node test-disaster-recovery.mjs
+      - name: Launch readiness gate (production boot, launch scope, kill switches, conservation per flow, cash-out off, creator earnings, second adversarial pass)
+        working-directory: artifacts/api-server
+        run: node test-launch-gate.mjs
       - name: Graceful shutdown drains cleanly
         run: |
           # The bracket keeps the pattern from matching this very shell (its command line contains the text).

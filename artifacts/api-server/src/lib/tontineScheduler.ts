@@ -12,6 +12,7 @@ import { processTransfer, isDuplicateIdempotencyKey, getWalletBalance } from "./
 import { pickDebitWallet } from "./walletSelection";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
+import { assertModuleEnabled } from "./launchScope";
 import { randomBytes } from "crypto";
 
 export type RotationModel = "fixed" | "random" | "auction" | "admin";
@@ -19,6 +20,7 @@ export type RotationModel = "fixed" | "random" | "auction" | "admin";
 export async function runContributionCycle(tontineId: string): Promise<{
   collected: number; failed: string[]; totalCollected: number;
 }> {
+  assertModuleEnabled("tontines");
   const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
   if (!tontine) throw new Error(`Tontine ${tontineId} not found`);
   if (tontine.status !== "active") throw new Error(`Tontine ${tontineId} is not active`);
@@ -247,6 +249,7 @@ export async function runContributionCycle(tontineId: string): Promise<{
 export async function runPayoutCycle(tontineId: string): Promise<{
   recipientUserId: string; amount: number; round: number; shortfall?: number;
 }> {
+  assertModuleEnabled("tontines");
   const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
   if (!tontine) throw new Error(`Tontine ${tontineId} not found`);
   if (tontine.status !== "active") throw new Error(`Tontine ${tontineId} is not active`);

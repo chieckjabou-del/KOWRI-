@@ -9,6 +9,7 @@ import { generateId } from "./id";
 import { processTransfer, getWalletBalance } from "./walletService";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
+import { assertModuleEnabled } from "./launchScope";
 
 export async function createInvestmentPool(params: {
   name: string; description?: string; poolType: string; managerId: string;
@@ -39,6 +40,7 @@ export async function createInvestmentPool(params: {
 export async function investInPool(params: {
   poolId: string; userId: string; fromWalletId: string; amount: number; idempotencyKey?: string;
 }): Promise<typeof poolPositionsTable.$inferSelect> {
+  assertModuleEnabled("pools");
   const [pool] = await db.select().from(investmentPoolsTable).where(eq(investmentPoolsTable.id, params.poolId));
   if (!pool) throw new Error("Investment pool not found");
   if (pool.status !== "open") throw new Error("Pool is not accepting investments");
@@ -102,6 +104,7 @@ export async function investInPool(params: {
 // pool wallet at redemption (principal + return), so the pool wallet must already
 // hold enough to cover every position before returns can be declared.
 export async function distributePoolReturns(poolId: string, totalReturn: number, actor: { userId: string; isPlatformAdmin?: boolean }): Promise<number> {
+  assertModuleEnabled("pools");
   if (!Number.isFinite(totalReturn) || totalReturn <= 0) throw new Error("totalReturn must be a positive number");
 
   const [pool] = await db.select().from(investmentPoolsTable).where(eq(investmentPoolsTable.id, poolId));
@@ -147,6 +150,7 @@ export async function distributePoolReturns(poolId: string, totalReturn: number,
 }
 
 export async function redeemPoolPosition(positionId: string, userId: string): Promise<void> {
+  assertModuleEnabled("pools");
   const claimed = await db.update(poolPositionsTable)
     .set({ status: "redeeming" })
     .where(and(
@@ -235,6 +239,7 @@ export async function createInsurancePool(params: {
 }
 
 export async function joinInsurancePool(poolId: string, userId: string, walletId: string, idempotencyKey?: string): Promise<typeof insurancePoliciesTable.$inferSelect> {
+  assertModuleEnabled("insurance");
   const [pool] = await db.select().from(insurancePoolsTable).where(eq(insurancePoolsTable.id, poolId));
   if (!pool) throw new Error("Insurance pool not found");
   if (pool.status !== "active") throw new Error("Pool is not active");
@@ -289,6 +294,7 @@ export async function fileClaim(params: {
   policyId: string; poolId: string; userId: string;
   claimAmount: number; reason: string; evidenceUrl?: string;
 }): Promise<typeof insuranceClaimsTable.$inferSelect> {
+  assertModuleEnabled("insurance");
   const [policy] = await db.select().from(insurancePoliciesTable)
     .where(and(eq(insurancePoliciesTable.id, params.policyId), eq(insurancePoliciesTable.userId, params.userId)));
   if (!policy) throw new Error("Policy not found");
@@ -317,6 +323,7 @@ export async function fileClaim(params: {
 }
 
 export async function adjudicateClaim(claimId: string, adjudicatorId: string, approved: boolean, payoutAmount?: number, rejectionReason?: string, opts: { isPlatformAdmin?: boolean } = {}): Promise<void> {
+  assertModuleEnabled("insurance");
   const [pending] = await db.select().from(insuranceClaimsTable).where(eq(insuranceClaimsTable.id, claimId));
   if (!pending) throw new Error("Claim not found");
 
