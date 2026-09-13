@@ -523,6 +523,21 @@ Constats E4, E5, E6, E7 et M2 de `kowri_audit_v2_2026.md`.
 
 **Reste ouvert** — reprise automatique des transferts de float restés `PENDING` après un arrêt brutal (signal en place, tâche de reprise à écrire).
 
+## Audit v2, chantier D — durcissement serveur (13 septembre 2026)
+
+Constats M3, M4, M6 et M10 de `kowri_audit_v2_2026.md`.
+
+- **CORS en liste blanche** (`middleware/security.ts`) : origines autorisées lues dans `CORS_ORIGINS` ; vide en production = aucune origine croisée (l'API sert elle-même les front-ends, les appels sont de même origine ; les clients sans en-tête `Origin`, appli native et serveur à serveur, passent), vide hors production = tout autorisé pour le développement local. En-têtes exposés et méthodes explicités.
+- **En-têtes de sécurité** : `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, `Cross-Origin-Opener/Resource-Policy`, `Cache-Control: no-store` sur `/api`, HSTS en production, `X-Powered-By` supprimé, `trust proxy` activé pour que l'IP réelle alimente le limiteur de connexion. Pas encore de Content-Security-Policy (les bundles front utilisent des styles et scripts en ligne).
+- **Corps de requête borné** : `JSON_BODY_LIMIT` (2 Mo par défaut, les documents KYC transitent en base64) ; dépassement → `413 PAYLOAD_TOO_LARGE`, JSON mal formé → `400 MALFORMED_JSON`.
+- **Arrêt gracieux** (`index.ts`) : sur `SIGTERM`/`SIGINT`, arrêt des timers, du worker outbox et de l'autopilot, fermeture du serveur (les requêtes en cours terminent), fermeture du pool PostgreSQL, sortie ; délai maximal `SHUTDOWN_TIMEOUT_S` (15 s) avant sortie forcée. Vérifié en local : drain puis « complete ». `uncaughtException` provoque un arrêt propre avec code 1 au lieu d'être avalée ; `unhandledRejection` est consignée comme incident. Auto-ping désactivé par défaut (`SELF_PING=true` pour les hébergeurs qui endorment les processus).
+- **Verrou inter-instances** (`lib/instanceLock.ts`) : chaque tâche planifiée (scheduler de tontines, rapprochement quotidien des agents, succès mensuels, rapprochement des wallets) prend un verrou consultatif PostgreSQL le temps de son tick ; avec plusieurs instances, une seule exécute la tâche, les autres passent leur tour. Le verrou est lié à la transaction, donc libéré même si l'instance meurt.
+- **TLS PostgreSQL** (`lib/db/src/index.ts`) : activé automatiquement en production pour tout hôte non local, forçable (`DATABASE_SSL=require`) ou désactivable (`disable`), vérification du certificat par défaut (`DATABASE_SSL_REJECT_UNAUTHORIZED=false` pour les chaînes auto-signées), taille du pool réglable (`DATABASE_POOL_MAX`). La revue des secrets au démarrage avertit si `CORS_ORIGINS` est vide ou si TLS est désactivé en production.
+- **Gestionnaire d'erreurs** : seuls les messages courts du type « Loan not found » deviennent des 404 ; un message interne contenant ces mots n'est plus maquillé en 404.
+- Bloc 15 de `test-integrity.mjs` (6 vérifications) : en-têtes de sécurité, empreinte serveur absente, origine autorisée servie et origine inconnue refusée quand `CORS_ORIGINS` est défini, 413 sur corps de 3 Mo, 400 sur JSON invalide. Test `P4-10d` rendu déterministe (le tirage aléatoire échouait dans 3 % des exécutions). Suites rejouées : 712 vérifications, 0 échec ; 336 routes sondées, 0 ouverte.
+
+**Reste ouvert** — Content-Security-Policy sur les front-ends servis par l'API (nécessite de retirer les styles et scripts en ligne des bundles).
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

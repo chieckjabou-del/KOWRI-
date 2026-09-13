@@ -596,5 +596,29 @@ console.log("\n11. Admin accounts and roles");
   chk("14q pool capital and shares shrink with the redemption", Number(poolAfter.b?.currentAmount) === 10_000 && Number(poolAfter.b?.totalShares ?? 10_000) === 10_000, `current=${poolAfter.b?.currentAmount} shares=${poolAfter.b?.totalShares}`);
 }
 
+// ── 15. HTTP hardening ───────────────────────────────────────────────────────
+{
+  const base = (process.env.API_BASE ?? "http://localhost:8080/api").replace(/\/api$/, "");
+  const health = await fetch(`${base}/api/health`);
+  const h = health.headers;
+  chk("15a security headers on API responses", h.get("x-content-type-options") === "nosniff" && h.get("x-frame-options") === "DENY" && h.get("referrer-policy") === "no-referrer" && h.get("cache-control") === "no-store", `nosniff=${h.get("x-content-type-options")} frame=${h.get("x-frame-options")} referrer=${h.get("referrer-policy")} cache=${h.get("cache-control")}`);
+  chk("15b server fingerprint header removed", h.get("x-powered-by") === null, `x-powered-by=${h.get("x-powered-by")}`);
+
+  const allowed = process.env.CORS_ORIGINS?.split(",")[0]?.trim();
+  if (allowed) {
+    const ok = await fetch(`${base}/api/health`, { headers: { Origin: allowed } });
+    const evil = await fetch(`${base}/api/health`, { headers: { Origin: "https://evil.example" } });
+    chk("15c allow-listed origin gets CORS headers", ok.headers.get("access-control-allow-origin") === allowed, `acao=${ok.headers.get("access-control-allow-origin")}`);
+    chk("15d unknown origin gets none", evil.headers.get("access-control-allow-origin") === null, `acao=${evil.headers.get("access-control-allow-origin")}`);
+  } else {
+    chk("15c/15d CORS allow-list (skipped: CORS_ORIGINS not set for this run, permissive outside production)", true);
+  }
+
+  const huge = await fetch(`${base}/api/users/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone: "x".repeat(3 * 1024 * 1024) }) });
+  chk("15e oversized JSON body → 413", huge.status === 413, `status=${huge.status}`);
+  const malformed = await fetch(`${base}/api/users/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{not json" });
+  chk("15f malformed JSON body → 400 MALFORMED_JSON", malformed.status === 400 && (await malformed.json().catch(() => ({}))).code === "MALFORMED_JSON", `status=${malformed.status}`);
+}
+
 const { fail } = summary("INTEGRITY SUITE");
 process.exit(fail ? 1 : 0);

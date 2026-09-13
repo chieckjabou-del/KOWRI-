@@ -297,11 +297,12 @@ chk("P4-10b Multi-currency concurrent FX (6 requests)", fxConcurrent.filter((r) 
 
 // Concurrent AML checks
 const amlConcurrent = await Promise.all(
-  Array.from({ length: 10 }, () =>
+  Array.from({ length: 10 }, (_, i) =>
     post("/aml/check", {
       walletId:      w1?.id ?? "stress-wallet",
       transactionId: randomUUID(),
-      amount:        Math.random() > 0.3 ? 500 : 12_000_000,
+      // At least one high-value check per run, the rest random (the old all-random draw failed ~3% of runs).
+      amount:        i === 0 || Math.random() <= 0.3 ? 12_000_000 : 500,
       currency:      "XOF",
     })
   )

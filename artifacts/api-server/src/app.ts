@@ -13,13 +13,23 @@ import { seedTreasuryFloat } from "./lib/treasury";
 import { stickyPrimaryRequest, stickyPrimaryResponse } from "./middleware/stickyPrimary";
 import { paymentRouter } from "./lib/paymentRouter";
 import { seedConnectors } from "./lib/connectors";
+import { corsOptions, securityHeaders } from "./middleware/security";
 import "./services/index";
 
 const app: Express = express();
 
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Behind Railway/Vercel-style proxies: trust the first hop so req.ip and the
+// login rate limiter see the client address, not the proxy.
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+
+app.use(securityHeaders);
+app.use(cors(corsOptions()));
+// KYC submissions carry base64 documents, hence a limit well above the JSON
+// default (100 kb) but bounded so a client cannot exhaust memory.
+const bodyLimit = process.env.JSON_BODY_LIMIT ?? "2mb";
+app.use(express.json({ limit: bodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
 app.use(globalSanitizer);
 app.use(validatePagination);

@@ -26,6 +26,13 @@ pnpm --filter @workspace/api-server run build:frontends
 
 Variables d'environnement : voir `artifacts/api-server/.env.example` et `docs/SECURITY_SECRETS.md` (`DATABASE_URL`, `SIGNING_SECRET`, bootstrap du premier compte opérateur, `EXPERIMENTAL_MODULES`).
 
+Réseau et exploitation :
+
+- `CORS_ORIGINS` : origines navigateur autorisées à appeler l'API depuis un autre domaine (liste séparée par des virgules). Vide en production = aucune origine croisée, ce qui est le cas nominal puisque l'API sert les front-ends elle-même. À renseigner seulement si une prévisualisation Vercel ou une console partenaire doit appeler l'API à distance.
+- `DATABASE_SSL` : TLS vers PostgreSQL, automatique en production pour un hôte non local (`require` pour forcer, `disable` pour couper, `DATABASE_SSL_REJECT_UNAUTHORIZED=false` pour une chaîne auto-signée).
+- Arrêt : le serveur draine les requêtes en cours sur `SIGTERM` (délai `SHUTDOWN_TIMEOUT_S`, 15 s par défaut) ; configurer un délai d'arrêt au moins équivalent côté hébergeur.
+- Plusieurs instances : les tâches planifiées se coordonnent par verrou consultatif PostgreSQL, il est donc possible de lancer l'API en plusieurs réplicas sans double exécution des jobs.
+
 Migrations : `pnpm --filter @workspace/db migrate` (ou `push` sur une base de développement).
 
 Trésorerie plateforme : les prêts sont décaissés depuis les wallets de l'utilisateur système `kowri_treasury` (un par devise, créés à la demande) et remboursés vers eux. En production ces wallets démarrent à zéro : lister leurs identifiants avec `GET /api/admin/treasury`, puis les approvisionner avec `POST /api/wallets/:id/deposit` (permission `ledger.write`). Tant qu'une devise n'est pas approvisionnée, les demandes de prêt dans cette devise répondent `503 TREASURY_LIQUIDITY`. Hors production, XOF et XAF sont amorcés automatiquement au premier démarrage.

@@ -71,8 +71,21 @@ export function errorHandler(
       return;
     }
 
-    if (msg.includes("not found") || msg.includes("No results")) {
+    // Entity lookups ("Loan not found", "Agent wallet not found") are 404s; any
+    // longer message that merely contains the words is an internal error.
+    if (/^[\w' -]{1,60} not found$/i.test(msg) || msg === "No results") {
       res.status(404).json({ error: true, message: msg });
+      return;
+    }
+
+    // Oversized or malformed bodies rejected by the body parser.
+    const status = (err as any).status ?? (err as any).statusCode;
+    if (err.name === "PayloadTooLargeError" || status === 413) {
+      res.status(413).json({ error: true, code: "PAYLOAD_TOO_LARGE", message: "Request body too large" });
+      return;
+    }
+    if (err.name === "SyntaxError" && status === 400) {
+      res.status(400).json({ error: true, code: "MALFORMED_JSON", message: "Malformed JSON body" });
       return;
     }
 

@@ -46,6 +46,12 @@ export async function reviewSecrets(env: NodeJS.ProcessEnv = process.env): Promi
   if (production && env.DATABASE_URL && /localhost|127\.0\.0\.1/.test(env.DATABASE_URL)) {
     findings.push({ level: "warn", message: "DATABASE_URL points at localhost in production" });
   }
+  if (production && !env.CORS_ORIGINS) {
+    findings.push({ level: "warn", message: "CORS_ORIGINS is not set: cross-origin browser calls are refused (expected when the API serves the front-ends itself)" });
+  }
+  if (production && (env.DATABASE_SSL ?? "").toLowerCase() === "disable") {
+    findings.push({ level: "warn", message: "DATABASE_SSL=disable in production: the PostgreSQL connection is not encrypted" });
+  }
 
   return findings;
 }
