@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-import { login, ADMIN_KEY, OPERATOR_PHONE } from "./test-lib.mjs";
+import { login, ADMIN_KEY, OPERATOR_PHONE, operators } from "./test-lib.mjs";
 
 const BASE = "http://localhost:8080/api";
 // Legacy suite predates authentication: run it as a platform operator.
@@ -428,11 +428,12 @@ chk("P5-9k 20 concurrent network edges recorded", edgeBurst.every(r=>r.s===201),
 // Idempotency safety under load
 const idemKey2 = randomUUID();
 const idemRef2 = `STRESS-P5-${idemKey2.slice(0,8)}`;
+const { maker: idemMaker2 } = await operators();
 const idemBurst = await Promise.all(
   Array.from({ length: 5 }, () =>
-    post(`/wallets/${w1?.id ?? "test"}/deposit`,
-      { amount: 1, currency: "XOF", reference: idemRef2 },
-      { "Idempotency-Key": idemKey2 }
+    post("/admin/cash-in",
+      { walletId: w1?.id ?? "test", amount: 1, currency: "XOF", reference: idemRef2, source: "test_funding" },
+      { "Idempotency-Key": idemKey2, "X-Admin-Token": idemMaker2.token }
     )
   )
 );

@@ -92,7 +92,7 @@ export function checkIdempotency(req: Request, res: Response, next: NextFunction
   if (!key) { next(); return; }
 
   // Scoped per caller so one user's key can never replay another user's cached response.
-  const actor    = req.auth?.userId ?? "anonymous";
+  const actor    = req.auth?.userId ?? req.admin?.adminId ?? "anonymous";
   const endpoint = `${req.method}:${req.baseUrl}${req.route?.path ?? req.path}|u:${actor}`;
 
   reserve(key, endpoint, fingerprint(req))

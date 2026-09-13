@@ -26,6 +26,7 @@ import {
   FileText,
   FlaskConical,
   Webhook,
+  Banknote,
 } from "lucide-react";
 import {
   Sidebar,
@@ -92,6 +93,7 @@ const adminNavItems: NavEntry[] = [
   { title: "Analytics",      url: "/admin/analytics",  icon: BarChart2 },
   { title: "Support",        url: "/admin/support",    icon: Ticket,      permission: "support.manage" },
   { title: "Agents",         url: "/admin/agents",     icon: Store,       permission: "wallets.manage" },
+  { title: "Cash-in",        url: "/admin/cash-in",    icon: Banknote,    permission: "users.read" },
 ];
 
 function NavItem({ item, location }: { item: NavEntry; location: string }) {

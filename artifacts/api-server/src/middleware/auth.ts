@@ -137,6 +137,25 @@ export function requirePermission(permission: Permission) {
   };
 }
 
+// Money-creating decisions are taken by a named operator: the shared legacy
+// key (no account, no second factor, no individual trail) is refused outright,
+// whatever permissions it would otherwise carry.
+export function requireOperatorSession(permission: Permission) {
+  const check = requirePermission(permission);
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const admin = await resolveAdmin(req);
+      if (admin && admin.via !== "session") {
+        res.status(403).json({ error: "A named operator session is required for this action", code: "SESSION_REQUIRED", required: permission });
+        return;
+      }
+      return check(req, res, next);
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
 // Reads stay open to every admin role; anything that mutates state needs the permission.
 export function gateWrites(permission: Permission) {
   const check = requirePermission(permission);

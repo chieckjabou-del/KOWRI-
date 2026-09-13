@@ -38,6 +38,7 @@ import AdminUsers from "./pages/AdminUsers";
 import AdminAnalytics from "./pages/AdminAnalytics";
 import AdminSupport from "./pages/AdminSupport";
 import AdminAgents from "./pages/AdminAgents";
+import AdminCashIn from "./pages/AdminCashIn";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -82,6 +83,7 @@ function Router() {
       <Route path="/admin/analytics" component={AdminAnalytics} />
       <Route path="/admin/support" component={AdminSupport} />
       <Route path="/admin/agents" component={AdminAgents} />
+      <Route path="/admin/cash-in" component={AdminCashIn} />
 
       <Route component={NotFound} />
     </Switch>

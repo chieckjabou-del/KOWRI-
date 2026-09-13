@@ -58,6 +58,10 @@ export function errorHandler(
       res.status(400).json({ error: true, code: "KYC_LIMIT", message: msg });
       return;
     }
+    if (err.name === "DepositAuthorityError") {
+      res.status(403).json({ error: true, code: "DEPOSIT_AUTHORITY_REQUIRED", message: msg });
+      return;
+    }
     if (err.name === "WalletUnavailableError" || err.name === "CurrencyMismatchError" || err.name === "InvalidAmountError" || err.name === "InvalidFeeError") {
       res.status(400).json({ error: true, code: err.name, message: msg });
       return;
@@ -69,13 +73,18 @@ export function errorHandler(
     // A financial operation whose idempotency key already exists in the ledger
     // has been applied once: the retry is refused instead of re-executed, and
     // the client reconciles through GET /transactions.
-    const pg = err as { code?: string; constraint?: string };
+    // drizzle wraps the driver error (DrizzleQueryError.cause); look through it.
+    const pg = (((err as any).cause && typeof (err as any).cause === "object") ? (err as any).cause : err) as { code?: string; constraint?: string };
     if (pg.code === "23505" && (pg.constraint?.includes("idempotency") || msg.includes("idempotency"))) {
       res.status(409).json({ error: true, code: "ALREADY_PROCESSED", message: "This operation was already applied; do not retry with the same idempotency key" });
       return;
     }
     if (msg === "Insufficient funds") {
       res.status(400).json({ error: true, code: "INSUFFICIENT_FUNDS", message: msg });
+      return;
+    }
+    if (err.name === "InsufficientFloatError") {
+      res.status(409).json({ error: true, code: "INSUFFICIENT_FLOAT", message: msg });
       return;
     }
     if (err.name === "RateLimitExceededError") {

@@ -11,6 +11,7 @@ import { runDailyReconciliation, runMonthlyAchievements, recoverStuckFloatTransf
 import { withInstanceLock }                               from "./lib/instanceLock";
 import { purgeExpiredSessions }                           from "./lib/sessionCleanup";
 import { scheduledFinancialReconciliation }              from "./lib/financialReconciliation";
+import { expireCashInRequests }                          from "./lib/cashIn";
 import { db, pool }                                       from "@workspace/db";
 import { tontinePositionListingsTable, schedulerJobsTable } from "@workspace/db";
 import { eq, and, lt, isNotNull }                         from "drizzle-orm";
@@ -183,6 +184,11 @@ const server = app.listen(port, () => {
       every(5 * 60 * 1000, async () => {
         try { await withInstanceLock("float_recovery", async () => { await recoverStuckFloatTransfers(); }); }
         catch (err: any) { logIncident({ type: "liquidity", action: "float_recovery", result: `error: ${err?.message}` }); }
+      });
+      // Cash-in requests nobody decided on are closed; they can never execute afterwards.
+      every(5 * 60 * 1000, async () => {
+        try { await withInstanceLock("cash_in_expiry", async () => { await expireCashInRequests(); }); }
+        catch (err: any) { logIncident({ type: "cash_in", action: "expiry", result: `error: ${err?.message}` }); }
       });
       every(6 * 60 * 60 * 1000, async () => {
         try {

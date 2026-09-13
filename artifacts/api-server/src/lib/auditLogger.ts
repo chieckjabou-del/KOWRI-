@@ -65,7 +65,15 @@ export type AuditAction =
   | "admin.account.updated"
   | "admin.password.changed"
   | "admin.password.reset"
-  | "admin.session.revoked";
+  | "admin.session.revoked"
+  | "cash_in.initiated"
+  | "cash_in.approved"
+  | "cash_in.executed"
+  | "cash_in.rejected"
+  | "cash_in.cancelled"
+  | "cash_in.expired"
+  | "cash_in.refused"
+  | "creator.earnings.recorded";
 
 interface AuditEntry {
   action: AuditAction;

@@ -13,3 +13,4 @@ export * from "./phase7";
 export * from "./sre";
 export * from "./admin";
 export * from "./auth";
+export * from "./cashIn";

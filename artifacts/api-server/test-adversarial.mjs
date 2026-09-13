@@ -255,7 +255,7 @@ console.log("\n── INV-12  Database-level guarantees (bypassing the applicati
   const w = sql(`select id from wallets where currency = 'XOF' limit 1`);
   let err5 = "";
   try {
-    execFileSync("psql", [DB, "-v", "ON_ERROR_STOP=1", "-c", `begin; insert into transactions (id, to_wallet_id, amount, currency, type, status, reference) values ('adv-unbalanced', '${w}', 100, 'XOF', 'deposit', 'completed', 'ADV-UNBAL-${Date.now()}'); insert into ledger_entries (id, transaction_id, account_id, account_type, debit_amount, credit_amount, currency, event_type) values ('adv-e1', 'adv-unbalanced', '${w}', 'wallet', 0, 100, 'XOF', 'deposit'); commit;`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    execFileSync("psql", [DB, "-v", "ON_ERROR_STOP=1", "-c", `begin; insert into transactions (id, to_wallet_id, amount, currency, type, status, reference, metadata) values ('adv-unbalanced', '${w}', 100, 'XOF', 'deposit', 'completed', 'ADV-UNBAL-${Date.now()}', '{"authority":"demo_seed"}'); insert into ledger_entries (id, transaction_id, account_id, account_type, debit_amount, credit_amount, currency, event_type) values ('adv-e1', 'adv-unbalanced', '${w}', 'wallet', 0, 100, 'XOF', 'deposit'); commit;`], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   } catch (e) { err5 = String(e.stderr); }
   chk("INV-12e an unbalanced transaction is refused at COMMIT (LEDGER_UNBALANCED)", /LEDGER_UNBALANCED/.test(err5), err5.split("\n")[0]);
   chk("INV-12e' nothing of it persisted", sql(`select count(*) from transactions where id = 'adv-unbalanced'`) === "0");

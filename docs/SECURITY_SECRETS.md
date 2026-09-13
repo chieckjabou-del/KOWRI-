@@ -27,12 +27,14 @@ Rôles et permissions (`lib/adminAuth.ts`) :
 | Rôle | Permissions |
 |---|---|
 | `super_admin` | toutes |
-| `compliance` | `users.read`, `users.manage`, `kyc.review`, `aml.review`, `wallets.manage` |
-| `operations` | `users.read`, `wallets.manage`, `ledger.write`, `merchants.manage`, `support.manage` |
+| `compliance` | `users.read`, `users.manage`, `kyc.review`, `aml.review`, `wallets.manage`, `ledger.approve` |
+| `operations` | `users.read`, `wallets.manage`, `ledger.write` (initier un cash-in), `merchants.manage`, `support.manage` |
 | `support` | `users.read`, `support.manage` |
 | `auditor` | `users.read` (lecture seule sur tout le back-office) |
 
 Les lectures du back-office sont ouvertes à tous les rôles ; chaque famille d'écriture exige sa permission (`requirePermission` / `gateWrites`). Un refus renvoie `403` avec `code: PERMISSION_DENIED` et la permission manquante.
+
+Création d'argent (cash-in) : `ledger.write` permet d'*initier* une demande (`POST /api/admin/cash-in`), `ledger.approve` de l'*approuver* ou la rejeter ; l'initiateur ne peut jamais approuver sa propre demande, et au-delà du seuil une troisième personne signe. Ces règles sont aussi imposées par la base (migration `0004`). La clé partagée `ADMIN_API_KEY` ne peut ni initier ni approuver (`403 SESSION_REQUIRED`). Un `super_admin` détient les deux permissions mais reste soumis à la séparation des rôles sur chaque demande.
 
 Règles intégrées : mot de passe ≥ 12 caractères avec lettres et chiffres ; changement de mot de passe obligatoire après création ou réinitialisation ; toute réinitialisation, désactivation ou changement de rôle révoque les sessions ; impossible de rétrograder ou désactiver le dernier `super_admin` actif ; verrouillage 15 min après 5 échecs de connexion ; toutes les actions sont journalisées (`admin.*` dans `audit_logs`).
 
@@ -86,6 +88,5 @@ Se font depuis le portail développeur (révocation puis recréation). Les ancie
 
 ## 6. Ce qui n'est pas encore couvert
 
-- Pas de MFA sur les comptes admin (à ajouter avant l'ouverture à des opérateurs externes).
 - Le verrouillage anti-force-brute est en mémoire (une instance) ; passer sur un store partagé avant montée en charge horizontale.
 - Le stockage des variables d'environnement (coffre, KMS) dépend de l'hébergeur et n'est pas prescrit ici.

@@ -18,6 +18,27 @@
 //   I7  no completed transaction lacks its ledger entries
 //   I8  no published FX pair allows a profitable round trip
 //   I9  no idempotency reservation is stuck in flight (crash marker)
+//   I10 every deposit names a known authority; non-production authorities
+//       (treasury_seed, demo_seed, legacy_pre_gate) never appear in production
+//   I11 money created under cash-in authority equals the sum of EXECUTED
+//       cash-in requests, and every EXECUTED request has its completed transaction
+//   I12 no cash-in request is past its expiry and still open (expiry job alive)
+//   I13 conservation: for each currency, user liabilities + treasury + platform
+//       fees + platform FX = money created − money destroyed (Σ platform_float)
+//   I14 a tontine's solidarity reserve never exceeds the money in its wallet
+//   I15 an investment pool's booked amount equals its active positions and is
+//       covered by its wallet
+//   I16 a cached idempotent money response always names an existing transaction
+//   Not assertable today (documented gap): agent float (agent_wallets.float_balance)
+//   has no ledger account behind it — see the gate report, "Agents".
+//
+// Money model, per currency (all figures read from ledger_entries):
+//   created   = Σ debits of platform_float  (cash-in, yield, non-prod seeds)
+//   destroyed = Σ credits of platform_float (cash-out, reversals of deposits)
+//   supply    = created − destroyed = Σ balances of every non-float account
+//   supply    = userLiabilities + treasury + platformFees + platformFx
+// A breach of I13 means an account exists outside the model or an entry was
+// written outside double entry; I1/I2 point at the offending transaction.
 
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
@@ -40,8 +61,17 @@ export interface FinancialReport {
   generatedAt: string;
   ok: boolean;
   anomalies: string[];
-  supply: Array<{ currency: string; userLiabilities: number; treasury: number; platformFloat: number; platformFees: number; platformFx: number; agentFloat: number }>;
+  supply: Array<{
+    currency: string; userLiabilities: number; treasury: number; platformFloat: number; platformFees: number; platformFx: number; agentFloat: number;
+    created: number; destroyed: number; createdByAuthority: Record<string, number>; conservationGap: number;
+  }>;
+  cashIn: { executedTotal: Record<string, number>; open: number; overdueOpen: number; ledgerMismatch: Array<{ requestId: string; reason: string }> };
   checks: {
+    depositsWithoutAuthority: number;
+    depositsNonProductionAuthority: number;
+    tontineReserveOverdrawn: Array<{ tontineId: string; reserve: number; walletBalance: number }>;
+    poolMismatch: Array<{ poolId: string; reason: string }>;
+    idempotencyOrphans: number;
     unbalancedTransactions: Array<{ transactionId: string; currency: string; debit: number; credit: number }>;
     malformedEntries: number;
     overdrawnWallets: Array<{ walletId: string; currency: string; balance: number }>;
@@ -110,6 +140,81 @@ export async function runFinancialReconciliation(): Promise<FinancialReport> {
     WHERE response_body @> '{"__pending": true}'::jsonb AND created_at < now() - (${STUCK_IDEMPOTENCY_HOURS} || ' hours')::interval`);
   if (Number(stuckIdem?.n) > 0) anomalies.push(`I9 ${stuckIdem.n} idempotency reservation(s) stuck in flight (interrupted requests)`);
 
+  // I10 — deposit authority
+  const [noAuthority] = await rows<{ n: string }>(sql`
+    SELECT COUNT(*)::text AS n FROM transactions
+    WHERE type = 'deposit' AND COALESCE(metadata->>'authority', '') NOT IN ('cash_in_request', 'savings_yield', 'treasury_seed', 'demo_seed', 'reversal', 'legacy_pre_gate')`);
+  if (Number(noAuthority?.n) > 0) anomalies.push(`I10 ${noAuthority.n} deposit(s) without a known authority`);
+  const [nonProd] = await rows<{ n: string }>(sql`
+    SELECT COUNT(*)::text AS n FROM transactions
+    WHERE type = 'deposit' AND metadata->>'authority' IN ('treasury_seed', 'demo_seed', 'legacy_pre_gate')`);
+  if (process.env.NODE_ENV === "production" && Number(nonProd?.n) > 0) {
+    anomalies.push(`I10 ${nonProd.n} deposit(s) created under a non-production authority (seed/legacy) in production`);
+  }
+
+  // I11 — cash-in ledger equality
+  const cashInLedger = await rows<{ currency: string; total: string }>(sql`
+    SELECT currency, COALESCE(SUM(amount), 0)::text AS total FROM transactions
+    WHERE type = 'deposit' AND metadata->>'authority' = 'cash_in_request' AND status IN ('completed', 'reversed') GROUP BY currency`);
+  const cashInExecuted = await rows<{ currency: string; total: string }>(sql`
+    SELECT currency, COALESCE(SUM(amount), 0)::text AS total FROM cash_in_requests WHERE status = 'EXECUTED' GROUP BY currency`);
+  const executedTotal: Record<string, number> = {};
+  for (const r of cashInExecuted) executedTotal[r.currency] = Number(r.total);
+  const ledgerTotal: Record<string, number> = {};
+  for (const r of cashInLedger) ledgerTotal[r.currency] = Number(r.total);
+  for (const cur of new Set([...Object.keys(executedTotal), ...Object.keys(ledgerTotal)])) {
+    if (Math.abs((executedTotal[cur] ?? 0) - (ledgerTotal[cur] ?? 0)) > 0.0001) {
+      anomalies.push(`I11 cash-in ${cur}: requests EXECUTED ${executedTotal[cur] ?? 0} ≠ ledger deposits ${ledgerTotal[cur] ?? 0}`);
+    }
+  }
+  const cashInMismatch = await rows<{ id: string; reason: string }>(sql`
+    SELECT r.id, CASE WHEN t.id IS NULL THEN 'no transaction' WHEN t.status <> 'completed' THEN 'transaction ' || t.status
+                      WHEN t.amount <> r.amount OR t.currency <> r.currency OR t.to_wallet_id IS DISTINCT FROM r.wallet_id THEN 'transaction differs'
+                      WHEN COALESCE(t.metadata->>'cashInRequestId', '') <> r.id THEN 'transaction does not point back' END AS reason
+    FROM cash_in_requests r LEFT JOIN transactions t ON t.id = r.transaction_id
+    WHERE r.status = 'EXECUTED' AND (t.id IS NULL OR t.status <> 'completed' OR t.amount <> r.amount OR t.currency <> r.currency
+          OR t.to_wallet_id IS DISTINCT FROM r.wallet_id OR COALESCE(t.metadata->>'cashInRequestId', '') <> r.id) LIMIT 50`);
+  if (cashInMismatch.length) anomalies.push(`I11 ${cashInMismatch.length} EXECUTED cash-in request(s) whose ledger transaction is missing or differs`);
+  const [orphanCashInTx] = await rows<{ n: string }>(sql`
+    SELECT COUNT(*)::text AS n FROM transactions t
+    WHERE t.type = 'deposit' AND t.metadata->>'authority' = 'cash_in_request'
+      AND NOT EXISTS (SELECT 1 FROM cash_in_requests r WHERE r.id = t.metadata->>'cashInRequestId' AND r.transaction_id = t.id AND r.status = 'EXECUTED')`);
+  if (Number(orphanCashInTx?.n) > 0) anomalies.push(`I11 ${orphanCashInTx.n} cash-in deposit(s) without an EXECUTED request pointing at them`);
+
+  // I14 — a tontine's solidarity reserve is money it actually holds
+  const reserveOver = await rows<{ id: string; reserve: string; bal: string }>(sql`
+    SELECT t.id, t.solidarity_reserve::text AS reserve, COALESCE(l.bal, 0)::text AS bal
+    FROM tontines t
+    LEFT JOIN LATERAL (SELECT SUM(credit_amount) - SUM(debit_amount) AS bal FROM ledger_entries
+                       WHERE account_id = t.wallet_id AND account_type = 'wallet') l ON true
+    WHERE t.wallet_id IS NOT NULL AND t.solidarity_reserve > COALESCE(l.bal, 0) + 0.0001 LIMIT 50`);
+  if (reserveOver.length) anomalies.push(`I14 ${reserveOver.length} tontine(s) whose solidarity reserve exceeds the money in their wallet`);
+
+  // I15 — investment pools: the booked amount equals the sum of active positions and is backed by the pool wallet
+  const poolMismatch = await rows<{ id: string; reason: string }>(sql`
+    SELECT p.id, CASE WHEN ABS(p.current_amount - COALESCE(s.tot, 0)) > 0.0001 THEN 'positions ≠ current_amount' ELSE 'wallet holds less than current_amount' END AS reason
+    FROM investment_pools p
+    LEFT JOIN (SELECT pool_id, SUM(invested_amount) AS tot FROM pool_positions WHERE status = 'active' GROUP BY pool_id) s ON s.pool_id = p.id
+    LEFT JOIN LATERAL (SELECT SUM(credit_amount) - SUM(debit_amount) AS bal FROM ledger_entries
+                       WHERE account_id = p.wallet_id AND account_type = 'wallet') l ON true
+    WHERE ABS(p.current_amount - COALESCE(s.tot, 0)) > 0.0001 OR p.current_amount > COALESCE(l.bal, 0) + 0.0001 LIMIT 50`);
+  if (poolMismatch.length) anomalies.push(`I15 ${poolMismatch.length} investment pool(s) whose booked amount disagrees with positions or wallet`);
+
+  // I16 — a cached money response always points at a transaction that exists
+  const [idemOrphans] = await rows<{ n: string }>(sql`
+    SELECT COUNT(*)::text AS n FROM idempotency_keys k
+    WHERE k.endpoint LIKE 'POST:/api/wallets/%/transfer|%'
+      AND k.response_body ? 'body' AND (k.response_body->'body'->>'id') IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.id = k.response_body->'body'->>'id')`);
+  if (Number(idemOrphans?.n) > 0) anomalies.push(`I16 ${idemOrphans.n} idempotency response(s) referencing a transaction that does not exist`);
+
+  // I12 — expiry job alive
+  const [cashInOpen] = await rows<{ open: string; overdue: string }>(sql`
+    SELECT COUNT(*) FILTER (WHERE status IN ('PENDING_APPROVAL', 'APPROVED'))::text AS open,
+           COUNT(*) FILTER (WHERE status IN ('PENDING_APPROVAL', 'APPROVED') AND expires_at < now() - interval '1 hour')::text AS overdue
+    FROM cash_in_requests`);
+  if (Number(cashInOpen?.overdue) > 0) anomalies.push(`I12 ${cashInOpen.overdue} cash-in request(s) past expiry for over an hour and still open`);
+
   const supplyRows = await rows<{ currency: string; account_id: string; account_type: string; bal: string }>(sql`
     SELECT currency, account_id, account_type, (SUM(credit_amount) - SUM(debit_amount))::text AS bal
     FROM ledger_entries GROUP BY currency, account_id, account_type`);
@@ -117,9 +222,22 @@ export async function runFinancialReconciliation(): Promise<FinancialReport> {
   const treasuryIds = new Set(treasuryWallets.map((w) => w.id));
   const agentFloat = await rows<{ currency: string; total: string }>(sql`
     SELECT 'XOF' AS currency, COALESCE(SUM(float_balance), 0)::text AS total FROM agent_wallets`);
+  const floatFlows = await rows<{ currency: string; created: string; destroyed: string }>(sql`
+    SELECT currency, COALESCE(SUM(debit_amount), 0)::text AS created, COALESCE(SUM(credit_amount), 0)::text AS destroyed
+    FROM ledger_entries WHERE account_id = 'platform_float' GROUP BY currency`);
+  const createdByAuthority = await rows<{ currency: string; authority: string; total: string }>(sql`
+    SELECT l.currency, COALESCE(t.metadata->>'authority', 'unknown') AS authority, COALESCE(SUM(l.debit_amount), 0)::text AS total
+    FROM ledger_entries l JOIN transactions t ON t.id = l.transaction_id
+    WHERE l.account_id = 'platform_float' AND l.debit_amount > 0 GROUP BY l.currency, authority`);
+  const otherAccounts = await rows<{ currency: string; account_id: string; bal: string }>(sql`
+    SELECT currency, account_id, (SUM(credit_amount) - SUM(debit_amount))::text AS bal FROM ledger_entries
+    WHERE account_type <> 'wallet' AND account_id NOT IN ('platform_float', 'platform_fees', 'platform_fx') GROUP BY currency, account_id`);
+  if (otherAccounts.length) anomalies.push(`I13 ${otherAccounts.length} ledger account(s) outside the money model: ${otherAccounts.map((o) => o.account_id).join(", ")}`);
+
   const supplyByCurrency = new Map<string, FinancialReport["supply"][number]>();
+  const blank = (currency: string): FinancialReport["supply"][number] => ({ currency, userLiabilities: 0, treasury: 0, platformFloat: 0, platformFees: 0, platformFx: 0, agentFloat: 0, created: 0, destroyed: 0, createdByAuthority: {}, conservationGap: 0 });
   for (const r of supplyRows) {
-    const s = supplyByCurrency.get(r.currency) ?? { currency: r.currency, userLiabilities: 0, treasury: 0, platformFloat: 0, platformFees: 0, platformFx: 0, agentFloat: 0 };
+    const s = supplyByCurrency.get(r.currency) ?? blank(r.currency);
     const bal = Number(r.bal);
     if (r.account_type === "wallet") {
       if (treasuryIds.has(r.account_id)) s.treasury += bal; else s.userLiabilities += bal;
@@ -132,14 +250,26 @@ export async function runFinancialReconciliation(): Promise<FinancialReport> {
     const s = supplyByCurrency.get(r.currency);
     if (s) s.agentFloat = Number(r.total);
   }
-  const supply = [...supplyByCurrency.values()].map((s) => ({
-    ...s,
-    userLiabilities: Math.round(s.userLiabilities * 10000) / 10000,
-    treasury: Math.round(s.treasury * 10000) / 10000,
-    platformFloat: Math.round(s.platformFloat * 10000) / 10000,
-    platformFees: Math.round(s.platformFees * 10000) / 10000,
-    platformFx: Math.round(s.platformFx * 10000) / 10000,
-  }));
+  for (const r of floatFlows) {
+    const s = supplyByCurrency.get(r.currency) ?? blank(r.currency);
+    s.created = Number(r.created); s.destroyed = Number(r.destroyed);
+    supplyByCurrency.set(r.currency, s);
+  }
+  for (const r of createdByAuthority) {
+    const s = supplyByCurrency.get(r.currency);
+    if (s) s.createdByAuthority[r.authority] = Number(r.total);
+  }
+  const r4 = (n: number) => Math.round(n * 10000) / 10000;
+  const supply = [...supplyByCurrency.values()].map((s) => {
+    const gap = r4((s.userLiabilities + s.treasury + s.platformFees + s.platformFx) - (s.created - s.destroyed));
+    if (Math.abs(gap) > 0.0001) anomalies.push(`I13 ${s.currency}: liabilities+treasury+fees+fx differ from created−destroyed by ${gap}`);
+    return {
+      ...s,
+      userLiabilities: r4(s.userLiabilities), treasury: r4(s.treasury), platformFloat: r4(s.platformFloat),
+      platformFees: r4(s.platformFees), platformFx: r4(s.platformFx), created: r4(s.created), destroyed: r4(s.destroyed),
+      conservationGap: gap,
+    };
+  });
 
   const outboxStats = await getOutboxStats().catch(() => ({ pending: 0, processing: 0, dead: 0 }));
   if (outboxStats.dead > 0) anomalies.push(`outbox: ${outboxStats.dead} dead-lettered event(s)`);
@@ -157,7 +287,16 @@ export async function runFinancialReconciliation(): Promise<FinancialReport> {
     ok: anomalies.length === 0,
     anomalies,
     supply,
+    cashIn: {
+      executedTotal, open: Number(cashInOpen?.open ?? 0), overdueOpen: Number(cashInOpen?.overdue ?? 0),
+      ledgerMismatch: cashInMismatch.map((m) => ({ requestId: m.id, reason: m.reason })),
+    },
     checks: {
+      depositsWithoutAuthority: Number(noAuthority?.n ?? 0),
+      depositsNonProductionAuthority: Number(nonProd?.n ?? 0),
+      tontineReserveOverdrawn: reserveOver.map((r) => ({ tontineId: r.id, reserve: Number(r.reserve), walletBalance: Number(r.bal) })),
+      poolMismatch: poolMismatch.map((p) => ({ poolId: p.id, reason: p.reason })),
+      idempotencyOrphans: Number(idemOrphans?.n ?? 0),
       unbalancedTransactions: unbalanced.map((u) => ({ transactionId: u.transaction_id, currency: u.currency, debit: Number(u.d), credit: Number(u.c) })),
       malformedEntries: Number(malformed?.n ?? 0),
       overdrawnWallets: overdrawn.map((o) => ({ walletId: o.wallet_id, currency: o.currency, balance: Number(o.bal) })),

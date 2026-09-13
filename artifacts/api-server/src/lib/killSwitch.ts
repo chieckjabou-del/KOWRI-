@@ -215,6 +215,10 @@ export function getSwitch(name: KillSwitchName): SwitchEntry {
 }
 
 /** Returns snapshot of all switches. */
+export function isKillSwitchName(name: string): name is KillSwitchName {
+  return (ALL_SWITCHES as readonly string[]).includes(name);
+}
+
 export function getAllSwitches(): SwitchEntry[] {
   return ALL_SWITCHES.map(n => ({ ...get(n) }));
 }

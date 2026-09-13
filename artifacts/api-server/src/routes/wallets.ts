@@ -2,14 +2,13 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { walletsTable } from "@workspace/db";
 import { eq, sql, count } from "drizzle-orm";
-import { generateId, generateReference } from "../lib/id";
+import { generateId } from "../lib/id";
 import { getWalletBalance } from "../lib/walletService";
-import { processDeposit, processTransfer } from "../lib/walletService";
+import { processTransfer } from "../lib/walletService";
 import { validatePagination, validateQueryParams, VALID_CURRENCIES } from "../middleware/validate";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
-import { audit } from "../lib/auditLogger";
-import { authenticate, isAdminRequest, requirePermission, walletBelongsToUser } from "../middleware/auth";
+import { authenticate, isAdminRequest, requireAdmin, walletBelongsToUser } from "../middleware/auth";
 
 const router = Router();
 
@@ -98,47 +97,16 @@ router.get("/:walletId", async (req, res, next) => {
   }
 });
 
-// Cash-in credits a wallet from platform float, so it is reserved to platform operators (agent/connector flows).
-router.post(
-  "/:walletId/deposit",
-  requirePermission("ledger.write"),
-  requireIdempotencyKey,
-  checkIdempotency,
-  async (req, res, next) => {
-    try {
-      const walletId = routeParamString(req, "walletId")!;
-      const { amount, currency, reference, description } = req.body;
-
-      if (!amount || Number(amount) <= 0 || !currency) {
-        return res.status(400).json({ error: true, message: "Invalid deposit: amount (>0) and currency are required" });
-      }
-      if (!VALID_CURRENCIES.has(currency)) {
-        return res.status(400).json({ error: true, message: `Invalid currency. Must be one of: ${[...VALID_CURRENCIES].join(", ")}` });
-      }
-
-      const [wallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, walletId));
-      if (!wallet) {
-        return res.status(404).json({ error: true, message: "Wallet not found" });
-      }
-
-      const tx = await processDeposit({
-        walletId,
-        amount: Number(amount),
-        currency,
-        reference: reference ?? generateReference(),
-        description,
-        idempotencyKey: `deposit:${req.idempotencyKey}`,
-      });
-
-      return res.json({ ...tx, amount: Number(tx.amount) });
-    } catch (err: any) {
-      if (err.message === "Wallet not found") {
-        return res.status(404).json({ error: true, message: "Wallet not found" });
-      }
-      return next(err);
-    }
-  }
-);
+// Direct cash-in was a single-operator money-creation path. It is retired:
+// money enters through POST /admin/cash-in (initiate) and
+// POST /admin/cash-in/:id/approve (a different operator). The route stays
+// registered so old tooling gets an explicit answer instead of a 404.
+router.post("/:walletId/deposit", requireAdmin, (_req, res) => {
+  res.status(410).json({
+    error: true, code: "CASH_IN_MAKER_CHECKER_REQUIRED",
+    message: "Direct deposits are disabled. Initiate a cash-in request with POST /admin/cash-in; a second operator approves it with POST /admin/cash-in/:id/approve.",
+  });
+});
 
 router.post(
   "/:walletId/transfer",

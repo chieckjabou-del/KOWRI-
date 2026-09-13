@@ -69,7 +69,7 @@ async function main() {
   const w1 = wallets.find((w) => w.userId === OPERATOR.userId && w.currency === "XOF") ?? wallets.find((w) => w.userId === OPERATOR.userId) ?? wallets[0];
   const w2 = wallets.find((w) => w.id !== w1.id && w.currency === w1.currency) ?? wallets[1];
   if (Number(w1.balance) < 20000) {
-    await post("/api/wallets/" + w1.id + "/deposit", { amount: 100000, currency: w1.currency, description: "P3 funding" });
+    await fund(w1.id, 100000, w1.currency);
   }
 
   // ── P3-1: SAGA ORCHESTRATION ────────────────────────────────

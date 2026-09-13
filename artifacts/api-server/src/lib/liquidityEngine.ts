@@ -26,6 +26,11 @@ import { logIncident }             from "./incidentStore";
 import { createNotification }      from "./productWallet";
 import { audit }                   from "./auditLogger";
 
+// A float transfer the sending agent cannot cover: a client refusal, never a crash.
+export class InsufficientFloatError extends Error {
+  constructor() { super("Float insuffisant pour le transfert"); this.name = "InsufficientFloatError"; }
+}
+
 // ── Commission config ──────────────────────────────────────────────────────────
 
 const WITHDRAWAL_TIERS = [
@@ -279,7 +284,7 @@ export async function executeFloatTransfer(
       .set({ floatBalance: sql`CAST(float_balance AS NUMERIC) - ${amount}`, updatedAt: new Date() })
       .where(and(eq(agentWalletsTable.agentId, fromAgentId), sql`CAST(float_balance AS NUMERIC) >= ${amount}`))
       .returning({ agentId: agentWalletsTable.agentId });
-    if (!reserved.length) throw new Error("Float insuffisant pour le transfert");
+    if (!reserved.length) throw new InsufficientFloatError();
     await tx.update(agentWalletsTable)
       .set({ floatBalance: sql`CAST(float_balance AS NUMERIC) + ${amount}`, updatedAt: new Date() })
       .where(eq(agentWalletsTable.agentId, toAgentId));

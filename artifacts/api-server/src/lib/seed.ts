@@ -96,7 +96,9 @@ export async function seedDatabase() {
       status: "completed" as const,
       reference: generateReference(),
       description: `${type.replace(/_/g, " ")} transaction`,
-      metadata: null,
+      // Demo deposits name their authority so the database accepts them and
+      // the reconciliation can tell demo money from real cash-in.
+      metadata: type === "deposit" ? { authority: "demo_seed" } : null,
       createdAt: txDate,
       completedAt: txDate,
     });

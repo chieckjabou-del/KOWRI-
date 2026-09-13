@@ -25,7 +25,34 @@ export type DbClient = typeof db;
 // runs after the entries are posted and the balances synced; anything it throws
 // rolls the money movement back with it, so no caller can end up with money
 // moved on one side and its business record missing on the other.
-export type AttachedWrite = (tx: DbClient) => Promise<void>;
+export type AttachedWrite = (tx: DbClient, ctx: { transactionId: string }) => Promise<void>;
+
+// Who allows money to be created. Every deposit names one; the database
+// refuses a deposit without it (migration 0004) and, for a cash-in request,
+// checks at COMMIT that the request is EXECUTED and points at this very
+// transaction. Non-production authorities are refused in production here and
+// flagged by the reconciliation if they ever appear.
+export type DepositAuthority =
+  | { kind: "cash_in_request"; requestId: string }
+  | { kind: "savings_yield"; planId: string }
+  | { kind: "treasury_seed" }
+  | { kind: "demo_seed" };
+
+export class DepositAuthorityError extends Error {
+  constructor(message: string) { super(message); this.name = "DepositAuthorityError"; }
+}
+
+function authorityMetadata(authority: DepositAuthority | undefined): Record<string, unknown> {
+  if (!authority) throw new DepositAuthorityError("A deposit must name the authority that allows the money to be created");
+  if ((authority.kind === "treasury_seed" || authority.kind === "demo_seed") && process.env.NODE_ENV === "production") {
+    throw new DepositAuthorityError(`Authority ${authority.kind} is not allowed in production`);
+  }
+  switch (authority.kind) {
+    case "cash_in_request": return { authority: "cash_in_request", cashInRequestId: authority.requestId };
+    case "savings_yield":   return { authority: "savings_yield", planId: authority.planId };
+    default:                return { authority: authority.kind };
+  }
+}
 
 // numeric(20,4): 16 integer digits. Anything above this cannot be stored and
 // would surface as a database error instead of a clean refusal.
@@ -167,9 +194,11 @@ export async function processDeposit(params: {
   description?: string;
   idempotencyKey?: string;
   internal?: boolean;
+  authority: DepositAuthority;
   attach?: AttachedWrite;
 }): Promise<typeof transactionsTable.$inferSelect> {
   const { walletId, currency, reference, description, idempotencyKey, internal, attach } = params;
+  const metadata = authorityMetadata(params.authority);
   const amount = normalizeAmount(params.amount);
   guard("all");
   const start = Date.now();
@@ -196,6 +225,7 @@ export async function processDeposit(params: {
       reference,
       description: description ?? "Deposit",
       idempotencyKey: idempotencyKey ?? null,
+      metadata,
     });
 
     assertValidTransition("processing", "completed");
@@ -238,7 +268,7 @@ export async function processDeposit(params: {
     const newBalance = await syncWalletBalance(walletId, tx as any);
     newBalanceAfterDeposit = newBalance;
 
-    if (attach) await attach(tx as any);
+    if (attach) await attach(tx as any, { transactionId: txId });
 
     await tx
       .update(transactionsTable)
@@ -429,7 +459,7 @@ export async function processTransfer(params: {
       syncWalletBalance(toWalletId, tx as any),
     ]);
 
-    if (attach) await attach(tx as any);
+    if (attach) await attach(tx as any, { transactionId: txId });
 
     await tx
       .update(transactionsTable)
@@ -532,7 +562,7 @@ export async function processFxTransfer(params: {
       syncWalletBalance(toWalletId, tx as any),
     ]);
 
-    if (attach) await attach(tx as any);
+    if (attach) await attach(tx as any, { transactionId: txId });
 
     await tx.update(transactionsTable).set({ status: "completed", completedAt: now }).where(eq(transactionsTable.id, txId));
   });
@@ -673,7 +703,7 @@ export async function processWithdrawal(params: {
 
     await syncWalletBalance(walletId, tx as any);
 
-    if (attach) await attach(tx as any);
+    if (attach) await attach(tx as any, { transactionId: txId });
 
     await tx
       .update(transactionsTable)
@@ -761,7 +791,9 @@ export async function reverseTransaction(params: {
       reference: ref,
       description: `Reversal of ${original.reference}: ${reason}`,
       idempotencyKey: key,
-      metadata: { reversalOf: transactionId, reason },
+      // A reversed deposit is a deposit-typed row that destroys money; its
+      // authority is the original it mirrors (checked by the database).
+      metadata: { reversalOf: transactionId, reason, ...(original.type === "deposit" ? { authority: "reversal" } : {}) },
     });
 
     const base = { transactionId: reversalId, reference: ref, eventType: "reversal", currency };
@@ -791,7 +823,8 @@ export async function reverseTransaction(params: {
 }
 
 export function isDuplicateIdempotencyKey(err: unknown): boolean {
-  const e = err as { code?: string; constraint?: string; message?: string } | undefined;
+  const raw = err as { cause?: unknown } | undefined;
+  const e = ((raw?.cause && typeof raw.cause === "object") ? raw.cause : err) as { code?: string; constraint?: string; message?: string } | undefined;
   return e?.code === "23505" && (e.constraint?.includes("idempotency") || e.message?.includes("idempotency") || false);
 }
 

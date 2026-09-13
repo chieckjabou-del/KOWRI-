@@ -120,9 +120,9 @@ console.log("\n4. KYC ceiling & review workflow");
 console.log("\n5. Risk screening");
 {
   const dave = await createUser({ firstName: "Dave", kycLevel: 2 });
-  await fund(dave.wallet.id, 25_000_000);
+  await fund(dave.wallet.id, 10_000_000);
 
-  // The 25M cash-in itself must have been screened (deposits were never checked before).
+  // The 10M cash-in itself must have been screened (deposits were never checked before).
   const depositFlags = await get(`/aml/flags/${dave.wallet.id}`, { admin: true });
   chk("5a a high-value cash-in is AML-flagged (deposits are screened)", depositFlags.s === 200 && (depositFlags.b?.flags ?? []).some((f) => f.flagReason === "high_value_transaction"), `flags=${(depositFlags.b?.flags ?? []).map((f) => f.flagReason).join(",")}`);
 
@@ -395,7 +395,9 @@ console.log("\n11. Admin accounts and roles");
   const reviewKyc = await patch("/compliance/kyc/nope", { status: "approved", reviewer: "sup" }, asAdmin(sup));
   chk("11m support cannot review KYC → 403 PERMISSION_DENIED", reviewKyc.s === 403 && reviewKyc.b?.code === "PERMISSION_DENIED" && reviewKyc.b?.required === "kyc.review", `status=${reviewKyc.s} ${JSON.stringify(reviewKyc.b)}`);
   const depositBySupport = await post(`/wallets/${(await operator()).wallet?.id ?? "nope"}/deposit`, { amount: 1000, currency: "XOF", reference: "x" }, { ...asAdmin(sup), idempotency: true });
-  chk("11n support cannot credit a wallet → 403", depositBySupport.s === 403, `status=${depositBySupport.s}`);
+  chk("11n direct wallet credit is retired for every operator → 410", depositBySupport.s === 410 && depositBySupport.b?.code === "CASH_IN_MAKER_CHECKER_REQUIRED", `status=${depositBySupport.s}`);
+  const cashInBySupport = await post(`/admin/cash-in`, { walletId: (await operator()).wallet?.id ?? "nope", amount: 1000, currency: "XOF", reference: `SUP-${randomUUID()}`, source: "other" }, { ...asAdmin(sup), idempotency: true });
+  chk("11n' support cannot initiate a cash-in → 403 ledger.write", cashInBySupport.s === 403 && cashInBySupport.b?.required === "ledger.write", `status=${cashInBySupport.s} ${JSON.stringify(cashInBySupport.b)}`);
   const killBySupport = await post("/admin/kill-switches/all/fire", {}, asAdmin(sup));
   chk("11o support cannot fire a kill switch → 403", killBySupport.s === 403 && killBySupport.b?.required === "system.control", `status=${killBySupport.s}`);
   const adminsBySupport = await get("/admin/auth/users", asAdmin(sup));
@@ -408,8 +410,12 @@ console.log("\n11. Admin accounts and roles");
   const oldPw = await post("/admin/auth/login", { email: supportEmail, password: "TempPassw0rd-2026" });
   chk("11s old password no longer logs in", oldPw.s === 401, `status=${oldPw.s}`);
 
+  // Other suites may have left super_admin fixtures behind: park them first so
+  // the guard on the *last* active super_admin is what is tested.
+  const otherSupers = ((await get("/admin/auth/users", asAdmin(root))).b?.admins ?? []).filter((a) => a.role === "super_admin" && a.status === "active" && a.id !== rootLogin.b?.admin?.id);
+  for (const o of otherSupers) await patch(`/admin/auth/users/${o.id}`, { role: "auditor" }, asAdmin(root));
   const lastRoot = await patch(`/admin/auth/users/${rootLogin.b?.admin?.id}`, { status: "disabled" }, asAdmin(root));
-  chk("11t the last active super_admin cannot be disabled → 409", lastRoot.s === 409, `status=${lastRoot.s}`);
+  chk("11t the last active super_admin cannot be disabled → 409", lastRoot.s === 409, `status=${lastRoot.s} parked=${otherSupers.length}`);
   const disabled = await patch(`/admin/auth/users/${created.b?.admin?.id}`, { status: "disabled" }, asAdmin(root));
   chk("11u super_admin disables the support account", disabled.s === 200 && disabled.b?.admin?.status === "disabled", `status=${disabled.s}`);
   const supAfter = await get("/admin/auth/me", asAdmin(sup));

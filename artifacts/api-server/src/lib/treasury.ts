@@ -73,6 +73,7 @@ export async function seedTreasuryFloat(): Promise<void> {
       walletId: wallet.id, amount, currency, reference,
       description: "Initial platform capital (non-production seed)",
       idempotencyKey: `treasury-seed:${currency}`, internal: true,
+      authority: { kind: "treasury_seed" },
     });
     console.log(`[Treasury] seeded ${amount.toLocaleString("fr-FR")} ${currency} into ${wallet.id}`);
   }

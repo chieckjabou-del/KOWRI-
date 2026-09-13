@@ -10,6 +10,7 @@ import complianceRouter    from "./compliance";
 import analyticsRouter     from "./analytics";
 import adminRouter         from "./admin";
 import adminAuthRouter     from "./adminAuth";
+import cashInRouter        from "./cashIn";
 import systemRouter        from "./system";
 import sagasRouter         from "./sagas";
 import riskRouter          from "./risk";
@@ -62,6 +63,7 @@ router.use("/compliance",     complianceRouter);
 // (admin, aml, risk, compliance, …) are left as they are.
 router.use("/analytics",      requireAdmin, analyticsRouter);
 router.use("/admin/auth",     adminAuthRouter);
+router.use("/admin/cash-in",  cashInRouter);
 router.use("/admin",          adminRouter);
 router.use("/system",         requireAdmin, systemRouter);
 router.use("/sagas",          sagasRouter);

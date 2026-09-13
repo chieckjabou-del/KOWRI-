@@ -16,6 +16,7 @@ import {
   forceOff,
   manualLift,
   autoRecover,
+  isKillSwitchName,
   type KillSwitchName,
 } from "../lib/killSwitch";
 import { rollback } from "../lib/actionExecutor";
@@ -28,7 +29,14 @@ import { recoverStuckFloatTransfers } from "../lib/liquidityEngine";
 const router = Router();
 router.use(requireAdmin);
 
-// Platform treasury wallets (loan capital). Fund them with POST /wallets/:id/deposit.
+// An unknown kill switch name is a client error, never a crash.
+router.param("name", (req, res, next, name) => {
+  if (!isKillSwitchName(String(name))) { res.status(404).json({ error: true, message: `Unknown kill switch: ${name}` }); return; }
+  next();
+});
+
+// Platform treasury wallets (loan capital). Funded through the cash-in
+// maker-checker (POST /admin/cash-in, then approval by a second operator).
 router.get("/treasury", async (_req, res, next) => {
   try {
     return res.json({ wallets: await listTreasuryWallets() });

@@ -115,11 +115,72 @@ export async function setKycLevel(userId, kycLevel) {
   return review.b;
 }
 
-// Platform cash-in (admin only) so a test wallet has funds to work with.
-export async function fund(walletId, amount, currency = "XOF") {
-  const r = await post(`/wallets/${walletId}/deposit`, { amount, currency, description: "test funding" }, await adminOpts({ idempotency: true }));
-  if (r.s !== 200) throw new Error(`fund failed: ${r.s} ${JSON.stringify(r.b)}`);
-  return r.b;
+// ── Named operator accounts ──────────────────────────────────────────────────
+// Money creation needs two distinct named operators (maker-checker), so the
+// suites keep a fixed set of accounts: a super_admin (bootstrapped with the
+// legacy key on an empty install), an `operations` maker and a `compliance`
+// checker. Passwords are test fixtures for a local/CI database only.
+export const ROOT_ADMIN = { email: "root@kowri.test", name: "Root", password: "RootPassw0rd-2026" };
+export const MAKER_ADMIN = { email: "cashin-maker@kowri.test", name: "Cash-in maker", password: "MakerPassw0rd-2026", role: "operations" };
+export const CHECKER_ADMIN = { email: "cashin-checker@kowri.test", name: "Cash-in checker", password: "CheckerPassw0rd-2026", role: "compliance" };
+export const asAdminToken = (token, extra = {}) => ({ ...extra, headers: { ...(extra.headers ?? {}), "X-Admin-Token": token } });
+
+export async function adminLogin(account) {
+  const r = await post("/admin/auth/login", { email: account.email, password: account.password });
+  if (r.s !== 200 || !r.b?.token) throw new Error(`admin login failed for ${account.email}: ${r.s} ${JSON.stringify(r.b)}`);
+  return { token: r.b.token, admin: r.b.admin, opts: asAdminToken(r.b.token) };
+}
+
+// Creates (once) and logs in an admin account through the admins.manage API.
+export async function ensureAdmin(account, rootToken) {
+  const created = await post("/admin/auth/users", { email: account.email, name: account.name, password: account.password, role: account.role }, asAdminToken(rootToken));
+  if (created.s !== 201 && created.s !== 409) throw new Error(`ensureAdmin ${account.email} failed: ${created.s} ${JSON.stringify(created.b)}`);
+  return adminLogin(account);
+}
+
+let operatorsCache = null;
+export async function operators() {
+  if (operatorsCache) return operatorsCache;
+  const boot = await post("/admin/auth/bootstrap", ROOT_ADMIN, { admin: true });
+  if (boot.s !== 201 && boot.s !== 409) throw new Error(`bootstrap failed: ${boot.s} ${JSON.stringify(boot.b)}`);
+  const root = await adminLogin(ROOT_ADMIN);
+  const maker = await ensureAdmin(MAKER_ADMIN, root.token);
+  const checker = await ensureAdmin(CHECKER_ADMIN, root.token);
+  operatorsCache = { root, maker, checker };
+  return operatorsCache;
+}
+
+// Platform cash-in through the maker-checker: the maker initiates, the checker
+// approves, and the super_admin signs second when the amount needs it. This is
+// the only way a test wallet gets money that was not transferred to it.
+// When one maker reaches their daily ceiling, the suites move on to another
+// named operations account, as a real back-office would.
+let makerSeq = 1;
+export async function fund(walletId, amount, currency = "XOF", { source = "test_funding", reference } = {}) {
+  const ops = await operators();
+  const { root, checker } = ops;
+  let init;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    init = await post("/admin/cash-in", {
+      walletId, amount, currency, source, reference: reference ?? `TEST-${randomUUID()}`, description: "test funding",
+    }, asAdminToken(ops.maker.token, { idempotency: true }));
+    if (init.s === 409 && init.b?.code === "CASH_IN_LIMIT_OPERATOR") {
+      makerSeq += 1;
+      ops.maker = await ensureAdmin({ ...MAKER_ADMIN, email: `cashin-maker-${makerSeq}@kowri.test`, name: `Cash-in maker ${makerSeq}` }, root.token);
+      continue;
+    }
+    break;
+  }
+  if (init.s !== 201) throw new Error(`fund: initiate failed: ${init.s} ${JSON.stringify(init.b)}`);
+  const id = init.b.request.id;
+  let approve = await post(`/admin/cash-in/${id}/approve`, {}, asAdminToken(checker.token));
+  if (approve.s !== 200) throw new Error(`fund: approve failed: ${approve.s} ${JSON.stringify(approve.b)}`);
+  if (approve.b.request.status === "APPROVED") {
+    approve = await post(`/admin/cash-in/${id}/approve`, {}, asAdminToken(root.token));
+    if (approve.s !== 200) throw new Error(`fund: second approval failed: ${approve.s} ${JSON.stringify(approve.b)}`);
+  }
+  if (approve.b.request.status !== "EXECUTED") throw new Error(`fund: request ended ${approve.b.request.status}`);
+  return approve.b.transaction;
 }
 
 export async function balance(session, walletId) {

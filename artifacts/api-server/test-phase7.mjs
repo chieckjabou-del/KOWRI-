@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-import { login, ADMIN_KEY, OPERATOR_PHONE, setKycLevel } from "./test-lib.mjs";
+import { login, ADMIN_KEY, OPERATOR_PHONE, setKycLevel, fund } from "./test-lib.mjs";
 
 const BASE = "http://localhost:8080/api";
 // Legacy suite predates authentication: run it as a platform operator.
@@ -57,12 +57,10 @@ async function del(path) {
   } catch (e) { return { s: 0, b: null }; }
 }
 
+// Funding goes through the cash-in maker-checker (two named operators).
 async function deposit(walletId, amount, currency = "XOF") {
-  return post(
-    `/wallets/${walletId}/deposit`,
-    { amount, currency, reference: `SEED-P7-${randomUUID()}` },
-    { "Idempotency-Key": randomUUID() },
-  );
+  try { return { s: 200, b: await fund(walletId, amount, currency) }; }
+  catch (e) { return { s: 0, b: { message: String(e.message) } }; }
 }
 
 console.log("╔══════════════════════════════════════════════════════════════╗");
@@ -406,6 +404,7 @@ const earnings = await post(`/creator/communities/${communityId}/earnings`, {
 chk("P7-6l POST earnings → 200", earnings.s === 200, earnings.b?.message ?? "");
 chk("P7-6m Creator fee > 0", (earnings.b?.creatorFee ?? 0) > 0);
 chk("P7-6n Platform fee > 0", (earnings.b?.platformFee ?? 0) > 0);
+chk("P7-6n' declaring earnings credits nothing (no money creation)", earnings.b?.credited === false);
 
 const dashboard = await get(`/creator/dashboard/${uid1}`);
 chk("P7-6o GET /creator/dashboard → 200", dashboard.s === 200);

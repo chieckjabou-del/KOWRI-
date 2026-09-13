@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 
-import { login, ADMIN_KEY, OPERATOR_PHONE } from "./test-lib.mjs";
+import { login, ADMIN_KEY, OPERATOR_PHONE, operators } from "./test-lib.mjs";
 
 const BASE = "http://localhost:8080/api";
 // Legacy suite predates authentication: run it as a platform operator.
@@ -353,11 +353,14 @@ chk("P4-10g Fraud burst triggers alerts", (fraudBurstAlerts.b?.alerts?.length ??
 // Idempotency stress test
 const idemKey  = randomUUID();
 const idemRef  = `STRESS-IDEM-${idemKey.slice(0, 8)}`;
+// Money creation goes through the cash-in maker-checker: the same key fired
+// five times by the maker must yield exactly one request.
+const { maker: idemMaker } = await operators();
 const idemResults = await Promise.all(
   Array.from({ length: 5 }, () =>
-    post("/wallets/" + (w1?.id ?? "test") + "/deposit",
-      { amount: 1, currency: "XOF", reference: idemRef },
-      { "Idempotency-Key": idemKey }
+    post("/admin/cash-in",
+      { walletId: w1?.id ?? "test", amount: 1, currency: "XOF", reference: idemRef, source: "test_funding" },
+      { "Idempotency-Key": idemKey, "X-Admin-Token": idemMaker.token }
     )
   )
 );

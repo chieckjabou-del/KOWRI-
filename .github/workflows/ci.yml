@@ -78,6 +78,8 @@ jobs:
       - run: pnpm install --no-frozen-lockfile
       - name: Build shared libraries
         run: pnpm run typecheck:libs
+      - name: PostgreSQL client tools (used by the SQL, DR and corruption suites)
+        run: psql --version && pg_dump --version && pg_restore --version
       - name: Apply versioned migrations
         run: pnpm --filter @workspace/db migrate
       - name: Start the API server
@@ -114,6 +116,18 @@ jobs:
       - name: Adversarial suite (double spend, limits, credit, FX, idempotency, crash recovery, DB invariants)
         working-directory: artifacts/api-server
         run: node test-adversarial.mjs
+      - name: Cash-in maker-checker suite (identity, four-eyes, concurrency, limits, SQL and internal routes)
+        working-directory: artifacts/api-server
+        run: node test-cashin.mjs
+      - name: Operator control matrix (roles × auth × MFA × approval × audit, write-route sweep)
+        working-directory: artifacts/api-server
+        run: node test-operators.mjs
+      - name: Targeted concurrency pass (2/5/10/20 on every money operation)
+        working-directory: artifacts/api-server
+        run: node test-concurrency.mjs
+      - name: Disaster recovery and corruption proof (backup, restore, second instance, key loss, injected corruptions)
+        working-directory: artifacts/api-server
+        run: node test-disaster-recovery.mjs
       - name: Graceful shutdown drains cleanly
         run: |
           # The bracket keeps the pattern from matching this very shell (its command line contains the text).

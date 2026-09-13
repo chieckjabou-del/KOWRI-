@@ -18,7 +18,8 @@ export const PERMISSIONS = [
   "kyc.review",       // approve / reject KYC submissions
   "aml.review",       // review AML flags and resolve risk alerts
   "wallets.manage",   // freeze / close / reopen wallets
-  "ledger.write",     // credit wallets from platform float, accrue, run schedulers
+  "ledger.write",     // initiate a cash-in request, accrue, run schedulers
+  "ledger.approve",   // approve / reject a cash-in request (never one's own)
   "merchants.manage", // activate / suspend merchants
   "support.manage",   // resolve support tickets
   "system.control",   // kill switches, sagas, MQ, regions, failure simulation, webhooks
@@ -28,7 +29,7 @@ export type Permission = (typeof PERMISSIONS)[number];
 
 export const ROLE_PERMISSIONS: Record<string, readonly Permission[]> = {
   super_admin: PERMISSIONS,
-  compliance:  ["users.read", "users.manage", "kyc.review", "aml.review", "wallets.manage"],
+  compliance:  ["users.read", "users.manage", "kyc.review", "aml.review", "wallets.manage", "ledger.approve"],
   operations:  ["users.read", "wallets.manage", "ledger.write", "merchants.manage", "support.manage"],
   support:     ["users.read", "support.manage"],
   auditor:     ["users.read"],
