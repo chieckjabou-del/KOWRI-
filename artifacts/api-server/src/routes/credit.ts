@@ -5,7 +5,8 @@ import { eq, and, sql, count, desc } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { validateQueryParams, VALID_LOAN_STATUSES } from "../middleware/validate";
 import { sagaOrchestrator } from "../lib/sagaOrchestrator";
-import { processTransfer, reverseTransaction } from "../lib/walletService";
+import { processTransfer, reverseTransaction, lockEntity, normalizeAmount } from "../lib/walletService";
+import { AppError } from "../middleware/errorHandler";
 import { eventBus } from "../lib/eventBus";
 import { computeCreditScoreFromActivity } from "../lib/reputationEngine";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
@@ -151,6 +152,7 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       return res.status(400).json({ error: true, message: `Loan amount exceeds maximum allowed: ${creditScore.maxLoanAmount}` });
     }
 
+    const requested = normalizeAmount(Number(amount));
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + Number(termDays));
     const loanId = generateId();
@@ -174,7 +176,7 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
         loanId,
         userId,
         walletId,
-        amount: Number(amount),
+        amount: requested,
         currency,
         termDays: Number(termDays),
         dueDate,
@@ -185,19 +187,37 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       [
         {
           name: "create_loan_record",
+          // The credit line is a ceiling on the borrower's TOTAL outstanding
+          // principal, not on each loan taken separately. The check and the
+          // insert run under a per-user lock so parallel requests cannot each
+          // pass the check before any of them is recorded.
           execute: async (ctx) => {
-            await db.insert(loansTable).values({
-              id: ctx.loanId,
-              userId: ctx.userId,
-              walletId: ctx.walletId,
-              amount: String(ctx.amount),
-              currency: ctx.currency,
-              interestRate: ctx.interestRate,
-              termDays: ctx.termDays,
-              status: "approved",
-              amountRepaid: "0",
-              purpose: ctx.purpose,
-              dueDate: ctx.dueDate,
+            await db.transaction(async (tx) => {
+              await lockEntity(tx as any, "loan-user", ctx.userId);
+              const [exposure] = await tx.select({
+                outstanding: sql<number>`COALESCE(SUM(CAST(${loansTable.amount} AS NUMERIC) - CAST(${loansTable.amountRepaid} AS NUMERIC)), 0)`,
+              }).from(loansTable).where(and(
+                eq(loansTable.userId, ctx.userId),
+                sql`${loansTable.status} IN ('pending', 'approved', 'disbursed')`,
+              ));
+              const outstanding = Number(exposure?.outstanding ?? 0);
+              const ceiling = Number(creditScore.maxLoanAmount);
+              if (outstanding + ctx.amount > ceiling + 1e-6) {
+                throw new AppError(409, `Outstanding credit ${outstanding} plus ${ctx.amount} exceeds your credit line of ${ceiling}`);
+              }
+              await tx.insert(loansTable).values({
+                id: ctx.loanId,
+                userId: ctx.userId,
+                walletId: ctx.walletId,
+                amount: String(ctx.amount),
+                currency: ctx.currency,
+                interestRate: ctx.interestRate,
+                termDays: ctx.termDays,
+                status: "approved",
+                amountRepaid: "0",
+                purpose: ctx.purpose,
+                dueDate: ctx.dueDate,
+              });
             });
             return ctx;
           },
@@ -222,6 +242,12 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
                 description: `Loan disbursement #${ctx.loanId}`,
                 idempotencyKey: `loan-disburse:${ctx.loanId}`,
                 skipKycCheck: true, skipFraudCheck: true, skipRateLimitCheck: true,
+                // The loan is marked disbursed in the same transaction as the money.
+                attach: async (t) => {
+                  await t.update(loansTable)
+                    .set({ status: "disbursed" as any, disbursedAt: new Date() })
+                    .where(eq(loansTable.id, ctx.loanId));
+                },
               });
             } catch (err) {
               if (err instanceof Error && err.message === "Insufficient funds") {
@@ -229,9 +255,6 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
               }
               throw err;
             }
-            await db.update(loansTable)
-              .set({ status: "disbursed" as any, disbursedAt: new Date() })
-              .where(eq(loansTable.id, ctx.loanId));
             return { ...ctx, disbursed: true, disbursementTxId: tx.id };
           },
           // Undo the actual money movement, then record the loan as never having gone out.
@@ -284,10 +307,14 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
     await req.saveIdempotentResponse?.(body);
     return res.status(201).json(body);
   } catch (err) {
-    if (err instanceof TreasuryLiquidityError) {
-      return res.status(503).json({ error: true, code: "TREASURY_LIQUIDITY", message: err.message });
+    const cause = err instanceof Error && err.cause instanceof Error ? err.cause : err;
+    if (cause instanceof TreasuryLiquidityError) {
+      return res.status(503).json({ error: true, code: "TREASURY_LIQUIDITY", message: cause.message });
     }
-    return next(err);
+    if (cause instanceof AppError) {
+      return res.status(cause.statusCode).json({ error: true, code: "CREDIT_LINE_EXCEEDED", message: cause.message });
+    }
+    return next(cause);
   }
 });
 
@@ -382,50 +409,65 @@ router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, asy
       return res.status(400).json({ error: true, message: `Repayment exceeds outstanding balance (${outstanding})` });
     }
 
-    // The repayment is a real transfer back to the platform treasury; a
-    // repayment is only recorded once the money has actually moved.
+    // The repayment is a real transfer back to the platform treasury. The loan
+    // row is locked and re-checked INSIDE the ledger transaction, and the
+    // repayment record and the new balance are written there too: two
+    // simultaneous repayments cannot both be accepted, and the money can never
+    // leave the borrower's wallet without the loan being credited for it.
     const treasury = await getTreasuryWallet(loan.currency);
     const repaymentId = generateId();
+    const repayAmount = normalizeAmount(Number(amount));
+    let newRepaid = 0;
+    let isFullyRepaid = false;
     const tx = await processTransfer({
       fromWalletId: walletId,
       toWalletId:   treasury.id,
-      amount:       Number(amount),
+      amount:       repayAmount,
       currency:     loan.currency,
       reference:    `LOAN-REPAY-${repaymentId}`,   // transaction references are unique
       description:  `Loan repayment – ${loan.id}`,
       skipFraudCheck: true,
       idempotencyKey: `loan-repay:${userId}:${req.idempotencyKey}`,
+      attach: async (t) => {
+        const [fresh] = await t.select().from(loansTable).where(eq(loansTable.id, loan.id)).for("update");
+        if (!fresh) throw new AppError(404, "Loan not found");
+        if (!["approved", "disbursed"].includes(fresh.status)) {
+          throw new AppError(409, `Cannot repay loan with status: ${fresh.status}`);
+        }
+        const remaining = Number(fresh.amount) - Number(fresh.amountRepaid);
+        if (repayAmount > remaining + 1e-6) {
+          throw new AppError(409, `Repayment exceeds outstanding balance (${remaining})`);
+        }
+        newRepaid = Math.round((Number(fresh.amountRepaid) + repayAmount) * 10000) / 10000;
+        isFullyRepaid = newRepaid + 1e-6 >= Number(fresh.amount);
+        await t.insert(loanRepaymentsTable).values({
+          id:            repaymentId,
+          loanId:        loan.id,
+          userId,
+          amount:        String(repayAmount),
+          currency:      loan.currency,
+          transactionId: null, // the ledger transaction id is not known until commit; see reference LOAN-REPAY-<id>
+          paidAt:        new Date(),
+          status:        "completed",
+        });
+        await t.update(loansTable).set({
+          amountRepaid: String(newRepaid),
+          status:       isFullyRepaid ? "repaid" : fresh.status,
+          updatedAt:    new Date(),
+        }).where(eq(loansTable.id, loan.id));
+      },
     });
-
-    await db.insert(loanRepaymentsTable).values({
-      id:            repaymentId,
-      loanId:        loan.id,
-      userId,
-      amount:        String(amount),
-      currency:      loan.currency,
-      transactionId: tx.id,
-      paidAt:        new Date(),
-      status:        "completed",
-    });
-
-    const newRepaid = Number(loan.amountRepaid) + Number(amount);
-    const isFullyRepaid = newRepaid >= Number(loan.amount);
-
-    await db.update(loansTable).set({
-      amountRepaid: String(newRepaid),
-      status:       isFullyRepaid ? "repaid" : loan.status,
-      updatedAt:    new Date(),
-    }).where(eq(loansTable.id, loan.id));
+    await db.update(loanRepaymentsTable).set({ transactionId: tx.id }).where(eq(loanRepaymentsTable.id, repaymentId));
 
     await eventBus.publish("loan.repayment.made", {
-      loanId: loan.id, userId, amount: Number(amount), newRepaid, isFullyRepaid,
+      loanId: loan.id, userId, amount: repayAmount, newRepaid, isFullyRepaid,
     });
 
     const body = {
       repaymentId,
       loanId:       loan.id,
       transactionId: tx.id,
-      amount:       Number(amount),
+      amount:       repayAmount,
       newRepaid,
       remaining:    Math.max(0, Number(loan.amount) - newRepaid),
       isFullyRepaid,

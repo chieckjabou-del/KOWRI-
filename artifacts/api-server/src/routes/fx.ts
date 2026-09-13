@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getAllRates, convertAmount, upsertRate, getRate, FXNotFoundError } from "../lib/fxEngine";
+import { getAllRates, convertAmount, upsertRate, getRate, FXNotFoundError, FxArbitrageError, findArbitragePairs } from "../lib/fxEngine";
 import { generateId } from "../lib/id";
 import { db } from "@workspace/db";
 import { fxRateHistoryTable, exchangeRatesTable } from "@workspace/db";
@@ -73,7 +73,12 @@ router.put("/rates", requirePermission("system.control"), async (req, res, next)
     const from = base_currency.toUpperCase();
     const to   = target_currency.toUpperCase();
     const id   = `fx-${from.toLowerCase()}-${to.toLowerCase()}`;
-    await upsertRate(id, from, to, numRate);
+    try {
+      await upsertRate(id, from, to, numRate);
+    } catch (err) {
+      if (err instanceof FxArbitrageError) return res.status(409).json({ error: true, code: "FX_ARBITRAGE", message: err.message });
+      throw err;
+    }
     await db.insert(fxRateHistoryTable).values({
       id:             generateId(),
       baseCurrency:   from,
@@ -85,6 +90,14 @@ router.put("/rates", requirePermission("system.control"), async (req, res, next)
       event: "rate.updated", from, to, rate: numRate, source,
     });
     return res.json({ baseCurrency: from, targetCurrency: to, rate: numRate, updated: true, source });
+  } catch (err) { return next(err); }
+});
+
+// Operators: pairs whose published inverse would let a round trip create money.
+router.get("/rates/consistency", requirePermission("system.control"), async (_req, res, next) => {
+  try {
+    const arbitrage = await findArbitragePairs();
+    return res.json({ consistent: arbitrage.length === 0, arbitrage });
   } catch (err) { return next(err); }
 });
 

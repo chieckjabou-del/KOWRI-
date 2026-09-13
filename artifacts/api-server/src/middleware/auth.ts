@@ -5,7 +5,7 @@ import { walletsTable, merchantsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { requireAuth, extractBearerToken } from "../lib/productAuth";
 import {
-  validateAdminToken, permissionsForRole, ADMIN_TOKEN_PREFIX,
+  validateAdminToken, effectivePermissions, ADMIN_TOKEN_PREFIX,
   type AdminIdentity, type Permission,
 } from "../lib/adminAuth";
 
@@ -42,10 +42,12 @@ function legacyKeyMatches(req: Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+// The shared key has no second factor: when MFA is enforced it is read-only.
 function legacyIdentity(): AdminIdentity {
   return {
     adminId: "legacy-key", email: "legacy-key@local", name: "Shared admin key", role: "super_admin",
-    permissions: permissionsForRole("super_admin"), sessionId: null, via: "legacy_key",
+    permissions: effectivePermissions("super_admin", false), sessionId: null, via: "legacy_key",
+    mfaVerified: false, mfaEnrolled: false,
   };
 }
 
@@ -120,7 +122,12 @@ export function requirePermission(permission: Permission) {
         return;
       }
       if (!admin.permissions.has(permission)) {
-        res.status(403).json({ error: "Insufficient permissions", code: "PERMISSION_DENIED", required: permission, role: admin.role });
+        const mfaBlocked = !admin.mfaVerified && effectivePermissions(admin.role, true).has(permission);
+        res.status(403).json({
+          error: mfaBlocked ? "Second factor required for this action" : "Insufficient permissions",
+          code: mfaBlocked ? "MFA_REQUIRED" : "PERMISSION_DENIED",
+          required: permission, role: admin.role,
+        });
         return;
       }
       next();

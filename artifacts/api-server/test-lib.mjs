@@ -49,6 +49,7 @@ export async function raw(method, path, { body, token, admin, idempotency, heade
 export const get   = (path, opts) => raw("GET", path, opts);
 export const post  = (path, body, opts) => raw("POST", path, { ...opts, body });
 export const patch = (path, body, opts) => raw("PATCH", path, { ...opts, body });
+export const put   = (path, body, opts) => raw("PUT", path, { ...opts, body });
 export const del   = (path, opts) => raw("DELETE", path, opts);
 
 // A session bound to one user: every call carries that user's bearer token.

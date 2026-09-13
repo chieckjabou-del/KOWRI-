@@ -109,7 +109,7 @@ router.post("/:poolId/join", requireIdempotencyKey, checkIdempotency, async (req
       return res.status(403).json({ error: true, message: "You do not own this wallet" });
     }
     const poolId = routeParamString(req, "poolId")!;
-    const policy = await joinInsurancePool(poolId, userId, walletId);
+    const policy = await joinInsurancePool(poolId, userId, walletId, `insurance-join:${userId}:${req.idempotencyKey}`);
     const body = { ...policy, totalPremiumPaid: Number(policy.totalPremiumPaid) };
     return res.status(201).json(body);
   } catch (err: any) {

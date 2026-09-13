@@ -563,6 +563,20 @@ Constats F1, F3, F4 et F6 de `kowri_audit_v2_2026.md` ; F2 (lockfile) laissé de
 - **Jeton mobile** (`kowri-app/src/lib/auth.tsx`) : la copie stockée est horodatée et abandonnée après 24 h sans aller-retour serveur (durée de vie des sessions produit) ; la déconnexion révoque désormais la session côté serveur (`POST /wallet/logout`) au lieu de simplement effacer la copie locale. Le jeton reste en stockage web (application installable, doit survivre à la fermeture de l'onglet) ; le passage à un cookie `httpOnly` avec protection CSRF est le pas suivant si l'on veut neutraliser totalement le vol par XSS.
 - **Lockfile (F2) non ajouté** : instruction de ne pas committer `pnpm-lock.yaml` maintenue ; `.vercelignore` l'exclut aussi. Conséquence assumée : les installations (CI, Vercel, Railway) ne sont pas reproductibles au bit près et `pnpm audit` reste inexploitable. Lever la contrainte revient à committer le fichier et à passer la CI et les `vercel.json` en `--frozen-lockfile`.
 
+## Audit d'infrastructure financière AKWÊ — passe adversariale (13 septembre 2026)
+
+Rapport complet : `AKWE_FINANCIAL_INFRASTRUCTURE_AUDIT.md` (34 constats AKW-01 à AKW-34, cartographie des flux, verdict **BLOCKED** avec les conditions de levée).
+
+- **Onze failles prouvées par sondes HTTP** sur le serveur tel qu'il était (fixtures de démo en production avec PIN connu ; remboursements simultanés facturés cinq fois ; réclamations de solidarité vidant le pot ; plafond KYC et ligne de crédit contournés en concurrence ; arbitrage de change +400 XAF par million ; transactions de tous lisibles ; idempotence rejouée avec un autre corps ; pools avec mises à jour perdues ; sessions survivant au changement de PIN ; transferts de float bloqués `PENDING`), toutes corrigées à la cause et rejouées en échec contrôlé.
+- **Grand livre imposé par PostgreSQL** (migration `0003`) : journal append-only, transactions figées, équilibre débit/crédit et interdiction de découvert vérifiés à `COMMIT`, montants contraints, index critiques.
+- **Écritures métier atomiques** avec le mouvement d'argent (`attach` dans `walletService`) : prêts, remboursements, positions de pool, plans d'épargne, polices, cotisations, réclamations.
+- **Limites évaluées sous le verrou du wallet** (KYC, vélocité), **ligne de crédit = exposition totale** sous verrou emprunteur, **non-arbitrage FX** imposé à l'écriture et à la conversion (arrondi vers le bas), **idempotence liée au corps** (422) et **doublon → 409**, montants normalisés.
+- **Reprise automatique des transferts de float**, reprise des paiements de tontine par clé, chaîne de démarrage résiliente.
+- **Second facteur TOTP** pour les opérateurs, obligatoire en production (sessions sans code et clé partagée en lecture seule), écrans dans le back-office.
+- **Rapport de réconciliation financière** (`GET /admin/reconciliation/report`, neuf invariants, masse monétaire par devise, PENDING/FAILED/DLQ), planifié toutes les six heures avec incidents.
+- Suite `test-adversarial.mjs` (85 vérifications, dont invariants SQL) ajoutée à la CI ; `permissions: contents: read` sur le workflow. Total : 1 155 vérifications, 0 échec.
+- Ouverts, à décider : maker-checker du cash-in (P0 production), rail fournisseur et webhooks entrants, lockfile (instruction), protection de branche à vérifier, politique de crédit, modèle de float agent, sauvegarde/restauration, cookie `httpOnly` + CSP, alertes externes.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

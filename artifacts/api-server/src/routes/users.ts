@@ -5,7 +5,7 @@ import { eq, count, sql, desc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
-import { createSession } from "../lib/productAuth";
+import { createSession, revokeOtherUserSessions } from "../lib/productAuth";
 import { hashPin, verifyPin, isLegacyPinHash, isValidPinFormat } from "../lib/pin";
 import { loginRateLimit } from "../lib/loginRateLimit";
 import { authenticate, requireAdmin, requireSelfOrAdmin, requirePermission } from "../middleware/auth";
@@ -309,7 +309,10 @@ router.patch("/:userId/pin", authenticate(), async (req, res, next) => {
       .set({ pinHash: hashPin(newPinStr), updatedAt: new Date() })
       .where(eq(usersTable.id, routeParamString(req, "userId")!));
 
-    return res.json({ success: true, message: "PIN mis à jour" });
+    // A stolen token must die with the old PIN: every other session is closed.
+    const revoked = await revokeOtherUserSessions(user.id, req.auth!.sessionId);
+
+    return res.json({ success: true, message: "PIN mis à jour", otherSessionsRevoked: revoked });
   } catch (err) {
     return next(err);
   }

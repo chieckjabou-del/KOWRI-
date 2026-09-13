@@ -37,7 +37,7 @@ export async function createInvestmentPool(params: {
 }
 
 export async function investInPool(params: {
-  poolId: string; userId: string; fromWalletId: string; amount: number;
+  poolId: string; userId: string; fromWalletId: string; amount: number; idempotencyKey?: string;
 }): Promise<typeof poolPositionsTable.$inferSelect> {
   const [pool] = await db.select().from(investmentPoolsTable).where(eq(investmentPoolsTable.id, params.poolId));
   if (!pool) throw new Error("Investment pool not found");
@@ -46,43 +46,51 @@ export async function investInPool(params: {
     throw new Error(`Minimum investment is ${pool.minInvestment} ${pool.currency}`);
   }
 
-  const tx = await processTransfer({
+  // Shares are issued at the pool's current value per share (capital held /
+  // shares outstanding), so a later investor never gets more or fewer shares
+  // per unit of money than earlier ones. A brand-new pool issues 1 share per unit.
+  //
+  // The pool row is locked and the position written INSIDE the ledger
+  // transaction: two simultaneous investors cannot both price their shares off
+  // the same stale totals, and money can never reach the pool wallet without
+  // the position that entitles the investor to it.
+  const positionId = generateId();
+  let newShares = 0;
+  await processTransfer({
     fromWalletId: params.fromWalletId,
     toWalletId:   pool.walletId,
     amount:       params.amount,
     currency:     pool.currency,
     description:  `Investment in ${pool.name}`,
     skipFraudCheck: true,
+    idempotencyKey: params.idempotencyKey,
+    attach: async (t) => {
+      const [fresh] = await t.select().from(investmentPoolsTable).where(eq(investmentPoolsTable.id, params.poolId)).for("update");
+      if (!fresh || fresh.status !== "open") throw new Error("Pool is not accepting investments");
+      const priorAmount   = Number(fresh.currentAmount);
+      const priorShares   = Number(fresh.totalShares);
+      const totalInvested = priorAmount + params.amount;
+      newShares = priorShares > 0 && priorAmount > 0 ? params.amount * (priorShares / priorAmount) : params.amount;
+      await t.update(investmentPoolsTable).set({
+        currentAmount: String(totalInvested.toFixed(4)),
+        totalShares:   String((priorShares + newShares).toFixed(8)),
+        status:        totalInvested >= Number(fresh.goalAmount) ? "funded" : "open",
+        updatedAt:     new Date(),
+      }).where(eq(investmentPoolsTable.id, params.poolId));
+      await t.insert(poolPositionsTable).values({
+        id:             positionId,
+        poolId:         params.poolId,
+        userId:         params.userId,
+        shares:         String(newShares.toFixed(8)),
+        investedAmount: String(params.amount),
+        currency:       pool.currency,
+      });
+    },
+  }).then(async (tx) => {
+    await db.update(poolPositionsTable).set({ transactionId: tx.id }).where(eq(poolPositionsTable.id, positionId));
   });
 
-  // Shares are issued at the pool's current value per share (capital held /
-  // shares outstanding), so a later investor never gets more or fewer shares
-  // per unit of money than earlier ones. A brand-new pool issues 1 share per unit.
-  const priorAmount    = Number(pool.currentAmount);
-  const priorShares    = Number(pool.totalShares);
-  const totalInvested  = priorAmount + params.amount;
-  const newShares      = priorShares > 0 && priorAmount > 0
-    ? params.amount * (priorShares / priorAmount)
-    : params.amount;
-
-  const [position] = await db.transaction(async (dbTx) => {
-    await dbTx.update(investmentPoolsTable).set({
-      currentAmount: String(totalInvested),
-      totalShares:   String(priorShares + newShares),
-      status:        totalInvested >= Number(pool.goalAmount) ? "funded" : "open",
-      updatedAt:     new Date(),
-    }).where(eq(investmentPoolsTable.id, params.poolId));
-
-    return dbTx.insert(poolPositionsTable).values({
-      id:             generateId(),
-      poolId:         params.poolId,
-      userId:         params.userId,
-      shares:         String(newShares.toFixed(8)),
-      investedAmount: String(params.amount),
-      currency:       pool.currency,
-      transactionId:  tx.id,
-    }).returning();
-  });
+  const [position] = await db.select().from(poolPositionsTable).where(eq(poolPositionsTable.id, positionId));
 
   await eventBus.publish("investment.pool.invested", {
     poolId: params.poolId, userId: params.userId, amount: params.amount, shares: newShares,
@@ -226,7 +234,7 @@ export async function createInsurancePool(params: {
   return pool;
 }
 
-export async function joinInsurancePool(poolId: string, userId: string, walletId: string): Promise<typeof insurancePoliciesTable.$inferSelect> {
+export async function joinInsurancePool(poolId: string, userId: string, walletId: string, idempotencyKey?: string): Promise<typeof insurancePoliciesTable.$inferSelect> {
   const [pool] = await db.select().from(insurancePoolsTable).where(eq(insurancePoolsTable.id, poolId));
   if (!pool) throw new Error("Insurance pool not found");
   if (pool.status !== "active") throw new Error("Pool is not active");
@@ -239,6 +247,10 @@ export async function joinInsurancePool(poolId: string, userId: string, walletId
   const nextPremiumAt = new Date();
   nextPremiumAt.setMonth(nextPremiumAt.getMonth() + 1);
 
+  // The policy is created in the same transaction as the premium: a premium can
+  // never be collected without the cover it pays for, and the pool's member
+  // count is checked again under the pool row lock.
+  const policyId = generateId();
   await processTransfer({
     fromWalletId: walletId,
     toWalletId:   pool.walletId,
@@ -246,25 +258,29 @@ export async function joinInsurancePool(poolId: string, userId: string, walletId
     currency:     pool.currency,
     description:  `Insurance premium – ${pool.name}`,
     skipFraudCheck: true,
+    idempotencyKey,
+    attach: async (t) => {
+      const [fresh] = await t.select().from(insurancePoolsTable).where(eq(insurancePoolsTable.id, poolId)).for("update");
+      if (!fresh || fresh.status !== "active") throw new Error("Pool is not active");
+      if (fresh.memberCount >= fresh.maxMembers) throw new Error("Pool is full");
+      const [dup] = await t.select({ id: insurancePoliciesTable.id }).from(insurancePoliciesTable)
+        .where(and(eq(insurancePoliciesTable.poolId, poolId), eq(insurancePoliciesTable.userId, userId)));
+      if (dup) throw new Error("Already a member of this pool");
+      await t.insert(insurancePoliciesTable).values({
+        id:              policyId,
+        poolId, userId, walletId,
+        premiumPaidAt:   new Date(),
+        nextPremiumAt,
+        totalPremiumPaid: pool.premiumAmount,
+      });
+      await t.update(insurancePoolsTable).set({
+        memberCount: sql`${insurancePoolsTable.memberCount} + 1`,
+        updatedAt: new Date(),
+      }).where(eq(insurancePoolsTable.id, poolId));
+    },
   });
 
-  const [policy] = await db.transaction(async (tx) => {
-    const [p] = await tx.insert(insurancePoliciesTable).values({
-      id:              generateId(),
-      poolId, userId, walletId,
-      premiumPaidAt:   new Date(),
-      nextPremiumAt,
-      totalPremiumPaid: pool.premiumAmount,
-    }).returning();
-
-    await tx.update(insurancePoolsTable).set({
-      memberCount: sql`${insurancePoolsTable.memberCount} + 1`,
-      updatedAt: new Date(),
-    }).where(eq(insurancePoolsTable.id, poolId));
-
-    return [p];
-  });
-
+  const [policy] = await db.select().from(insurancePoliciesTable).where(eq(insurancePoliciesTable.id, policyId));
   await eventBus.publish("insurance.policy.created", { poolId, userId, policyId: policy.id });
   return policy;
 }

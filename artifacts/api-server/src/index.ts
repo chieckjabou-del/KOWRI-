@@ -7,9 +7,10 @@ import { rehydrateAutopilotState }                        from "./lib/autopilotS
 import { reconcileAllWallets }                            from "./lib/walletService";
 import { logIncident }                                    from "./lib/incidentStore";
 import { getPendingJobs, runContributionCycle, runPayoutCycle, distributeToTargets, runHybridCycle, recoverStuckPayouts } from "./lib/tontineScheduler";
-import { runDailyReconciliation, runMonthlyAchievements } from "./lib/liquidityEngine";
+import { runDailyReconciliation, runMonthlyAchievements, recoverStuckFloatTransfers } from "./lib/liquidityEngine";
 import { withInstanceLock }                               from "./lib/instanceLock";
 import { purgeExpiredSessions }                           from "./lib/sessionCleanup";
+import { scheduledFinancialReconciliation }              from "./lib/financialReconciliation";
 import { db, pool }                                       from "@workspace/db";
 import { tontinePositionListingsTable, schedulerJobsTable } from "@workspace/db";
 import { eq, and, lt, isNotNull }                         from "drizzle-orm";
@@ -172,8 +173,17 @@ const server = app.listen(port, () => {
     .then(() => recoverStuckPayouts().catch((err) =>
       console.error("[Startup] recoverStuckPayouts failed (non-fatal):", err),
     ))
+    // Float transfers interrupted by a crash are resolved before traffic resumes,
+    // then every five minutes (one instance at a time).
+    .then(() => withInstanceLock("float_recovery", async () => { await recoverStuckFloatTransfers(); }).catch((err) =>
+      console.error("[Startup] recoverStuckFloatTransfers failed (non-fatal):", err),
+    ))
     .then(() => startAutopilot())
     .then(() => {
+      every(5 * 60 * 1000, async () => {
+        try { await withInstanceLock("float_recovery", async () => { await recoverStuckFloatTransfers(); }); }
+        catch (err: any) { logIncident({ type: "liquidity", action: "float_recovery", result: `error: ${err?.message}` }); }
+      });
       every(6 * 60 * 60 * 1000, async () => {
         try {
           await withInstanceLock("wallet_reconciliation", async () => {
@@ -186,6 +196,7 @@ const server = app.listen(port, () => {
                 result: `${mismatchCount} mismatches found`,
               });
             }
+            await scheduledFinancialReconciliation();
           });
         } catch (err: any) {
           logIncident({

@@ -201,7 +201,10 @@ const fxHistSnap = await post("/fx/rates/snapshot", {});
 chk("P4-6a POST /fx/rates/snapshot 200", fxHistSnap.s === 200);
 chk("P4-6b Snapshot count > 0", (fxHistSnap.b?.snapshotted ?? 0) > 0);
 
-const updResp = await put("/fx/rates", { base_currency: "XOF", target_currency: "USD", rate: 0.00168, source: "test_provider" });
+// 0.00168 × 610 (USD→XOF) > 1: a round trip would create money, so the rate is refused.
+const badResp = await put("/fx/rates", { base_currency: "XOF", target_currency: "USD", rate: 0.00168, source: "test_provider" });
+chk("P4-6c-pre PUT /fx/rates refuses an arbitrage-creating inverse (409 FX_ARBITRAGE)", badResp.s === 409 && badResp.b?.code === "FX_ARBITRAGE", `status=${badResp.s}`);
+const updResp = await put("/fx/rates", { base_currency: "XOF", target_currency: "USD", rate: 0.00160, source: "test_provider" });
 chk("P4-6c PUT /fx/rates with source 200", updResp.s === 200);
 chk("P4-6d Source is stored", updResp.b?.source === "test_provider");
 

@@ -17,12 +17,14 @@ import {
   cashReconciliationsTable,
   agentAchievementsTable,
   agentRankingsTable,
+  transactionsTable,
 }                                  from "@workspace/db";
 import { eq, and, sql, ne, gte, lt, isNull } from "drizzle-orm";
 import { generateId }              from "./id";
-import { processTransfer }         from "./walletService";
+import { processTransfer, isDuplicateIdempotencyKey } from "./walletService";
 import { logIncident }             from "./incidentStore";
 import { createNotification }      from "./productWallet";
+import { audit }                   from "./auditLogger";
 
 // ── Commission config ──────────────────────────────────────────────────────────
 
@@ -238,6 +240,9 @@ export async function executeFloatTransfer(
   fromAgentId: string,
   toAgentId:   string,
   amount:      number,
+  // Caller's idempotency key: the ledger leg is keyed on it so a retry of the
+  // same request can never move the float a second time.
+  idempotencyKey?: string,
 ): Promise<string> {
   const [fromWallet, toWallet] = await Promise.all([
     getAgentWallet(fromAgentId),
@@ -252,6 +257,7 @@ export async function executeFloatTransfer(
   }
 
   const transferId = generateId();
+  const ledgerKey  = idempotencyKey ? `float:${idempotencyKey}` : `float:${transferId}`;
 
   // Step 1 — one atomic transaction for the float bookkeeping: the PENDING
   // record, the conditional debit (no overdraft, no double spend under
@@ -265,7 +271,9 @@ export async function executeFloatTransfer(
       type:        "FLOAT",
       status:      "PENDING",
       initiatedBy: "agent",
-      note:        "Float transfer via liquidityEngine",
+      // The ledger idempotency key is recorded on the transfer so recovery can
+      // tell whether the ledger leg was posted before a crash.
+      note:        `Float transfer via liquidityEngine [ledger:${ledgerKey}]`,
     });
     const reserved = await tx.update(agentWalletsTable)
       .set({ floatBalance: sql`CAST(float_balance AS NUMERIC) - ${amount}`, updatedAt: new Date() })
@@ -288,7 +296,7 @@ export async function executeFloatTransfer(
       skipRateLimitCheck: true,
       skipFraudCheck:     true,
       skipKycCheck:       true,
-      idempotencyKey:     `float:${transferId}`,
+      idempotencyKey:     ledgerKey,
     });
   } catch (err) {
     // Ledger refused: put the float back in one atomic step and mark the record.
@@ -312,6 +320,92 @@ export async function executeFloatTransfer(
     .set({ status: "COMPLETED", completedAt: new Date() })
     .where(eq(liquidityTransfersTable.id, transferId));
   return transferId;
+}
+
+// ── Crash recovery for float transfers ───────────────────────────────────────
+//
+// A FLOAT transfer has three steps in three transactions (float bookkeeping,
+// ledger movement, record closure). A crash between them leaves a PENDING row.
+// Every PENDING row older than the grace period is resolved here without any
+// operator action, and every outcome is a single financial effect:
+//
+//   ledger leg found (by its idempotency key) → mark COMPLETED
+//   ledger leg missing → post it now, keyed on the same idempotency key
+//       posted            → COMPLETED
+//       already exists    → COMPLETED (raced with a concurrent recovery)
+//       refused           → float restored atomically, FAILED
+//
+// Runs at startup and on a timer under the cross-instance lock (index.ts).
+const FLOAT_RECOVERY_GRACE_MS = 2 * 60_000;
+
+function ledgerKeyOf(row: typeof liquidityTransfersTable.$inferSelect): string {
+  const m = /\[ledger:(float:[^\]]+)\]/.exec(row.note ?? "");
+  return m ? m[1] : `float:${row.id}`;
+}
+
+export async function recoverStuckFloatTransfers(): Promise<{ completed: number; reverted: number; skipped: number }> {
+  const cutoff = new Date(Date.now() - FLOAT_RECOVERY_GRACE_MS);
+  const stuck = await db.select().from(liquidityTransfersTable)
+    .where(and(eq(liquidityTransfersTable.status, "PENDING"), eq(liquidityTransfersTable.type, "FLOAT"), lt(liquidityTransfersTable.createdAt!, cutoff)));
+  const result = { completed: 0, reverted: 0, skipped: 0 };
+
+  for (const row of stuck) {
+    const key = ledgerKeyOf(row);
+    try {
+      const [posted] = await db.select({ id: transactionsTable.id }).from(transactionsTable)
+        .where(eq(transactionsTable.idempotencyKey, key)).limit(1);
+      if (posted) {
+        await db.update(liquidityTransfersTable).set({ status: "COMPLETED", completedAt: new Date(), note: `${row.note ?? ""} [recovered: ledger found]` })
+          .where(and(eq(liquidityTransfersTable.id, row.id), eq(liquidityTransfersTable.status, "PENDING")));
+        await audit({ action: "liquidity.float.recovered", entity: "liquidity_transfer", entityId: row.id, metadata: { ledgerTransactionId: posted.id, outcome: "ledger_found" } });
+        result.completed++;
+        continue;
+      }
+
+      const [fromWallet, toWallet] = await Promise.all([getAgentWallet(row.fromAgentId!), getAgentWallet(row.toAgentId!)]);
+      if (!fromWallet || !toWallet) { result.skipped++; continue; }
+      const amount = Number(row.amount);
+      try {
+        await processTransfer({
+          fromWalletId: fromWallet.walletId, toWalletId: toWallet.walletId, amount, currency: "XOF",
+          description: `Float transfer: ${row.fromAgentId} → ${row.toAgentId} (recovered)`,
+          skipRateLimitCheck: true, skipFraudCheck: true, skipKycCheck: true, idempotencyKey: key,
+        });
+        await db.update(liquidityTransfersTable).set({ status: "COMPLETED", completedAt: new Date(), note: `${row.note ?? ""} [recovered: ledger posted]` })
+          .where(and(eq(liquidityTransfersTable.id, row.id), eq(liquidityTransfersTable.status, "PENDING")));
+        await audit({ action: "liquidity.float.recovered", entity: "liquidity_transfer", entityId: row.id, metadata: { outcome: "ledger_posted", amount } });
+        result.completed++;
+      } catch (err) {
+        if (isDuplicateIdempotencyKey(err)) {
+          await db.update(liquidityTransfersTable).set({ status: "COMPLETED", completedAt: new Date() })
+            .where(and(eq(liquidityTransfersTable.id, row.id), eq(liquidityTransfersTable.status, "PENDING")));
+          result.completed++;
+          continue;
+        }
+        // Ledger refused (funds, frozen wallet…): give the float back in one step.
+        await db.transaction(async (tx) => {
+          const reverted = await tx.update(liquidityTransfersTable).set({ status: "FAILED", note: `${row.note ?? ""} [recovered: reverted — ${(err as Error).message}]` })
+            .where(and(eq(liquidityTransfersTable.id, row.id), eq(liquidityTransfersTable.status, "PENDING")))
+            .returning({ id: liquidityTransfersTable.id });
+          if (!reverted.length) return;
+          await tx.update(agentWalletsTable)
+            .set({ floatBalance: sql`CAST(float_balance AS NUMERIC) - ${amount}`, updatedAt: new Date() })
+            .where(eq(agentWalletsTable.agentId, row.toAgentId!));
+          await tx.update(agentWalletsTable)
+            .set({ floatBalance: sql`CAST(float_balance AS NUMERIC) + ${amount}`, updatedAt: new Date() })
+            .where(eq(agentWalletsTable.agentId, row.fromAgentId!));
+        });
+        await audit({ action: "liquidity.float.reverted", entity: "liquidity_transfer", entityId: row.id, metadata: { amount, reason: (err as Error).message } });
+        logIncident({ type: "liquidity", action: "float_transfer_reverted", result: `transfer=${row.id} reason=${(err as Error).message}` });
+        result.reverted++;
+      }
+    } catch (err) {
+      console.error(`[liquidityEngine] recovery failed for ${row.id}:`, err);
+      result.skipped++;
+    }
+  }
+  if (stuck.length) console.warn(`[liquidityEngine] float recovery: ${JSON.stringify(result)} of ${stuck.length} PENDING`);
+  return result;
 }
 
 export async function computeCommission(

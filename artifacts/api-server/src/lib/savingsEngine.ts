@@ -22,34 +22,41 @@ export async function getRateForUser(userId: string): Promise<number> {
 export async function createSavingsPlan(params: {
   userId: string; walletId: string; savingsWalletId: string;
   name: string; amount: number; currency: string; termDays: number;
-  earlyBreakPenalty?: number;
+  earlyBreakPenalty?: number; idempotencyKey?: string;
 }): Promise<typeof savingsPlansTable.$inferSelect> {
   const annualRate = await getRateForUser(params.userId);
 
-  const tx = await processTransfer({
+  const maturityDate = new Date();
+  maturityDate.setDate(maturityDate.getDate() + params.termDays);
+  const planId = generateId();
+
+  // The plan row is written in the same transaction as the lock transfer, so
+  // money can never sit in a savings wallet without the plan that releases it.
+  await processTransfer({
     fromWalletId: params.walletId,
     toWalletId:   params.savingsWalletId,
     amount:       params.amount,
     currency:     params.currency,
     description:  `Savings plan lock – ${params.name}`,
     skipFraudCheck: true,
+    idempotencyKey: params.idempotencyKey,
+    attach: async (t) => {
+      await t.insert(savingsPlansTable).values({
+        id:                planId,
+        userId:            params.userId,
+        walletId:          params.savingsWalletId,
+        name:              params.name,
+        lockedAmount:      String(params.amount),
+        currency:          params.currency,
+        interestRate:      String(annualRate),
+        termDays:          params.termDays,
+        maturityDate,
+        earlyBreakPenalty: String(params.earlyBreakPenalty ?? 10),
+      });
+    },
   });
 
-  const maturityDate = new Date();
-  maturityDate.setDate(maturityDate.getDate() + params.termDays);
-
-  const [plan] = await db.insert(savingsPlansTable).values({
-    id:                generateId(),
-    userId:            params.userId,
-    walletId:          params.savingsWalletId,
-    name:              params.name,
-    lockedAmount:      String(params.amount),
-    currency:          params.currency,
-    interestRate:      String(annualRate),
-    termDays:          params.termDays,
-    maturityDate,
-    earlyBreakPenalty: String(params.earlyBreakPenalty ?? 10),
-  }).returning();
+  const [plan] = await db.select().from(savingsPlansTable).where(eq(savingsPlansTable.id, planId));
 
   await audit({ action: "savings.plan.created", entity: "savings_plan", entityId: plan.id,
     metadata: { userId: params.userId, amount: params.amount, termDays: params.termDays, annualRate } });

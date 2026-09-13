@@ -22,6 +22,8 @@ import { rollback } from "../lib/actionExecutor";
 
 import { requireAdmin, requirePermission } from "../middleware/auth";
 import { listTreasuryWallets } from "../lib/treasury";
+import { runFinancialReconciliation } from "../lib/financialReconciliation";
+import { recoverStuckFloatTransfers } from "../lib/liquidityEngine";
 
 const router = Router();
 router.use(requireAdmin);
@@ -30,6 +32,21 @@ router.use(requireAdmin);
 router.get("/treasury", async (_req, res, next) => {
   try {
     return res.json({ wallets: await listTreasuryWallets() });
+  } catch (err) { return next(err); }
+});
+
+// Full financial reconciliation: money supply per currency, ledger invariants,
+// stuck operations. Read-only; anomalies are listed for the operator.
+router.get("/reconciliation/report", async (_req, res, next) => {
+  try {
+    return res.json(await runFinancialReconciliation());
+  } catch (err) { return next(err); }
+});
+
+// Resolves float transfers left PENDING by a crash (see liquidityEngine).
+router.post("/reconciliation/recover-float", requirePermission("ledger.write"), async (_req, res, next) => {
+  try {
+    return res.json(await recoverStuckFloatTransfers());
   } catch (err) { return next(err); }
 });
 

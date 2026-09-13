@@ -354,7 +354,7 @@ router.post("/:id/liquidity-transfer", requireAgentAccess, requireIdempotencyKey
 
     let transferId: string;
     if (txType === "FLOAT") {
-      transferId = await executeFloatTransfer(fromAgentId, toAgentId, amount);
+      transferId = await executeFloatTransfer(fromAgentId, toAgentId, amount, `${req.auth!.userId}:${req.idempotencyKey}`);
     } else {
       // CASH transfers are manually recorded (physical handoff)
       transferId = generateId();

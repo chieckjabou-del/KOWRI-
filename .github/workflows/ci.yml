@@ -9,6 +9,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# The workflow only reads the repository: a compromised dependency or test
+# cannot use the job token to push code or change settings.
+permissions:
+  contents: read
+
 env:
   PNPM_VERSION: 10.33.0
   NODE_VERSION: 24
@@ -106,6 +111,9 @@ jobs:
         run: node test-phase7.mjs
       - name: Phase 6 suite
         run: node test-phase6.mjs
+      - name: Adversarial suite (double spend, limits, credit, FX, idempotency, crash recovery, DB invariants)
+        working-directory: artifacts/api-server
+        run: node test-adversarial.mjs
       - name: Graceful shutdown drains cleanly
         run: |
           # The bracket keeps the pattern from matching this very shell (its command line contains the text).

@@ -18,7 +18,31 @@ import { toReferenceCurrency, REFERENCE_CURRENCY } from "./fxEngine";
 const runTx: typeof db.transaction = ((fn: Parameters<typeof db.transaction>[0], cfg?: Parameters<typeof db.transaction>[1]) =>
   withDeadlockRetry(() => db.transaction(fn, cfg))) as typeof db.transaction;
 
-type DbClient = typeof db;
+export type DbClient = typeof db;
+
+// Domain writes that must land in the same database transaction as the ledger
+// movement (a loan repayment row, a pool position, a claim status). The hook
+// runs after the entries are posted and the balances synced; anything it throws
+// rolls the money movement back with it, so no caller can end up with money
+// moved on one side and its business record missing on the other.
+export type AttachedWrite = (tx: DbClient) => Promise<void>;
+
+// numeric(20,4): 16 integer digits. Anything above this cannot be stored and
+// would surface as a database error instead of a clean refusal.
+export const MAX_AMOUNT = 1_000_000_000_000_000; // 10^15
+const AMOUNT_SCALE = 10_000;
+
+// Amounts are stored with four decimals. A caller sending 0.00001 would create a
+// transaction whose entries are all zero; a caller sending 1e17 would overflow
+// the column. Both are refused here, and every amount is rounded to the stored
+// scale before it is compared with a balance so the check and the posting agree.
+export function normalizeAmount(amount: unknown): number {
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) throw new InvalidAmountError(amount);
+  const rounded = Math.round(amount * AMOUNT_SCALE) / AMOUNT_SCALE;
+  if (rounded <= 0) throw new InvalidAmountError(`${amount} (below the smallest storable unit)`);
+  if (rounded > MAX_AMOUNT) throw new InvalidAmountError(`${amount} (above the maximum of ${MAX_AMOUNT})`);
+  return rounded;
+}
 
 export class CurrencyMismatchError extends Error {
   constructor(walletId: string, expected: string, received: string) {
@@ -34,6 +58,12 @@ export class InvalidAmountError extends Error {
   }
 }
 
+// A fee rule that would take more than the amount itself (or a negative fee)
+// can never be posted: the net leg would be a negative credit.
+export class InvalidFeeError extends Error {
+  constructor(message: string) { super(message); this.name = "InvalidFeeError"; }
+}
+
 export class WalletUnavailableError extends Error {
   constructor(walletId: string, status: string, direction: "debit" | "credit") {
     super(`Wallet ${walletId} is ${status} and cannot be ${direction === "debit" ? "debited" : "credited"}`);
@@ -43,10 +73,11 @@ export class WalletUnavailableError extends Error {
 
 interface LockedWallet { currency: string; status: string }
 
-function assertPositiveAmount(amount: number): void {
-  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) {
-    throw new InvalidAmountError(amount);
-  }
+// Serialises every operation on one business entity (a loan, a tontine, a pool)
+// inside the calling transaction: the lock is released when the transaction
+// ends, so a crashed instance never leaves it behind.
+export async function lockEntity(tx: DbClient, scope: string, id: string): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope}:${id}`}))`);
 }
 
 // Balance is only meaningful in the wallet's own currency; entries in any other
@@ -136,9 +167,10 @@ export async function processDeposit(params: {
   description?: string;
   idempotencyKey?: string;
   internal?: boolean;
+  attach?: AttachedWrite;
 }): Promise<typeof transactionsTable.$inferSelect> {
-  const { walletId, amount, currency, reference, description, idempotencyKey, internal } = params;
-  assertPositiveAmount(amount);
+  const { walletId, currency, reference, description, idempotencyKey, internal, attach } = params;
+  const amount = normalizeAmount(params.amount);
   guard("all");
   const start = Date.now();
   const txId = generateId();
@@ -206,6 +238,8 @@ export async function processDeposit(params: {
     const newBalance = await syncWalletBalance(walletId, tx as any);
     newBalanceAfterDeposit = newBalance;
 
+    if (attach) await attach(tx as any);
+
     await tx
       .update(transactionsTable)
       .set({ status: "completed", completedAt: now })
@@ -232,14 +266,14 @@ const KYC_MONTHLY_LIMITS: Record<number, number> = {
   2: 10_000_000,
 };
 
-export async function getMonthlyVolume(fromWalletId: string): Promise<number> {
+export async function getMonthlyVolume(fromWalletId: string, client: DbClient = db): Promise<number> {
   // Calendar month in UTC so every instance and every user sees the same window.
   const now = new Date();
   const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
   // Every outgoing type counts toward the cap, so cash-out cannot sidestep the transfer limit.
   // Amounts are summed per currency and converted to the reference currency (XOF).
-  const rows = await db
+  const rows = await client
     .select({ currency: transactionsTable.currency, total: sql<number>`COALESCE(SUM(CAST(${transactionsTable.amount} AS NUMERIC)), 0)` })
     .from(transactionsTable)
     .where(and(
@@ -261,15 +295,20 @@ export class KycLimitError extends Error {
 
 // KYC ceilings are XOF figures; the amount is converted at the published rate so a
 // EUR or USD wallet is capped at the same real value as a XOF wallet.
-async function enforceKycLimit(fromWalletId: string, amount: number, currency: string): Promise<void> {
-  const [wallet] = await db
+//
+// Called INSIDE the ledger transaction, after the source wallet row is locked:
+// concurrent debits from one wallet are serialised by that lock, so the volume
+// read here already includes every earlier debit and the ceiling cannot be
+// exceeded by firing requests in parallel.
+async function enforceKycLimit(client: DbClient, fromWalletId: string, amount: number, currency: string): Promise<void> {
+  const [wallet] = await client
     .select({ userId: walletsTable.userId })
     .from(walletsTable)
     .where(eq(walletsTable.id, fromWalletId))
     .limit(1);
   if (!wallet) return;
 
-  const [user] = await db
+  const [user] = await client
     .select({ kycLevel: usersTable.kycLevel })
     .from(usersTable)
     .where(eq(usersTable.id, wallet.userId))
@@ -277,7 +316,7 @@ async function enforceKycLimit(fromWalletId: string, amount: number, currency: s
 
   const kycLevel = user?.kycLevel ?? 0;
   const monthlyLimit = KYC_MONTHLY_LIMITS[kycLevel] ?? KYC_MONTHLY_LIMITS[0];
-  const monthlyVolume = await getMonthlyVolume(fromWalletId);
+  const monthlyVolume = await getMonthlyVolume(fromWalletId, client);
   const referenceAmount = await toReferenceCurrency(amount, currency);
 
   if (monthlyVolume + referenceAmount > monthlyLimit) {
@@ -300,9 +339,10 @@ export async function processTransfer(params: {
   skipRateLimitCheck?: boolean;
   skipFraudCheck?: boolean;
   skipKycCheck?: boolean;
+  attach?: AttachedWrite;
 }): Promise<typeof transactionsTable.$inferSelect> {
-  const { fromWalletId, toWalletId, amount, currency, description, reference, idempotencyKey, skipRateLimitCheck, skipFraudCheck, skipKycCheck } = params;
-  assertPositiveAmount(amount);
+  const { fromWalletId, toWalletId, currency, description, reference, idempotencyKey, skipRateLimitCheck, skipFraudCheck, skipKycCheck, attach } = params;
+  const amount = normalizeAmount(params.amount);
   if (fromWalletId === toWalletId) throw new Error("Cannot transfer to the same wallet");
   const start = Date.now();
 
@@ -315,14 +355,6 @@ export async function processTransfer(params: {
 
   guard("outbound_transfers");   // throws KillSwitchError if switch is TRIGGERED or FORCED_OFF
 
-  if (!skipKycCheck) {
-    await enforceKycLimit(fromWalletId, amount, currency);
-  }
-
-  if (!skipRateLimitCheck) {
-    await checkRateLimit(fromWalletId, amount, currency);
-  }
-
   const txId = generateId();
   const ref = reference ?? generateReference();
   const now = new Date();
@@ -334,6 +366,10 @@ export async function processTransfer(params: {
     const locked = await lockWallets(tx as any, [fromWalletId, toWalletId]);
     assertWalletUsable(locked, fromWalletId, currency, "debit");
     assertWalletUsable(locked, toWalletId, currency, "credit");
+
+    // Limits are evaluated under the source wallet lock (see enforceKycLimit).
+    if (!skipKycCheck) await enforceKycLimit(tx as any, fromWalletId, amount, currency);
+    if (!skipRateLimitCheck) await checkRateLimit(fromWalletId, amount, currency, tx as any);
 
     const availableBal = await ledgerBalance(tx as any, fromWalletId, currency);
     if (availableBal < amount) throw new Error("Insufficient funds");
@@ -393,6 +429,8 @@ export async function processTransfer(params: {
       syncWalletBalance(toWalletId, tx as any),
     ]);
 
+    if (attach) await attach(tx as any);
+
     await tx
       .update(transactionsTable)
       .set({ status: "completed", completedAt: now })
@@ -431,19 +469,22 @@ export async function processFxTransfer(params: {
   idempotencyKey?: string;
   skipKycCheck?: boolean;
   skipRateLimitCheck?: boolean;
+  attach?: AttachedWrite;
 }): Promise<{ transaction: typeof transactionsTable.$inferSelect; amountReceived: number; totalDebit: number }> {
-  const { fromWalletId, toWalletId, amount, fee, fromCurrency, toCurrency, rate, description, idempotencyKey } = params;
-  assertPositiveAmount(amount);
-  if (!Number.isFinite(fee) || fee < 0) throw new InvalidAmountError(fee);
+  const { fromWalletId, toWalletId, fromCurrency, toCurrency, rate, description, idempotencyKey, attach } = params;
+  const amount = normalizeAmount(params.amount);
+  const fee = params.fee === 0 ? 0 : normalizeAmount(params.fee);
   if (!Number.isFinite(rate) || rate <= 0) throw new Error(`Invalid FX rate: ${rate}`);
   if (fromWalletId === toWalletId) throw new Error("Cannot transfer to the same wallet");
 
   guard("outbound_transfers");
-  if (!params.skipKycCheck) await enforceKycLimit(fromWalletId, amount, fromCurrency);
-  if (!params.skipRateLimitCheck) await checkRateLimit(fromWalletId, amount, fromCurrency);
 
   const totalDebit = Math.round((amount + fee) * 10000) / 10000;
-  const amountReceived = Math.round(amount * rate * 10000) / 10000;
+  // The target leg is rounded DOWN to the stored scale: the platform's FX book
+  // never pays out more than the exact conversion, so a round trip through any
+  // pair can at best return the starting amount, never more (see fxEngine).
+  const amountReceived = Math.floor(amount * rate * 10000 + 1e-9) / 10000;
+  if (amountReceived <= 0) throw new InvalidAmountError(`${amount} ${fromCurrency} converts to less than one unit of ${toCurrency}`);
   const txId = generateId();
   const ref = params.reference ?? generateReference();
   const now = new Date();
@@ -455,6 +496,9 @@ export async function processFxTransfer(params: {
     const locked = await lockWallets(tx as any, [fromWalletId, toWalletId]);
     assertWalletUsable(locked, fromWalletId, fromCurrency, "debit");
     assertWalletUsable(locked, toWalletId, toCurrency, "credit");
+
+    if (!params.skipKycCheck) await enforceKycLimit(tx as any, fromWalletId, amount, fromCurrency);
+    if (!params.skipRateLimitCheck) await checkRateLimit(fromWalletId, amount, fromCurrency, tx as any);
 
     const availableBal = await ledgerBalance(tx as any, fromWalletId, fromCurrency);
     if (availableBal < totalDebit) throw new Error("Insufficient funds");
@@ -476,7 +520,8 @@ export async function processFxTransfer(params: {
     const base = { transactionId: txId, reference: ref, eventType: "fx_transfer" };
     await tx.insert(ledgerEntriesTable).values([
       { id: generateId(), ...base, accountId: fromWalletId, accountType: "wallet", debitAmount: String(totalDebit), creditAmount: "0", currency: fromCurrency, description: "Remittance debit (amount + fee)", entryType: "debit", walletId: fromWalletId },
-      { id: generateId(), ...base, accountId: "platform_fees", accountType: "platform", debitAmount: "0", creditAmount: String(fee), currency: fromCurrency, description: "Remittance fee", entryType: "credit", walletId: null },
+      // The fee leg only exists when a fee applies (the ledger refuses empty entries).
+      ...(fee > 0 ? [{ id: generateId(), ...base, accountId: "platform_fees", accountType: "platform", debitAmount: "0", creditAmount: String(fee), currency: fromCurrency, description: "Remittance fee", entryType: "credit", walletId: null }] : []),
       { id: generateId(), ...base, accountId: "platform_fx", accountType: "platform", debitAmount: "0", creditAmount: String(amount), currency: fromCurrency, description: "FX source leg", entryType: "credit", walletId: null },
       { id: generateId(), ...base, accountId: "platform_fx", accountType: "platform", debitAmount: String(amountReceived), creditAmount: "0", currency: toCurrency, description: `FX target leg @ ${rate}`, entryType: "debit", walletId: null },
       { id: generateId(), ...base, accountId: toWalletId, accountType: "wallet", debitAmount: "0", creditAmount: String(amountReceived), currency: toCurrency, description: "Remittance credit", entryType: "credit", walletId: toWalletId },
@@ -486,6 +531,8 @@ export async function processFxTransfer(params: {
       syncWalletBalance(fromWalletId, tx as any),
       syncWalletBalance(toWalletId, tx as any),
     ]);
+
+    if (attach) await attach(tx as any);
 
     await tx.update(transactionsTable).set({ status: "completed", completedAt: now }).where(eq(transactionsTable.id, txId));
   });
@@ -524,20 +571,20 @@ export async function processWithdrawal(params: {
   idempotencyKey?: string;
   skipKycCheck?:  boolean;
   internal?:      boolean;
+  attach?:        AttachedWrite;
 }): Promise<{ transaction: typeof transactionsTable.$inferSelect; feeAmount: number; netAmount: number; rateBps: number }> {
-  const { walletId, amount, currency, description, idempotencyKey, userTier = "bronze", skipKycCheck, internal } = params;
-  assertPositiveAmount(amount);
+  const { walletId, currency, description, idempotencyKey, userTier = "bronze", skipKycCheck, internal, attach } = params;
+  const amount = normalizeAmount(params.amount);
   const start = Date.now();
 
   guard("outbound_transfers");
 
-  // Cash-out is capped by the same KYC ceiling as transfers.
-  if (!skipKycCheck) {
-    await enforceKycLimit(walletId, amount, currency);
-  }
-
   // Compute fee BEFORE the transaction — async DB read, non-blocking to hot path
   const { feeAmount, netAmount, rateBps } = await computeFee("cashout", amount, userTier);
+  // A misconfigured rule (fee above the amount, or negative) must never reach the ledger.
+  if (!Number.isFinite(feeAmount) || feeAmount < 0 || netAmount < 0) {
+    throw new InvalidFeeError(`Cash-out fee ${feeAmount} is invalid for amount ${amount}`);
+  }
 
   const txId = generateId();
   const ref  = params.reference ?? generateReference();
@@ -548,6 +595,9 @@ export async function processWithdrawal(params: {
   await runTx(async (tx) => {
     const locked = await lockWallets(tx as any, [walletId]);
     assertWalletUsable(locked, walletId, currency, "debit");
+
+    // Cash-out is capped by the same KYC ceiling as transfers, evaluated under the wallet lock.
+    if (!skipKycCheck) await enforceKycLimit(tx as any, walletId, amount, currency);
 
     const availableBal = await ledgerBalance(tx as any, walletId, currency);
     if (availableBal < amount) throw new Error("Insufficient funds");
@@ -601,8 +651,9 @@ export async function processWithdrawal(params: {
         walletId:     null,
         reference:    ref,
       },
-      // 3. CREDIT platform_fees — KOWRI fee revenue (always written for audit)
-      {
+      // 3. CREDIT platform_fees — KOWRI fee revenue (only when a fee applies:
+      //    the ledger refuses entries that carry no amount on either side)
+      ...(feeAmount > 0 ? [{
         id:           generateId(),
         transactionId: txId,
         accountId:    "platform_fees",
@@ -615,12 +666,14 @@ export async function processWithdrawal(params: {
         entryType:    "credit",
         walletId:     null,
         reference:    ref,
-      },
+      }] : []),
     ]);
 
     recordMetric("ledger", Date.now() - ledgerStart);
 
     await syncWalletBalance(walletId, tx as any);
+
+    if (attach) await attach(tx as any);
 
     await tx
       .update(transactionsTable)

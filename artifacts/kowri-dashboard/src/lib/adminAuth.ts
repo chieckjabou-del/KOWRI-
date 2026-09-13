@@ -15,12 +15,18 @@ export interface AdminAccount {
   role: string;
   permissions: string[];
   mustChangePassword: boolean;
+  mfaEnabled?: boolean;
+  mfaRequired?: boolean;
 }
 
 export interface AdminSession {
   token: string;
   expiresAt: string;
   admin: AdminAccount;
+  // Second factor presented for this session; when the platform enforces MFA
+  // and this is false, the API only grants read permissions.
+  mfaVerified?: boolean;
+  mfaEnrollmentRequired?: boolean;
 }
 
 type Listener = () => void;
@@ -96,17 +102,45 @@ async function readJson(res: Response): Promise<any> {
   try { return JSON.parse(text); } catch { return { error: text || res.statusText }; }
 }
 
-export async function adminLogin(email: string, password: string): Promise<AdminSession> {
+// Thrown when the account has a second factor and the code was not supplied.
+export class MfaRequiredError extends Error {
+  constructor() { super("Code d'authentification requis"); this.name = "MfaRequiredError"; }
+}
+
+export async function adminLogin(email: string, password: string, totpCode?: string): Promise<AdminSession> {
   const res = await fetch("/api/admin/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, ...(totpCode ? { totpCode } : {}) }),
   });
   const body = await readJson(res);
+  if (res.status === 401 && body.code === "MFA_REQUIRED") throw new MfaRequiredError();
   if (!res.ok) throw new Error(body.error || `Connexion refusée (${res.status})`);
-  const session: AdminSession = { token: body.token, expiresAt: body.expiresAt, admin: body.admin };
+  const session: AdminSession = { token: body.token, expiresAt: body.expiresAt, admin: body.admin, mfaVerified: !!body.mfaVerified, mfaEnrollmentRequired: !!body.mfaEnrollmentRequired };
   setAdminSession(session);
   return session;
+}
+
+// Second-factor enrolment: returns the otpauth URI and secret to show once.
+export async function adminMfaSetup(): Promise<{ secret: string; uri: string }> {
+  const session = getAdminSession();
+  if (!session) throw new Error("Session expirée");
+  const res = await fetch("/api/admin/auth/mfa/setup", { method: "POST", headers: { "X-Admin-Token": session.token } });
+  const body = await readJson(res);
+  if (!res.ok) throw new Error(body.error || `Échec (${res.status})`);
+  return { secret: body.secret, uri: body.uri };
+}
+
+export async function adminMfaConfirm(code: string): Promise<void> {
+  const session = getAdminSession();
+  if (!session) throw new Error("Session expirée");
+  const res = await fetch("/api/admin/auth/mfa/confirm", {
+    method: "POST", headers: { "Content-Type": "application/json", "X-Admin-Token": session.token },
+    body: JSON.stringify({ code }),
+  });
+  const body = await readJson(res);
+  if (!res.ok) throw new Error(body.error || `Code refusé (${res.status})`);
+  setAdminSession({ ...session, mfaVerified: true, mfaEnrollmentRequired: false, admin: { ...session.admin, mfaEnabled: true } });
 }
 
 export async function adminLogout(): Promise<void> {

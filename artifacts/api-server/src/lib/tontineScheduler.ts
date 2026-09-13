@@ -6,7 +6,7 @@ import {
   merchantsTable, investmentPoolsTable, poolPositionsTable,
   tontineHybridCyclesTable, tontineSolidaryClaimsTable,
 } from "@workspace/db";
-import { eq, and, sql, asc, desc, ne, like, isNull } from "drizzle-orm";
+import { eq, and, sql, asc, desc, ne, isNull, inArray } from "drizzle-orm";
 import { generateId } from "./id";
 import { processTransfer, isDuplicateIdempotencyKey, getWalletBalance } from "./walletService";
 import { pickDebitWallet } from "./walletSelection";
@@ -78,6 +78,12 @@ export async function runContributionCycle(tontineId: string): Promise<{
     if (!wallet) { failed.push(member.userId); continue; }
 
     try {
+      const memberUpdates: Record<string, any> = {
+        contributionsCount: sql`${tontineMembersTable.contributionsCount} + 1`,
+      };
+      if (yieldSurcharge > 0) {
+        memberUpdates.yieldPaid = String((Number(member.yieldPaid ?? 0) + yieldSurcharge).toFixed(4));
+      }
       await processTransfer({
         fromWalletId: wallet.id,
         toWalletId:   poolWalletId,
@@ -87,15 +93,13 @@ export async function runContributionCycle(tontineId: string): Promise<{
         skipFraudCheck: true,
         // One debit per member per round, whichever path (scheduler or manual) runs first.
         idempotencyKey: `tontine:${tontineId}:r${expectedRound}:m${member.id}`,
+        // The member's contribution count moves with the money: a crash cannot
+        // leave a debited member recorded as having missed the round.
+        attach: async (t) => {
+          await t.update(tontineMembersTable).set(memberUpdates).where(eq(tontineMembersTable.id, member.id));
+        },
       });
-      const memberUpdates: Record<string, any> = {
-        contributionsCount: sql`${tontineMembersTable.contributionsCount} + 1`,
-      };
-      if (yieldSurcharge > 0) {
-        memberUpdates.yieldPaid = String((Number(member.yieldPaid ?? 0) + yieldSurcharge).toFixed(4));
-        yieldCollected += yieldSurcharge;
-      }
-      await db.update(tontineMembersTable).set(memberUpdates).where(eq(tontineMembersTable.id, member.id));
+      if (yieldSurcharge > 0) yieldCollected += yieldSurcharge;
       collected++;
       totalCollected += memberAmount;
       collectedUserIds.push(member.userId);
@@ -316,16 +320,23 @@ export async function runPayoutCycle(tontineId: string): Promise<{
 
     const actualPayoutAmount = payoutAmount + yieldShare;
 
-    await processTransfer({
-      fromWalletId: tontine.walletId!,
-      toWalletId:   recipientWallet.id,
-      amount:       actualPayoutAmount,
-      currency:     tontine.currency,
-      description:  `Tontine payout – Round ${nextOrder}${yieldShare > 0 ? ` (+${yieldShare.toFixed(2)} yield share)` : ""}`,
-      skipFraudCheck: true,
-      skipKycCheck: true,
-      idempotencyKey: `tontine-payout:${tontineId}:r${nextOrder}`,
-    });
+    try {
+      await processTransfer({
+        fromWalletId: tontine.walletId!,
+        toWalletId:   recipientWallet.id,
+        amount:       actualPayoutAmount,
+        currency:     tontine.currency,
+        description:  `Tontine payout – Round ${nextOrder}${yieldShare > 0 ? ` (+${yieldShare.toFixed(2)} yield share)` : ""}`,
+        skipFraudCheck: true,
+        skipKycCheck: true,
+        idempotencyKey: `tontine-payout:${tontineId}:r${nextOrder}`,
+      });
+    } catch (err) {
+      // The payout for this round was already posted (crash after the transfer,
+      // before the state update): never pay twice, just finish advancing state.
+      if (!isDuplicateIdempotencyKey(err)) throw err;
+      await audit({ action: "tontine.payout.already_paid", entity: "tontine", entityId: tontineId, metadata: { round: nextOrder, recipientUserId: recipient.userId } });
+    }
 
     const newRound       = nextOrder;
     const isComplete     = newRound >= tontine.totalRounds;
@@ -665,16 +676,21 @@ export async function runHybridCycle(tontineId: string): Promise<{
     }
 
     if (rotationAmount > 0) {
-      await processTransfer({
-        fromWalletId: tontine.walletId!,
-        toWalletId:   recipientWallet.id,
-        amount:       rotationAmount,
-        currency,
-        description:  `Hybrid tontine payout – Round ${round} (${cfg.rotation_pct}% rotation)`,
-        skipFraudCheck: true,
-        skipKycCheck: true,
-        idempotencyKey: `tontine-hybrid:${tontineId}:r${round}:rotation`,
-      });
+      try {
+        await processTransfer({
+          fromWalletId: tontine.walletId!,
+          toWalletId:   recipientWallet.id,
+          amount:       rotationAmount,
+          currency,
+          description:  `Hybrid tontine payout – Round ${round} (${cfg.rotation_pct}% rotation)`,
+          skipFraudCheck: true,
+          skipKycCheck: true,
+          idempotencyKey: `tontine-hybrid:${tontineId}:r${round}:rotation`,
+        });
+      } catch (err) {
+        if (!isDuplicateIdempotencyKey(err)) throw err;
+        await audit({ action: "tontine.payout.already_paid", entity: "tontine", entityId: tontineId, metadata: { round, recipientUserId: recipient.userId, hybrid: true } });
+      }
     }
 
     // ── 2. Investment: transfer to pool wallet ────────────────────────────
@@ -682,16 +698,20 @@ export async function runHybridCycle(tontineId: string): Promise<{
       const [invPool] = await db.select().from(investmentPoolsTable)
         .where(eq(investmentPoolsTable.id, tontine.investmentPoolId));
       if (invPool?.walletId) {
-        await processTransfer({
-          fromWalletId: tontine.walletId!,
-          toWalletId:   invPool.walletId,
-          amount:       investmentAmount,
-          currency,
-          description:  `Hybrid tontine – Investment tranche Round ${round}`,
-          skipFraudCheck: true,
-          skipKycCheck: true,
-          idempotencyKey: `tontine-hybrid:${tontineId}:r${round}:investment`,
-        });
+        try {
+          await processTransfer({
+            fromWalletId: tontine.walletId!,
+            toWalletId:   invPool.walletId,
+            amount:       investmentAmount,
+            currency,
+            description:  `Hybrid tontine – Investment tranche Round ${round}`,
+            skipFraudCheck: true,
+            skipKycCheck: true,
+            idempotencyKey: `tontine-hybrid:${tontineId}:r${round}:investment`,
+          });
+        } catch (err) {
+          if (!isDuplicateIdempotencyKey(err)) throw err;
+        }
         // Update investment pool running total
         await db.update(investmentPoolsTable)
           .set({ currentAmount: sql`${investmentPoolsTable.currentAmount}::numeric + ${investmentAmount}` })
@@ -942,23 +962,18 @@ export async function recoverStuckPayouts(): Promise<void> {
         continue;
       }
 
-      // Case 2: check if a payout transaction was committed to recipient's wallet
-      const recipientWallets = await db.select({ id: walletsTable.id })
-        .from(walletsTable)
-        .where(and(eq(walletsTable.userId, member.userId), eq(walletsTable.status, "active")));
-      const recipientWalletIds = recipientWallets.map(w => w.id);
-
-      let transferFound = false;
-      for (const walletId of recipientWalletIds) {
-        const [txn] = await db.select({ id: transactionsTable.id })
-          .from(transactionsTable)
-          .where(and(
-            eq(transactionsTable.toWalletId, walletId),
-            like(transactionsTable.description, `%Tontine payout – Round ${member.payoutOrder}%`),
-          ))
-          .limit(1);
-        if (txn) { transferFound = true; break; }
-      }
+      // Case 2: was the payout for this round posted? The ledger transaction is
+      // keyed on the round (classic and hybrid tontines use different keys), so
+      // the lookup is exact and does not depend on a description string.
+      const payoutKeys = [
+        `tontine-payout:${member.tontineId}:r${member.payoutOrder}`,
+        `tontine-hybrid:${member.tontineId}:r${member.payoutOrder}:rotation`,
+      ];
+      const [txn] = await db.select({ id: transactionsTable.id })
+        .from(transactionsTable)
+        .where(inArray(transactionsTable.idempotencyKey, payoutKeys))
+        .limit(1);
+      const transferFound = !!txn;
 
       if (transferFound) {
         // Transfer was made — advance state atomically

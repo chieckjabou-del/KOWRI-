@@ -58,8 +58,20 @@ export function errorHandler(
       res.status(400).json({ error: true, code: "KYC_LIMIT", message: msg });
       return;
     }
-    if (err.name === "WalletUnavailableError" || err.name === "CurrencyMismatchError" || err.name === "InvalidAmountError") {
+    if (err.name === "WalletUnavailableError" || err.name === "CurrencyMismatchError" || err.name === "InvalidAmountError" || err.name === "InvalidFeeError") {
       res.status(400).json({ error: true, code: err.name, message: msg });
+      return;
+    }
+    if (err.name === "FxArbitrageError" || err.name === "FXNotFoundError") {
+      res.status(409).json({ error: true, code: err.name === "FxArbitrageError" ? "FX_ARBITRAGE" : "FX_RATE_MISSING", message: msg });
+      return;
+    }
+    // A financial operation whose idempotency key already exists in the ledger
+    // has been applied once: the retry is refused instead of re-executed, and
+    // the client reconciles through GET /transactions.
+    const pg = err as { code?: string; constraint?: string };
+    if (pg.code === "23505" && (pg.constraint?.includes("idempotency") || msg.includes("idempotency"))) {
+      res.status(409).json({ error: true, code: "ALREADY_PROCESSED", message: "This operation was already applied; do not retry with the same idempotency key" });
       return;
     }
     if (msg === "Insufficient funds") {

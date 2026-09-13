@@ -68,14 +68,23 @@ export async function seedDatabase() {
   const ledgerData = [];
   const txTypes = ["deposit", "transfer", "tontine_contribution", "merchant_payment", "loan_disbursement"] as const;
 
+  // Running balances keep the demo ledger honest: a wallet only ever sends what
+  // it has received, so no seeded wallet starts life with a negative balance.
+  const running = new Map<string, number>();
   for (let i = 0; i < 60; i++) {
     const txId = generateId();
     const fromIdx = Math.floor(Math.random() * 18);
     const toIdx = (fromIdx + 1 + Math.floor(Math.random() * 17)) % 20;
-    const amount = (Math.random() * 50000 + 1000).toFixed(4);
-    const type = txTypes[i % txTypes.length];
+    const amountNum = Math.round((Math.random() * 50000 + 1000) * 10000) / 10000;
+    const amount = amountNum.toFixed(4);
+    let type: (typeof txTypes)[number] = txTypes[i % txTypes.length];
+    // Same-currency only (XAF wallets never take part), and no overdrafts.
+    if (type !== "deposit" && (wallets[fromIdx].currency !== "XOF" || (running.get(walletIds[fromIdx]) ?? 0) < amountNum)) type = "deposit";
+    if (wallets[toIdx].currency !== "XOF") continue;
     const daysAgo = Math.floor(Math.random() * 30);
     const txDate = new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000);
+    if (type !== "deposit") running.set(walletIds[fromIdx], (running.get(walletIds[fromIdx]) ?? 0) - amountNum);
+    running.set(walletIds[toIdx], (running.get(walletIds[toIdx]) ?? 0) + amountNum);
 
     transactionData.push({
       id: txId,
@@ -132,8 +141,8 @@ export async function seedDatabase() {
     id: tontineWalletId,
     userId: userIds[0],
     currency: "XOF",
-    balance: "1600000.0000",
-    availableBalance: "1600000.0000",
+    balance: "0.0000",
+    availableBalance: "0.0000",
     status: "active",
     walletType: "tontine",
   });
@@ -162,8 +171,8 @@ export async function seedDatabase() {
     id: tontineWalletId2,
     userId: userIds[1],
     currency: "XOF",
-    balance: "180000.0000",
-    availableBalance: "180000.0000",
+    balance: "0.0000",
+    availableBalance: "0.0000",
     status: "active",
     walletType: "tontine",
   });
@@ -225,12 +234,13 @@ export async function seedDatabase() {
     id: generateId(),
     userId,
     walletId: walletIds[i],
-    amount: ((i + 1) * 30000).toFixed(4),
+    // Within the seeded credit line ((i + 1) × 25 000): the line is a ceiling on total exposure.
+    amount: ((i + 1) * 20000).toFixed(4),
     currency: "XOF",
     interestRate: "12.00",
     termDays: 30 + i * 10,
     status: (["pending", "approved", "disbursed", "repaid", "defaulted", "disbursed"] as const)[i],
-    amountRepaid: i === 3 ? ((i + 1) * 30000).toFixed(4) : "0.0000",
+    amountRepaid: i === 3 ? ((i + 1) * 20000).toFixed(4) : "0.0000",
     purpose: ["Business capital", "Medical expenses", "Education", "Home improvement", "Agricultural", "Trade finance"][i],
     dueDate: new Date(now.getTime() + (30 + i * 10) * 24 * 60 * 60 * 1000),
     disbursedAt: i >= 2 ? new Date(now.getTime() - 5 * 24 * 60 * 60 * 1000) : null,
@@ -243,8 +253,8 @@ export async function seedDatabase() {
     id: merchantWalletId,
     userId: userIds[5],
     currency: "XOF",
-    balance: "1250000.0000",
-    availableBalance: "1250000.0000",
+    balance: "0.0000",
+    availableBalance: "0.0000",
     status: "active",
     walletType: "merchant",
   });
@@ -267,8 +277,8 @@ export async function seedDatabase() {
     id: merchantWalletId2,
     userId: userIds[8],
     currency: "XOF",
-    balance: "430000.0000",
-    availableBalance: "430000.0000",
+    balance: "0.0000",
+    availableBalance: "0.0000",
     status: "active",
     walletType: "merchant",
   });
@@ -318,8 +328,8 @@ export async function patchTontineMembers(): Promise<{ patched: boolean; message
       id: tontineWalletId,
       userId: admin.id,
       currency: "XOF",
-      balance: "180000.0000",
-      availableBalance: "180000.0000",
+      balance: "0.0000",
+      availableBalance: "0.0000",
       status: "active",
       walletType: "tontine",
     });

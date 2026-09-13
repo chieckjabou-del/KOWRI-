@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import { db } from "@workspace/db";
 import { idempotencyKeysTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
+import { createHash } from "crypto";
 import { generateId } from "../lib/id";
 
 declare global {
@@ -21,6 +22,18 @@ interface StoredResponse {
   __status?: number;
   __pending?: boolean;
   body?: unknown;
+}
+
+// The key is bound to the request it was first used with. Re-using it with a
+// different body is a client bug (or an attempt to smuggle a second operation
+// behind a cached success) and is refused rather than silently replayed.
+function fingerprint(req: Request): string {
+  const canonical = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(canonical);
+    if (v && typeof v === "object") return Object.fromEntries(Object.keys(v as object).sort().map((k) => [k, canonical((v as any)[k])]));
+    return v;
+  };
+  return createHash("sha256").update(JSON.stringify(canonical(req.body ?? null))).digest("hex");
 }
 
 export function requireIdempotencyKey(req: Request, res: Response, next: NextFunction): void {
@@ -49,9 +62,9 @@ export function requireIdempotencyKey(req: Request, res: Response, next: NextFun
 
 // The key is reserved in the database before the handler runs, so two requests
 // carrying the same key can never both execute — across retries or instances.
-async function reserve(key: string, endpoint: string): Promise<"reserved" | "in_flight" | StoredResponse> {
+async function reserve(key: string, endpoint: string, requestHash: string): Promise<"reserved" | "in_flight" | "mismatch" | StoredResponse> {
   const inserted = await db.insert(idempotencyKeysTable)
-    .values({ id: generateId(), key, endpoint, responseBody: PENDING_MARKER as any })
+    .values({ id: generateId(), key, endpoint, requestHash, responseBody: PENDING_MARKER as any })
     .onConflictDoNothing()
     .returning({ id: idempotencyKeysTable.id });
   if (inserted.length) return "reserved";
@@ -59,13 +72,15 @@ async function reserve(key: string, endpoint: string): Promise<"reserved" | "in_
   const [existing] = await db.select().from(idempotencyKeysTable)
     .where(and(eq(idempotencyKeysTable.key, key), eq(idempotencyKeysTable.endpoint, endpoint)))
     .limit(1);
-  if (!existing) return reserve(key, endpoint);
+  if (!existing) return reserve(key, endpoint, requestHash);
 
   const expired = existing.createdAt.getTime() < Date.now() - IDEMPOTENCY_TTL_MS;
   if (expired) {
     await db.delete(idempotencyKeysTable).where(eq(idempotencyKeysTable.id, existing.id));
-    return reserve(key, endpoint);
+    return reserve(key, endpoint, requestHash);
   }
+
+  if (existing.requestHash && existing.requestHash !== requestHash) return "mismatch";
 
   const stored = existing.responseBody as StoredResponse;
   if (stored && typeof stored === "object" && stored.__pending) return "in_flight";
@@ -80,8 +95,16 @@ export function checkIdempotency(req: Request, res: Response, next: NextFunction
   const actor    = req.auth?.userId ?? "anonymous";
   const endpoint = `${req.method}:${req.baseUrl}${req.route?.path ?? req.path}|u:${actor}`;
 
-  reserve(key, endpoint)
+  reserve(key, endpoint, fingerprint(req))
     .then((outcome) => {
+      if (outcome === "mismatch") {
+        res.status(422).json({
+          error: true,
+          message: "This Idempotency-Key was already used with a different request body.",
+          code: "IDEMPOTENCY_PAYLOAD_MISMATCH",
+        });
+        return;
+      }
       if (outcome === "in_flight") {
         res.status(409).json({
           error: true,

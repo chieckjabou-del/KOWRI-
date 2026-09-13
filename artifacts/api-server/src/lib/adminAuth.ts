@@ -1,8 +1,9 @@
 import { db } from "@workspace/db";
 import { adminUsersTable, adminSessionsTable } from "@workspace/db";
 import { eq, and, gt, isNull, sql } from "drizzle-orm";
-import { randomBytes, createHash, scryptSync, timingSafeEqual } from "crypto";
+import { randomBytes, createHash, createHmac, scryptSync, timingSafeEqual } from "crypto";
 import { generateId } from "./id";
+import { encryptField, decryptField } from "./fieldCrypto";
 
 // ── Roles and permissions ─────────────────────────────────────────────────────
 //
@@ -40,6 +41,112 @@ export function isRole(value: unknown): value is keyof typeof ROLE_PERMISSIONS {
 
 export function permissionsForRole(role: string): Set<Permission> {
   return new Set(ROLE_PERMISSIONS[role] ?? []);
+}
+
+// ── Second factor (TOTP, RFC 6238) ────────────────────────────────────────────
+//
+// Operator accounts move money, approve identities and change fees; a password
+// alone is not an acceptable barrier for that. When MFA is enforced
+// (ADMIN_MFA_REQUIRED=true, the default in production) a session that has not
+// presented a valid code — because the operator never enrolled, or logged in
+// without one — keeps read access only: every write permission is stripped
+// until the second factor is in place. The shared legacy key, which has no
+// second factor at all, is reduced the same way.
+
+export function mfaRequired(env: NodeJS.ProcessEnv = process.env): boolean {
+  const v = (env.ADMIN_MFA_REQUIRED ?? "").toLowerCase();
+  if (v === "true") return true;
+  if (v === "false") return false;
+  return env.NODE_ENV === "production";
+}
+
+const READ_ONLY_PERMISSIONS: readonly Permission[] = ["users.read"];
+
+export function effectivePermissions(role: string, mfaVerified: boolean): Set<Permission> {
+  const full = permissionsForRole(role);
+  if (!mfaRequired() || mfaVerified) return full;
+  return new Set(READ_ONLY_PERMISSIONS.filter((p) => full.has(p)));
+}
+
+const BASE32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+export function base32Encode(buf: Buffer): string {
+  let bits = 0, value = 0, out = "";
+  for (const byte of buf) {
+    value = (value << 8) | byte; bits += 8;
+    while (bits >= 5) { out += BASE32[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += BASE32[(value << (5 - bits)) & 31];
+  return out;
+}
+
+export function base32Decode(str: string): Buffer {
+  let bits = 0, value = 0; const out: number[] = [];
+  for (const ch of str.replace(/=+$/, "").toUpperCase()) {
+    const idx = BASE32.indexOf(ch);
+    if (idx < 0) continue;
+    value = (value << 5) | idx; bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 255); bits -= 8; }
+  }
+  return Buffer.from(out);
+}
+
+export function generateTotpSecret(): string {
+  return base32Encode(randomBytes(20));
+}
+
+export function totpCode(secretBase32: string, step = Math.floor(Date.now() / 30_000)): string {
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(step));
+  const digest = createHmac("sha1", base32Decode(secretBase32)).update(counter).digest();
+  const offset = digest[digest.length - 1] & 0x0f;
+  const code = ((digest[offset] & 0x7f) << 24) | (digest[offset + 1] << 16) | (digest[offset + 2] << 8) | digest[offset + 3];
+  return String(code % 1_000_000).padStart(6, "0");
+}
+
+// Accepts the current 30-second step and one step either side (clock drift).
+export function verifyTotp(secretBase32: string, code: unknown): boolean {
+  if (typeof code !== "string" || !/^\d{6}$/.test(code)) return false;
+  const now = Math.floor(Date.now() / 30_000);
+  const given = Buffer.from(code);
+  for (const step of [now, now - 1, now + 1]) {
+    const expected = Buffer.from(totpCode(secretBase32, step));
+    if (expected.length === given.length && timingSafeEqual(expected, given)) return true;
+  }
+  return false;
+}
+
+export function totpUri(email: string, secretBase32: string): string {
+  const issuer = encodeURIComponent(process.env.MFA_ISSUER ?? "AKWE");
+  return `otpauth://totp/${issuer}:${encodeURIComponent(email)}?secret=${secretBase32}&issuer=${issuer}&algorithm=SHA1&digits=6&period=30`;
+}
+
+export async function beginMfaEnrollment(adminId: string, email: string): Promise<{ secret: string; uri: string }> {
+  const secret = generateTotpSecret();
+  await db.update(adminUsersTable)
+    .set({ mfaSecret: encryptField(secret), mfaEnabledAt: null, updatedAt: new Date() })
+    .where(eq(adminUsersTable.id, adminId));
+  return { secret, uri: totpUri(email, secret) };
+}
+
+export async function confirmMfaEnrollment(adminId: string, code: unknown): Promise<boolean> {
+  const [row] = await db.select({ secret: adminUsersTable.mfaSecret }).from(adminUsersTable).where(eq(adminUsersTable.id, adminId)).limit(1);
+  const secret = decryptField(row?.secret);
+  if (!secret || !verifyTotp(secret, code)) return false;
+  await db.update(adminUsersTable).set({ mfaEnabledAt: new Date(), updatedAt: new Date() }).where(eq(adminUsersTable.id, adminId));
+  return true;
+}
+
+export async function resetMfa(adminId: string): Promise<void> {
+  await db.update(adminUsersTable).set({ mfaSecret: null, mfaEnabledAt: null, updatedAt: new Date() }).where(eq(adminUsersTable.id, adminId));
+}
+
+export function adminMfaSecret(row: AdminUserRow): string | null {
+  return row.mfaEnabledAt ? decryptField(row.mfaSecret) : null;
+}
+
+export async function markSessionMfaVerified(sessionId: string): Promise<void> {
+  await db.update(adminSessionsTable).set({ mfaVerified: true }).where(eq(adminSessionsTable.id, sessionId));
 }
 
 // ── Passwords ─────────────────────────────────────────────────────────────────
@@ -89,19 +196,24 @@ export interface AdminIdentity {
   permissions: Set<Permission>;
   sessionId: string | null;
   via: "session" | "legacy_key";
+  // False when MFA is enforced and this session has not presented a code:
+  // the identity then carries read permissions only.
+  mfaVerified: boolean;
+  mfaEnrolled: boolean;
 }
 
 export function publicAdmin(row: AdminUserRow) {
   return {
     id: row.id, email: row.email, name: row.name, role: row.role, status: row.status,
     permissions: [...permissionsForRole(row.role)],
+    mfaEnabled: !!row.mfaEnabledAt, mfaRequired: mfaRequired(),
     mustChangePassword: row.mustChangePassword, lastLoginAt: row.lastLoginAt, createdAt: row.createdAt,
   };
 }
 
 export async function createAdminSession(
   adminId: string,
-  opts: { ipAddress?: string; userAgent?: string; ttlHours?: number } = {},
+  opts: { ipAddress?: string; userAgent?: string; ttlHours?: number; mfaVerified?: boolean } = {},
 ): Promise<{ token: string; sessionId: string; expiresAt: Date }> {
   const token = `${ADMIN_TOKEN_PREFIX}${randomBytes(32).toString("hex")}`;
   const sessionId = generateId("asess");
@@ -109,6 +221,7 @@ export async function createAdminSession(
   await db.insert(adminSessionsTable).values({
     id: sessionId, adminUserId: adminId, tokenHash: hashToken(token),
     ipAddress: opts.ipAddress, userAgent: opts.userAgent?.slice(0, 300), expiresAt,
+    mfaVerified: opts.mfaVerified ?? false,
   });
   return { token, sessionId, expiresAt };
 }
@@ -128,9 +241,11 @@ export async function validateAdminToken(token: string): Promise<AdminIdentity |
   if (!row || row.admin.status !== "active") return null;
 
   await db.update(adminSessionsTable).set({ lastUsedAt: now }).where(eq(adminSessionsTable.id, row.session.id));
+  const mfaVerified = row.session.mfaVerified && !!row.admin.mfaEnabledAt;
   return {
     adminId: row.admin.id, email: row.admin.email, name: row.admin.name, role: row.admin.role,
-    permissions: permissionsForRole(row.admin.role), sessionId: row.session.id, via: "session",
+    permissions: effectivePermissions(row.admin.role, mfaVerified), sessionId: row.session.id, via: "session",
+    mfaVerified, mfaEnrolled: !!row.admin.mfaEnabledAt,
   };
 }
 

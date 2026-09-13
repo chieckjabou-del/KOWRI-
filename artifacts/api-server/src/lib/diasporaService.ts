@@ -6,7 +6,7 @@ import {
 import { eq, and, sql } from "drizzle-orm";
 import { generateId } from "./id";
 import { processFxTransfer } from "./walletService";
-import { getRate } from "./fxEngine";
+import { getRate, assertNoArbitrage } from "./fxEngine";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
 
@@ -121,8 +121,10 @@ export async function sendRemittance(params: {
     throw new Error(`Recipient wallet is denominated in ${recipientWallet.currency}, not ${params.toCurrency}`);
   }
 
-  // A missing rate must fail the transfer — never silently fall back to 1:1.
+  // A missing rate must fail the transfer — never silently fall back to 1:1, and
+  // an inconsistent pair (round trip > 1) is refused until an operator fixes it.
   const rate = await getRate(params.fromCurrency, params.toCurrency);
+  await assertNoArbitrage(params.fromCurrency, params.toCurrency, rate);
 
   const { transaction: tx, amountReceived, totalDebit } = await processFxTransfer({
     fromWalletId:  params.fromWalletId,

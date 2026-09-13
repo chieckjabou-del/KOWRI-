@@ -10,6 +10,7 @@ import {
   ROLES, ROLE_PERMISSIONS, isRole, publicAdmin, hashPassword, verifyPassword, passwordPolicyError,
   createAdminSession, validateAdminToken, revokeAdminSessionByToken, revokeAdminSession, revokeAllAdminSessions,
   countAdmins, createAdminUser, ADMIN_TOKEN_PREFIX,
+  mfaRequired, adminMfaSecret, verifyTotp, beginMfaEnrollment, confirmMfaEnrollment, resetMfa, markSessionMfaVerified,
 } from "../lib/adminAuth";
 
 const router = Router();
@@ -58,10 +59,28 @@ router.post("/login", loginRateLimit, async (req, res, next) => {
     if (admin.status !== "active") {
       return res.status(403).json({ error: "Account disabled" });
     }
-    const session = await createAdminSession(admin.id, { ipAddress: req.ip, userAgent: req.headers["user-agent"] });
+    // Enrolled operators must present their code with the password; the
+    // session is then fully privileged. Without enrolment the session is
+    // created but, when MFA is enforced, carries read permissions only.
+    const secret = adminMfaSecret(admin);
+    let mfaVerified = false;
+    if (secret) {
+      const code = req.body?.totpCode;
+      if (code === undefined || code === null || code === "") {
+        return res.status(401).json({ error: "Second factor required", code: "MFA_REQUIRED" });
+      }
+      if (!verifyTotp(secret, String(code))) {
+        return res.status(401).json({ error: "Invalid credentials" });
+      }
+      mfaVerified = true;
+    }
+    const session = await createAdminSession(admin.id, { ipAddress: req.ip, userAgent: req.headers["user-agent"], mfaVerified });
     await db.update(adminUsersTable).set({ lastLoginAt: new Date() }).where(eq(adminUsersTable.id, admin.id));
-    await audit({ action: "admin.login", entity: "admin_user", entityId: admin.id, actor: admin.email, metadata: { ip: req.ip, sessionId: session.sessionId } });
-    return res.json({ token: session.token, expiresAt: session.expiresAt, admin: publicAdmin(admin) });
+    await audit({ action: "admin.login", entity: "admin_user", entityId: admin.id, actor: admin.email, metadata: { ip: req.ip, sessionId: session.sessionId, mfaVerified } });
+    return res.json({
+      token: session.token, expiresAt: session.expiresAt, admin: publicAdmin(admin),
+      mfaVerified, mfaEnrollmentRequired: mfaRequired() && !secret,
+    });
   } catch (err) {
     return next(err);
   }
@@ -128,6 +147,47 @@ router.post("/change-password", requireAdminSession, async (req, res, next) => {
     const revoked = await revokeAllAdminSessions(admin.id, req.admin!.sessionId ?? undefined);
     await audit({ action: "admin.password.changed", entity: "admin_user", entityId: admin.id, actor: admin.email, metadata: { otherSessionsRevoked: revoked } });
     return res.json({ success: true, otherSessionsRevoked: revoked });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── Second factor ─────────────────────────────────────────────────────────────
+
+// Starts (or restarts) enrolment: returns the secret and otpauth URI for an
+// authenticator app. Nothing is enforced until /mfa/confirm succeeds.
+router.post("/mfa/setup", requireAdminSession, async (req, res, next) => {
+  try {
+    const { secret, uri } = await beginMfaEnrollment(req.admin!.adminId, req.admin!.email);
+    return res.json({ secret, uri, message: "Scan the URI with an authenticator app, then POST /admin/auth/mfa/confirm with a code" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+router.post("/mfa/confirm", requireAdminSession, loginRateLimit, async (req, res, next) => {
+  try {
+    const ok = await confirmMfaEnrollment(req.admin!.adminId, String(req.body?.code ?? ""));
+    if (!ok) return res.status(401).json({ error: "Invalid code" });
+    if (req.admin!.sessionId) await markSessionMfaVerified(req.admin!.sessionId);
+    await audit({ action: "admin.mfa.enrolled", entity: "admin_user", entityId: req.admin!.adminId, actor: req.admin!.email });
+    return res.json({ success: true, mfaEnabled: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Lost authenticator: an admins.manage operator clears the factor; every
+// session of the account is closed and the operator must enrol again.
+router.post("/users/:adminId/mfa/reset", requirePermission("admins.manage"), async (req, res, next) => {
+  try {
+    const adminId = routeParamString(req, "adminId")!;
+    const [target] = await db.select({ id: adminUsersTable.id }).from(adminUsersTable).where(eq(adminUsersTable.id, adminId)).limit(1);
+    if (!target) return res.status(404).json({ error: "Admin not found" });
+    await resetMfa(adminId);
+    const revoked = await revokeAllAdminSessions(adminId);
+    await audit({ action: "admin.mfa.reset", entity: "admin_user", entityId: adminId, actor: req.admin!.email, metadata: { sessionsRevoked: revoked } });
+    return res.json({ success: true, sessionsRevoked: revoked });
   } catch (err) {
     return next(err);
   }
@@ -256,7 +316,7 @@ router.get("/introspect", async (req, res, next) => {
     const token = presentedToken(req);
     const identity = token ? await validateAdminToken(token) : null;
     if (!identity) return res.status(401).json({ active: false });
-    return res.json({ active: true, adminId: identity.adminId, email: identity.email, role: identity.role, permissions: [...identity.permissions] });
+    return res.json({ active: true, adminId: identity.adminId, email: identity.email, role: identity.role, permissions: [...identity.permissions], mfaVerified: identity.mfaVerified, mfaEnrolled: identity.mfaEnrolled });
   } catch (err) {
     return next(err);
   }

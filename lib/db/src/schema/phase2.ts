@@ -6,6 +6,8 @@ export const idempotencyKeysTable = pgTable("idempotency_keys", {
   id: text("id").primaryKey(),
   key: text("key").notNull(),
   endpoint: text("endpoint").notNull(),
+  // sha256 of the canonical request body the key was first used with.
+  requestHash: text("request_hash"),
   responseBody: jsonb("response_body").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [

@@ -69,6 +69,7 @@ router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       name, amount: Number(amount), currency,
       termDays: Number(termDays),
       earlyBreakPenalty: earlyBreakPenalty ? Number(earlyBreakPenalty) : undefined,
+      idempotencyKey: `savings-create:${userId}:${req.idempotencyKey}`,
     });
 
     return res.status(201).json(serializePlan(plan));

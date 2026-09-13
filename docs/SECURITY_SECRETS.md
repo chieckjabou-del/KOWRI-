@@ -10,7 +10,8 @@ Ce document décrit les secrets dont dépend la plateforme KOWRI, comment les g�
 | `SIGNING_SECRET` | env du serveur API | HMAC des requêtes internes signées (`lib/security.ts`) | forge de requêtes internes |
 | `ADMIN_API_KEY` (legacy) | env du serveur API + navigateur des opérateurs | super-admin partagé via `X-Admin-Key` | contrôle complet du back-office, sans traçabilité individuelle |
 | Mots de passe des comptes admin | table `admin_users` (scrypt salé) | connexion nominative au back-office | actions au nom de l'opérateur |
-| Jetons de session admin | table `admin_sessions` (SHA-256) | sessions de 12 h | actions au nom de l'opérateur jusqu'à révocation |
+| Jetons de session admin | table `admin_sessions` (SHA-256, drapeau `mfa_verified`) | sessions de 12 h | actions au nom de l'opérateur jusqu'à révocation ; sans second facteur la session est en lecture seule quand `ADMIN_MFA_REQUIRED` est actif |
+| Secrets TOTP des opérateurs | `admin_users.mfa_secret` (chiffré AES-256-GCM avec `KYC_ENCRYPTION_KEY`) | second facteur des opérateurs | contournement du second facteur pour ce compte ; réinitialiser via `POST /api/admin/auth/users/:id/mfa/reset` |
 | Clés API développeurs | table des clés (hashées) | accès API des intégrateurs | actions au nom de l'intégrateur |
 | Secrets de webhooks | table des webhooks | signature des callbacks sortants | forge de callbacks vers l'intégrateur |
 | Codes PIN des utilisateurs | `users.pin_hash` (scrypt salé, migration auto depuis sha256) | authentification wallet | prise de contrôle du wallet |

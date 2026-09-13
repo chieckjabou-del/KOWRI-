@@ -1,4 +1,4 @@
-import { countAdmins } from "./adminAuth";
+import { countAdmins, mfaRequired } from "./adminAuth";
 
 // Boot-time review of the secrets the platform runs on. Findings are logged
 // once; in production, errors abort startup unless SECRETS_STRICT=false.
@@ -64,6 +64,12 @@ export async function reviewSecrets(env: NodeJS.ProcessEnv = process.env): Promi
   }
   if (production && (env.DATABASE_SSL ?? "").toLowerCase() === "disable") {
     findings.push({ level: "warn", message: "DATABASE_SSL=disable in production: the PostgreSQL connection is not encrypted" });
+  }
+  if (production && !mfaRequired(env)) {
+    findings.push({ level: "error", message: "ADMIN_MFA_REQUIRED=false in production: operators can move money with a password alone" });
+  }
+  if (production && env.ALLOW_DEMO_SEED === "true") {
+    findings.push({ level: "error", message: "ALLOW_DEMO_SEED=true in production: demo accounts with a known PIN would be created" });
   }
 
   return findings;

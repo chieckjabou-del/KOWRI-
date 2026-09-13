@@ -33,7 +33,13 @@ Réseau et exploitation :
 - Arrêt : le serveur draine les requêtes en cours sur `SIGTERM` (délai `SHUTDOWN_TIMEOUT_S`, 15 s par défaut) ; configurer un délai d'arrêt au moins équivalent côté hébergeur.
 - Plusieurs instances : les tâches planifiées se coordonnent par verrou consultatif PostgreSQL, il est donc possible de lancer l'API en plusieurs réplicas sans double exécution des jobs.
 
-Migrations : `pnpm --filter @workspace/db migrate` (ou `push` sur une base de développement). Trois migrations à ce jour : `0000` (schéma initial), `0001` (comptes opérateurs), `0002` (codes de vérification de téléphone).
+Migrations : `pnpm --filter @workspace/db migrate` (ou `push` sur une base de développement). Quatre migrations à ce jour : `0000` (schéma initial), `0001` (comptes opérateurs), `0002` (codes de vérification de téléphone), `0003` (durcissement du grand livre : contraintes de montants, journal immuable, équilibre débit/crédit et interdiction de découvert vérifiés par PostgreSQL à la validation de chaque transaction, second facteur opérateur, empreinte des requêtes idempotentes). Les contraintes `CHECK` de `0003` sont posées `NOT VALID` pour ne pas bloquer une base existante ; les valider une fois l'historique vérifié (`ALTER TABLE … VALIDATE CONSTRAINT …`).
+
+Opérateurs et second facteur : en production `ADMIN_MFA_REQUIRED` vaut `true` par défaut. Un opérateur se connecte avec mot de passe puis, une fois enrôlé (`POST /api/admin/auth/mfa/setup` puis `/mfa/confirm`, ou depuis l'écran de connexion du back-office), doit présenter son code TOTP à chaque connexion. Une session sans second facteur, comme la clé partagée `ADMIN_API_KEY`, est en lecture seule : aucun cash-in, aucune revue KYC, aucun changement de frais ni de kill switch n'est possible sans code. La perte d'un authentificateur se règle par `POST /api/admin/auth/users/:id/mfa/reset` (permission `admins.manage`).
+
+Données de démonstration : les fixtures (vingt comptes au PIN `1234`, wallets approvisionnés) ne sont créées qu'en dehors de la production. `ALLOW_DEMO_SEED=true` force leur création et est refusé par la revue des secrets en production.
+
+Réconciliation financière : `GET /api/admin/reconciliation/report` rejoue les invariants du modèle monétaire (équilibre de chaque transaction, aucune écriture négative ou vide, aucun wallet à découvert, solde matérialisé égal au grand livre, aucune opération bloquée en `pending`, aucun transfert de float en `PENDING`, aucune paire de change permettant un aller-retour gagnant) et donne la masse monétaire par devise (passif utilisateurs, trésorerie, float plateforme, frais, compte FX, float agents). Le même rapport tourne toutes les six heures et consigne chaque anomalie dans `incidents`. Les transferts de float interrompus par un arrêt brutal sont repris automatiquement au démarrage et toutes les cinq minutes (`POST /api/admin/reconciliation/recover-float` pour forcer).
 
 Inscription et données personnelles :
 
@@ -44,7 +50,7 @@ Trésorerie plateforme : les prêts sont décaissés depuis les wallets de l'uti
 
 ## Intégration continue
 
-`.github/workflows/ci.yml` s'exécute sur chaque pull request et sur `main` : typecheck et build des deux front-ends d'un côté ; de l'autre, un PostgreSQL 16 de service reçoit les migrations versionnées, l'API démarre et les sept suites (`test-gating`, `test-integrity`, phases 3 à 7) sont rejouées, puis l'arrêt gracieux est vérifié. Une PR dont la CI est rouge ne doit pas être fusionnée. Le dépôt ne fournit pas de lockfile, la CI installe donc avec `--no-frozen-lockfile`.
+`.github/workflows/ci.yml` s'exécute sur chaque pull request et sur `main` : typecheck et build des deux front-ends d'un côté ; de l'autre, un PostgreSQL 16 de service reçoit les migrations versionnées, l'API démarre et les huit suites (`test-gating`, `test-integrity`, phases 3 à 7, `test-adversarial`) sont rejouées, puis l'arrêt gracieux est vérifié. La suite adversariale rejoue les attaques de l'audit d'infrastructure financière (double dépense, plafonds en concurrence, prêts et remboursements simultanés, aller-retour de change, idempotence, reprise après crash, invariants imposés par PostgreSQL) et échoue si l'une d'elles redevient possible. Une PR dont la CI est rouge ne doit pas être fusionnée. Le dépôt ne fournit pas de lockfile, la CI installe donc avec `--no-frozen-lockfile`.
 
 ## Vercel
 

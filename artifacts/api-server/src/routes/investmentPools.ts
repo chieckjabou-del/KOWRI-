@@ -132,6 +132,7 @@ router.post("/:poolId/invest", requireIdempotencyKey, checkIdempotency, async (r
     const position = await investInPool({
       poolId: routeParamString(req, "poolId")!, userId,
       fromWalletId, amount: Number(amount),
+      idempotencyKey: `pool-invest:${userId}:${req.idempotencyKey}`,
     });
     return res.status(201).json({
       ...position,

@@ -9,7 +9,8 @@ import {
 } from "@workspace/db";
 import { eq, and, desc, count, asc, gte, isNull, lt, sql } from "drizzle-orm";
 import { audit } from "../lib/auditLogger";
-import { processTransfer } from "../lib/walletService";
+import { processTransfer, normalizeAmount } from "../lib/walletService";
+import { AppError } from "../middleware/errorHandler";
 import { eventBus } from "../lib/eventBus";
 import { generateId } from "../lib/id";
 import {
@@ -938,52 +939,89 @@ router.post("/tontines/:tontineId/solidarity-claim", async (req, res, next) => {
       return res.status(403).json({ error: true, message: "You are not a member of this tontine" });
     }
 
-    const reserve    = Number(tontine.solidarityReserve ?? 0);
     const memberCount = Math.max(1, tontine.memberCount);
-    const claimAmt   = Number(amount);
+    const claimAmt   = normalizeAmount(Number(amount));
+    const claimId    = generateId();
 
-    // Auto-approve rules: urgency='high' AND amount <= reserve / member count
-    const autoApprove = urgency === "high" && claimAmt <= (reserve / memberCount);
-    let claimStatus: "pending_admin" | "approved" | "disbursed" = autoApprove ? "approved" : "pending_admin";
+    // Auto-approval is decided and executed under the tontine row lock, inside
+    // the same database transaction as the payout. The reserve is re-read there
+    // and decremented atomically, so parallel claims cannot all pass the check
+    // against the same stale reserve and drain the group's rotation money.
+    //
+    // Fair share: a member's auto-approved claims may never exceed their share
+    // of the reserve (reserve / members), counting what they already took.
+    let claimStatus: "pending_admin" | "approved" | "disbursed" = "pending_admin";
+    let autoApprove = false;
 
-    const [claim] = await db.insert(tontineSolidaryClaimsTable).values({
-      id:          generateId(),
-      tontineId,
-      userId,
-      amount:      String(claimAmt),
-      reason,
-      urgency:     urgency as "low" | "medium" | "high",
-      status:      claimStatus,
-      autoApproved:autoApprove,
-    }).returning();
-
-    // If auto-approved, disburse immediately from pool wallet
-    if (autoApprove && tontine.walletId) {
+    if (urgency === "high" && tontine.walletId) {
       const memberWallets = await db.select().from(walletsTable)
         .where(and(eq(walletsTable.userId, userId), eq(walletsTable.status, "active")));
       const memberWallet = memberWallets.find(w => w.currency === tontine.currency && w.walletType === "personal")
         ?? memberWallets.find(w => w.currency === tontine.currency);
 
-      if (memberWallet && memberWallet.id !== tontine.walletId && reserve >= claimAmt) {
-        await processTransfer({
-          fromWalletId: tontine.walletId,
-          toWalletId:   memberWallet.id,
-          amount:       claimAmt,
-          currency:     tontine.currency,
-          description:  `Solidarity emergency claim – ${reason}`,
-          skipFraudCheck: true,
-          idempotencyKey: `solidarity-claim:${claim.id}`,
-        });
-        const newReserve = Math.max(0, reserve - claimAmt);
-        await db.update(tontinesTable)
-          .set({ solidarityReserve: String(newReserve.toFixed(4)), updatedAt: new Date() })
-          .where(eq(tontinesTable.id, tontineId));
-        await db.update(tontineSolidaryClaimsTable)
-          .set({ status: "disbursed", disbursedAt: new Date() })
-          .where(eq(tontineSolidaryClaimsTable.id, claim.id));
-        claimStatus = "disbursed";
+      if (memberWallet && memberWallet.id !== tontine.walletId) {
+        try {
+          await processTransfer({
+            fromWalletId: tontine.walletId,
+            toWalletId:   memberWallet.id,
+            amount:       claimAmt,
+            currency:     tontine.currency,
+            description:  `Solidarity emergency claim – ${reason}`,
+            skipFraudCheck: true,
+            idempotencyKey: `solidarity-claim:${claimId}`,
+            attach: async (t) => {
+              const [fresh] = await t.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId)).for("update");
+              if (!fresh || fresh.status !== "active") throw new AppError(409, "Tontine is not active");
+              const reserve = Number(fresh.solidarityReserve ?? 0);
+              const [taken] = await t.select({ total: sql<number>`COALESCE(SUM(CAST(${tontineSolidaryClaimsTable.amount} AS NUMERIC)), 0)` })
+                .from(tontineSolidaryClaimsTable)
+                .where(and(
+                  eq(tontineSolidaryClaimsTable.tontineId, tontineId),
+                  eq(tontineSolidaryClaimsTable.userId, userId),
+                  eq(tontineSolidaryClaimsTable.autoApproved, true),
+                  eq(tontineSolidaryClaimsTable.status, "disbursed"),
+                ));
+              const alreadyTaken = Number(taken?.total ?? 0);
+              const fairShare = (reserve + alreadyTaken) / memberCount;
+              if (claimAmt > reserve + 1e-9 || alreadyTaken + claimAmt > fairShare + 1e-9) {
+                throw new AppError(409, "SOLIDARITY_SHARE_EXCEEDED");
+              }
+              await t.update(tontinesTable)
+                .set({ solidarityReserve: String((reserve - claimAmt).toFixed(4)), updatedAt: new Date() })
+                .where(eq(tontinesTable.id, tontineId));
+              await t.insert(tontineSolidaryClaimsTable).values({
+                id: claimId, tontineId, userId, amount: String(claimAmt), reason,
+                urgency: urgency as "low" | "medium" | "high",
+                status: "disbursed", autoApproved: true, disbursedAt: new Date(),
+              });
+            },
+          });
+          autoApprove = true;
+          claimStatus = "disbursed";
+          await audit({ action: "tontine.solidarity.claim_disbursed", entity: "tontine", entityId: tontineId,
+            metadata: { claimId, userId, amount: claimAmt, reason } });
+        } catch (err) {
+          // Not eligible for automatic payout (share exhausted, pool short, wallet
+          // frozen, velocity cap…): the claim is queued for the tontine admin instead.
+          const refusal = err instanceof AppError || (err instanceof Error && (err.message === "Insufficient funds" || /Error$/.test(err.name)));
+          if (!refusal) throw err;
+          console.warn(`[solidarity] claim ${claimId} not auto-paid: ${(err as Error).message}`);
+        }
       }
     }
+
+    const [claim] = claimStatus === "disbursed"
+      ? await db.select().from(tontineSolidaryClaimsTable).where(eq(tontineSolidaryClaimsTable.id, claimId))
+      : await db.insert(tontineSolidaryClaimsTable).values({
+          id:          claimId,
+          tontineId,
+          userId,
+          amount:      String(claimAmt),
+          reason,
+          urgency:     urgency as "low" | "medium" | "high",
+          status:      "pending_admin",
+          autoApproved: false,
+        }).returning();
 
     await eventBus.publish("tontine.solidarity.claim_created", {
       tontineId, claimId: claim.id, userId: claim.userId,
