@@ -499,6 +499,17 @@ Constats C1, C2, C3, E1 et F5 de `kowri_audit_v2_2026.md`. Des sondes HTTP sans 
 - Bloc 12 de `test-integrity.mjs` (15 vérifications) : création d'agent refusée sans credential et à un simple utilisateur, `userId` obligatoire, cash et liquidité inaccessibles à un autre utilisateur, accessibles à l'utilisateur lié, liste cloisonnée, vue par zones et anomalies réservées aux opérateurs, 404 sur agent inconnu.
 - Suites rejouées : 666 vérifications, 0 échec. L'application mobile (écran Agent) envoie déjà le jeton de session et reste fonctionnelle ; le back-office passe par le jeton opérateur.
 
+## Audit v2, chantier B — module crédit (13 septembre 2026)
+
+Constats E2 et E3 de `kowri_audit_v2_2026.md` : lecture croisée entre utilisateurs et remboursement qui n'encaissait rien (wallet « system » inexistant, `transactionId` nul, prêt soldé gratuitement).
+
+- **Trésorerie plateforme** (`lib/treasury.ts`) : utilisateur système `kowri_treasury` (PIN aléatoire inconnu, jamais connectable) et un wallet par devise créé à la demande. Le décaissement d'un prêt est désormais un **transfert réel trésorerie → emprunteur** (plus de dépôt « interne » qui créait de l'argent) ; le remboursement est un **transfert emprunteur → trésorerie** enregistré seulement une fois l'argent parti (`transactionId` toujours renseigné, référence unique par remboursement). Le grand livre reste équilibré et le portefeuille de prêts se rapproche du solde de trésorerie.
+- Trésorerie insuffisante dans la devise du prêt → `503 TREASURY_LIQUIDITY`, saga compensée (aucun prêt créé). Hors production, la trésorerie XOF et XAF est amorcée une fois avec 100 000 000 ; en production, l'exploitation l'approvisionne via `POST /wallets/:id/deposit` (`ledger.write`) et la consulte via `GET /admin/treasury` (identifiants de wallets et soldes).
+- **Cloisonnement** (`routes/credit.ts`) : liste des scores et des prêts filtrées sur l'utilisateur courant sauf opérateur ; lecture d'un score, recalcul, lecture d'un prêt et de ses remboursements réservés au titulaire ou à un opérateur (403, 404 si le prêt n'existe pas) ; `GET /repayments` ignore tout `userId` étranger. Les erreurs métier passent par le gestionnaire central (fonds insuffisants → `400 INSUFFICIENT_FUNDS`, plus de 400 générique masquant les vraies erreurs).
+- Bloc 13 de `test-integrity.mjs` (23 vérifications) : score, cloisonnement, décaissement qui débite la trésorerie et crédite l'emprunteur, remboursement refusé à un tiers, remboursement partiel et final avec transaction, statut `repaid`, trésorerie revenue à son solde initial. `test-phase7` aligné (remboursements d'un prêt inconnu → 404). Suites rejouées : 689 vérifications, 0 échec ; 336 routes sondées sans credential, 0 ouverte.
+
+**Reste ouvert (décision produit)** — les prêts portent un `interestRate` (6 à 12 %) mais l'encours remboursable est le principal seul : aucun intérêt n'est jamais perçu, ni échéancier, ni pénalité de retard, ni passage en `defaulted` à l'échéance. À trancher avant toute mise en production du crédit.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

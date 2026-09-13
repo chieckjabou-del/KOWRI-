@@ -9,6 +9,7 @@ import { checkSecretsAtBoot } from "./lib/secretsCheck";
 import { globalSanitizer, validatePagination } from "./middleware/validate";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
 import { requireAdmin } from "./middleware/auth";
+import { seedTreasuryFloat } from "./lib/treasury";
 import { stickyPrimaryRequest, stickyPrimaryResponse } from "./middleware/stickyPrimary";
 import { paymentRouter } from "./lib/paymentRouter";
 import { seedConnectors } from "./lib/connectors";
@@ -70,6 +71,7 @@ seedDatabase()
   .then(() => seedConnectors())
   .then(() => seedFeeConfig())
   .then(() => seedExchangeRates())
+  .then(() => seedTreasuryFloat())
   .then(() => bootstrapAdminFromEnv())
   .then(() => checkSecretsAtBoot())
   .catch((err) => console.error("Seed/patch error:", err));

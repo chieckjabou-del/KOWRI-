@@ -465,8 +465,8 @@ const repayNotFound = await post("/credit/loans/nonexistent_loan_xyz/repay", {
 chk("P7-8h Repay unknown loan → 404", repayNotFound.s === 404);
 
 const listRepayments = await get("/credit/loans/any_loan_id/repayments");
-chk("P7-8i GET repayments → 200", listRepayments.s === 200);
-chk("P7-8j Returns repayments array", Array.isArray(listRepayments.b?.repayments));
+chk("P7-8i GET repayments of an unknown loan → 404", listRepayments.s === 404);
+chk("P7-8j Unknown loan carries an error body", listRepayments.b?.error === true);
 
 // ── P7-9  SCHEDULER & PLATFORM INTEGRITY ──────────────────────────────────────
 console.log("\n  ── P7-9  SCHEDULER & PLATFORM INTEGRITY ──");

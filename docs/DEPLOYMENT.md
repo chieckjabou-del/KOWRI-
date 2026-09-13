@@ -28,6 +28,8 @@ Variables d'environnement : voir `artifacts/api-server/.env.example` et `docs/SE
 
 Migrations : `pnpm --filter @workspace/db migrate` (ou `push` sur une base de développement).
 
+Trésorerie plateforme : les prêts sont décaissés depuis les wallets de l'utilisateur système `kowri_treasury` (un par devise, créés à la demande) et remboursés vers eux. En production ces wallets démarrent à zéro : lister leurs identifiants avec `GET /api/admin/treasury`, puis les approvisionner avec `POST /api/wallets/:id/deposit` (permission `ledger.write`). Tant qu'une devise n'est pas approvisionnée, les demandes de prêt dans cette devise répondent `503 TREASURY_LIQUIDITY`. Hors production, XOF et XAF sont amorcés automatiquement au premier démarrage.
+
 ## Vercel
 
 Le dépôt est relié à trois projets Vercel. Leur rôle :

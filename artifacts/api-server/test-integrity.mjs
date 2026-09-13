@@ -469,5 +469,61 @@ console.log("\n11. Admin accounts and roles");
   chk("12o unknown agent → 404", missing.s === 404, `status=${missing.s}`);
 }
 
+// ── 13. Credit: scoping, treasury-backed disbursement and repayment ──────────
+{
+  const alice = await createUser({ firstName: "Alice", lastName: "Borrower", kycLevel: 2 });
+  const bob   = await createUser({ firstName: "Bob",   lastName: "Stranger", kycLevel: 2 });
+  await fund(alice.wallet.id, 50_000);
+  const admin = await adminOpts();
+  const treasuryXof = async () => (await get("/admin/treasury", admin)).b?.wallets?.find((w) => w.currency === "XOF")?.balance ?? NaN;
+
+  const score = await alice.post(`/credit/scores/${alice.userId}/compute`, {});
+  chk("13a user computes their own credit score", score.s === 200 && score.b?.maxLoanAmount > 0, `status=${score.s}`);
+  const bobComputes = await bob.post(`/credit/scores/${alice.userId}/compute`, {});
+  chk("13b another user cannot recompute it → 403", bobComputes.s === 403, `status=${bobComputes.s}`);
+  const bobReads = await bob.get(`/credit/scores/${alice.userId}`);
+  chk("13c another user cannot read it → 403", bobReads.s === 403, `status=${bobReads.s}`);
+  const scoreList = await bob.get("/credit/scores?limit=100");
+  chk("13d the score list is scoped to the caller", scoreList.s === 200 && !(scoreList.b?.scores ?? []).some((s) => s.userId === alice.userId), `status=${scoreList.s}`);
+
+  const treasuryBefore = await treasuryXof();
+  chk("13e operator sees the treasury wallets", Number.isFinite(treasuryBefore), `balance=${treasuryBefore}`);
+  const loan = await alice.money("/credit/loans", { walletId: alice.wallet.id, amount: 20_000, currency: "XOF", termDays: 30, purpose: "test" });
+  chk("13f loan disbursed", loan.s === 201 && loan.b?.status === "disbursed", `status=${loan.s} ${JSON.stringify(loan.b).slice(0, 160)}`);
+  const loanId = loan.b?.id ?? "nope";
+  chk("13g borrower wallet credited", (await balance(alice, alice.wallet.id)) === 70_000);
+  const treasuryAfterLoan = await treasuryXof();
+  chk("13h treasury debited by the principal", treasuryAfterLoan === treasuryBefore - 20_000, `before=${treasuryBefore} after=${treasuryAfterLoan}`);
+
+  const bobLoans = await bob.get("/credit/loans");
+  chk("13i loan list is scoped to the caller", bobLoans.s === 200 && !(bobLoans.b?.loans ?? []).some((l) => l.id === loanId), `status=${bobLoans.s}`);
+  const bobLoan = await bob.get(`/credit/loans/${loanId}`);
+  chk("13j another user cannot read the loan → 403", bobLoan.s === 403, `status=${bobLoan.s}`);
+  const bobRepayments = await bob.get(`/credit/repayments?userId=${alice.userId}`);
+  chk("13k repayment query ignores a foreign userId", bobRepayments.s === 200 && bobRepayments.b?.count === 0, `status=${bobRepayments.s} count=${bobRepayments.b?.count}`);
+  const aliceLoans = await alice.get("/credit/loans?status=disbursed");
+  chk("13l borrower sees their loan", aliceLoans.s === 200 && (aliceLoans.b?.loans ?? []).some((l) => l.id === loanId), `status=${aliceLoans.s}`);
+  const adminLoan = await get(`/credit/loans/${loanId}`, admin);
+  chk("13m operator reads any loan", adminLoan.s === 200, `status=${adminLoan.s}`);
+
+  const bobRepays = await bob.money(`/credit/loans/${loanId}/repay`, { walletId: bob.wallet.id, amount: 1_000 });
+  chk("13n another user cannot repay the loan → 403", bobRepays.s === 403, `status=${bobRepays.s}`);
+  const tooMuch = await alice.money(`/credit/loans/${loanId}/repay`, { walletId: alice.wallet.id, amount: 25_000 });
+  chk("13o repayment above the outstanding balance → 400", tooMuch.s === 400, `status=${tooMuch.s}`);
+  const partial = await alice.money(`/credit/loans/${loanId}/repay`, { walletId: alice.wallet.id, amount: 5_000 });
+  chk("13p partial repayment moves money (transactionId set)", partial.s === 201 && typeof partial.b?.transactionId === "string" && partial.b?.remaining === 15_000, `status=${partial.s} ${JSON.stringify(partial.b).slice(0, 160)}`);
+  chk("13q borrower wallet debited", (await balance(alice, alice.wallet.id)) === 65_000);
+  chk("13r treasury credited", (await treasuryXof()) === treasuryAfterLoan + 5_000);
+  const rest = await alice.money(`/credit/loans/${loanId}/repay`, { walletId: alice.wallet.id, amount: 15_000 });
+  chk("13s final repayment closes the loan", rest.s === 201 && rest.b?.isFullyRepaid === true, `status=${rest.s}`);
+  const closed = await alice.get(`/credit/loans/${loanId}`);
+  chk("13t loan status is repaid", closed.b?.status === "repaid" && Number(closed.b?.amountRepaid) === 20_000, `status=${closed.b?.status}`);
+  const history = await alice.get(`/credit/loans/${loanId}/repayments`);
+  chk("13u two repayments recorded, each with a transaction", history.s === 200 && history.b?.count === 2 && history.b.repayments.every((r) => r.transactionId), `status=${history.s} count=${history.b?.count}`);
+  const again = await alice.money(`/credit/loans/${loanId}/repay`, { walletId: alice.wallet.id, amount: 1 });
+  chk("13v a repaid loan refuses further repayments → 400", again.s === 400, `status=${again.s}`);
+  chk("13w treasury is back to its starting balance", (await treasuryXof()) === treasuryBefore, `now=${await treasuryXof()} before=${treasuryBefore}`);
+}
+
 const { fail } = summary("INTEGRITY SUITE");
 process.exit(fail ? 1 : 0);

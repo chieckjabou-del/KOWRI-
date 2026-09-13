@@ -21,9 +21,17 @@ import {
 import { rollback } from "../lib/actionExecutor";
 
 import { requireAdmin, requirePermission } from "../middleware/auth";
+import { listTreasuryWallets } from "../lib/treasury";
 
 const router = Router();
 router.use(requireAdmin);
+
+// Platform treasury wallets (loan capital). Fund them with POST /wallets/:id/deposit.
+router.get("/treasury", async (_req, res, next) => {
+  try {
+    return res.json({ wallets: await listTreasuryWallets() });
+  } catch (err) { return next(err); }
+});
 
 // ── Reconciliation ────────────────────────────────────────────────────────────
 
