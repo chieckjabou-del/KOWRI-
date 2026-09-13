@@ -35,6 +35,7 @@ import {
   checkAchievements,
 }                        from "../lib/liquidityEngine";
 import { authenticate, isAdminRequest, requirePermission } from "../middleware/auth";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import type { Request, Response, NextFunction } from "express";
 
 const router = Router();
@@ -333,11 +334,11 @@ router.patch("/:id/alerts/:alertId/resolve", requireAgentAccess, async (req, res
 });
 
 // ── POST /agents/:id/liquidity-transfer ───────────────────────────────────────
-router.post("/:id/liquidity-transfer", requireAgentAccess, async (req, res, next) => {
+// Idempotency goes through the shared middleware (per-user reservation in the
+// idempotency_keys table) instead of a text match on the transfer's note.
+router.post("/:id/liquidity-transfer", requireAgentAccess, requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const idempKey = req.headers["idempotency-key"] as string;
-    if (!idempKey) return res.status(400).json({ error: "Idempotency-Key header required" });
-
+    const fromAgentId = routeParamString(req, "id")!;
     const { toAgentId, amount, type: txType } = req.body as {
       toAgentId: string; amount: number; type: "FLOAT" | "CASH";
     };
@@ -345,36 +346,37 @@ router.post("/:id/liquidity-transfer", requireAgentAccess, async (req, res, next
     if (!toAgentId || !amount || amount <= 0) {
       return res.status(400).json({ error: "toAgentId and amount > 0 required" });
     }
+    if (toAgentId === fromAgentId) {
+      return res.status(400).json({ error: "Cannot transfer to the same agent" });
+    }
+    const [target] = await db.select({ id: agentsTable.id }).from(agentsTable).where(eq(agentsTable.id, toAgentId)).limit(1);
+    if (!target) return res.status(404).json({ error: "Target agent not found" });
 
-    // Idempotency check
-    const existing = await db.select()
-      .from(liquidityTransfersTable)
-      .where(eq(liquidityTransfersTable.note, `idempkey:${idempKey}`))
-      .limit(1);
-    if (existing.length > 0) return res.json({ transfer: existing[0], idempotent: true });
-
+    let transferId: string;
     if (txType === "FLOAT") {
-      await executeFloatTransfer(routeParamString(req, "id")!, toAgentId, amount);
+      transferId = await executeFloatTransfer(fromAgentId, toAgentId, amount);
     } else {
       // CASH transfers are manually recorded (physical handoff)
+      transferId = generateId();
       await db.insert(liquidityTransfersTable).values({
-        id:          generateId(),
-        fromAgentId: routeParamString(req, "id")!,
+        id:          transferId,
+        fromAgentId,
         toAgentId,
         amount:      String(amount),
         type:        "CASH",
         status:      "COMPLETED",
         initiatedBy: "agent",
-        note:        `idempkey:${idempKey}`,
+        note:        "Cash handoff recorded by agent",
         completedAt: new Date(),
       });
     }
 
     const transfer = await db.select().from(liquidityTransfersTable)
-      .where(eq(liquidityTransfersTable.note, `idempkey:${idempKey}`))
-      .limit(1).then(r => r[0] ?? null);
+      .where(eq(liquidityTransfersTable.id, transferId)).limit(1).then(r => r[0] ?? null);
 
-    return res.status(201).json({ transfer, ok: true });
+    const body = { transfer, ok: true };
+    await req.saveIdempotentResponse?.(body);
+    return res.status(201).json(body);
   } catch (err) { return next(err); }
 });
 

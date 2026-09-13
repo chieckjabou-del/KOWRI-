@@ -10,6 +10,7 @@ import { checkRateLimit, RateLimitExceededError } from "./rateLimiter";
 import { assertTransactionAllowed } from "./riskScreening";
 import { guard } from "./killSwitch";
 import { computeFee } from "./feeEngine";
+import { toReferenceCurrency, REFERENCE_CURRENCY } from "./fxEngine";
 
 type DbClient = typeof db;
 
@@ -226,24 +227,35 @@ const KYC_MONTHLY_LIMITS: Record<number, number> = {
 };
 
 export async function getMonthlyVolume(fromWalletId: string): Promise<number> {
-  const startOfMonth = new Date();
-  startOfMonth.setDate(1);
-  startOfMonth.setHours(0, 0, 0, 0);
+  // Calendar month in UTC so every instance and every user sees the same window.
+  const now = new Date();
+  const startOfMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
   // Every outgoing type counts toward the cap, so cash-out cannot sidestep the transfer limit.
-  const [result] = await db
-    .select({ total: sql<number>`COALESCE(SUM(CAST(${transactionsTable.amount} AS NUMERIC)), 0)` })
+  // Amounts are summed per currency and converted to the reference currency (XOF).
+  const rows = await db
+    .select({ currency: transactionsTable.currency, total: sql<number>`COALESCE(SUM(CAST(${transactionsTable.amount} AS NUMERIC)), 0)` })
     .from(transactionsTable)
     .where(and(
       eq(transactionsTable.fromWalletId, fromWalletId),
       inArray(transactionsTable.type, ["transfer", "withdrawal", "merchant_payment"]),
       inArray(transactionsTable.status, ["processing", "completed"]),
       gte(transactionsTable.createdAt, startOfMonth),
-    ));
-  return Number(result?.total ?? 0);
+    ))
+    .groupBy(transactionsTable.currency);
+  let total = 0;
+  for (const r of rows) total += await toReferenceCurrency(Number(r.total ?? 0), r.currency);
+  return total;
 }
 
-async function enforceKycLimit(fromWalletId: string, amount: number): Promise<void> {
+// Raised when a debit would push the wallet's monthly outgoing volume past its KYC ceiling.
+export class KycLimitError extends Error {
+  constructor(message: string) { super(message); this.name = "KycLimitError"; }
+}
+
+// KYC ceilings are XOF figures; the amount is converted at the published rate so a
+// EUR or USD wallet is capped at the same real value as a XOF wallet.
+async function enforceKycLimit(fromWalletId: string, amount: number, currency: string): Promise<void> {
   const [wallet] = await db
     .select({ userId: walletsTable.userId })
     .from(walletsTable)
@@ -260,10 +272,12 @@ async function enforceKycLimit(fromWalletId: string, amount: number): Promise<vo
   const kycLevel = user?.kycLevel ?? 0;
   const monthlyLimit = KYC_MONTHLY_LIMITS[kycLevel] ?? KYC_MONTHLY_LIMITS[0];
   const monthlyVolume = await getMonthlyVolume(fromWalletId);
+  const referenceAmount = await toReferenceCurrency(amount, currency);
 
-  if (monthlyVolume + amount > monthlyLimit) {
-    throw new Error(
-      `Limite mensuelle atteinte (${monthlyLimit.toLocaleString("fr-FR")} XOF). ` +
+  if (monthlyVolume + referenceAmount > monthlyLimit) {
+    throw new KycLimitError(
+      `Limite mensuelle atteinte (${monthlyLimit.toLocaleString("fr-FR")} ${REFERENCE_CURRENCY}` +
+      `${currency.toUpperCase() !== REFERENCE_CURRENCY ? ` ou équivalent en ${currency.toUpperCase()}` : ""}). ` +
       `Complétez votre KYC pour augmenter votre plafond.`
     );
   }
@@ -296,11 +310,11 @@ export async function processTransfer(params: {
   guard("outbound_transfers");   // throws KillSwitchError if switch is TRIGGERED or FORCED_OFF
 
   if (!skipKycCheck) {
-    await enforceKycLimit(fromWalletId, amount);
+    await enforceKycLimit(fromWalletId, amount, currency);
   }
 
   if (!skipRateLimitCheck) {
-    await checkRateLimit(fromWalletId, amount);
+    await checkRateLimit(fromWalletId, amount, currency);
   }
 
   const txId = generateId();
@@ -419,8 +433,8 @@ export async function processFxTransfer(params: {
   if (fromWalletId === toWalletId) throw new Error("Cannot transfer to the same wallet");
 
   guard("outbound_transfers");
-  if (!params.skipKycCheck) await enforceKycLimit(fromWalletId, amount);
-  if (!params.skipRateLimitCheck) await checkRateLimit(fromWalletId, amount);
+  if (!params.skipKycCheck) await enforceKycLimit(fromWalletId, amount, fromCurrency);
+  if (!params.skipRateLimitCheck) await checkRateLimit(fromWalletId, amount, fromCurrency);
 
   const totalDebit = Math.round((amount + fee) * 10000) / 10000;
   const amountReceived = Math.round(amount * rate * 10000) / 10000;
@@ -513,7 +527,7 @@ export async function processWithdrawal(params: {
 
   // Cash-out is capped by the same KYC ceiling as transfers.
   if (!skipKycCheck) {
-    await enforceKycLimit(walletId, amount);
+    await enforceKycLimit(walletId, amount, currency);
   }
 
   // Compute fee BEFORE the transaction — async DB read, non-blocking to hot path

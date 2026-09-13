@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 
-const VALID_CURRENCIES       = new Set(["XOF", "XAF"]);
+// Every currency the FX engine publishes a rate for (diaspora corridors included).
+const VALID_CURRENCIES       = new Set(["XOF", "XAF", "EUR", "USD", "GBP", "GHS", "NGN", "KES"]);
 const VALID_WALLET_STATUSES  = new Set(["active", "frozen", "closed"]);
 const VALID_MERCHANT_STATUSES = new Set(["active", "suspended", "pending_approval"]);
 const VALID_TX_STATUSES      = new Set(["pending", "processing", "completed", "failed", "reversed"]);

@@ -510,6 +510,19 @@ Constats E2 et E3 de `kowri_audit_v2_2026.md` : lecture croisée entre utilisate
 
 **Reste ouvert (décision produit)** — les prêts portent un `interestRate` (6 à 12 %) mais l'encours remboursable est le principal seul : aucun intérêt n'est jamais perçu, ni échéancier, ni pénalité de retard, ni passage en `defaulted` à l'échéance. À trancher avant toute mise en production du crédit.
 
+## Audit v2, chantier C — argent et devises (13 septembre 2026)
+
+Constats E4, E5, E6, E7 et M2 de `kowri_audit_v2_2026.md`.
+
+- **Plafonds KYC et vélocité par devise** (`lib/walletService.ts`, `lib/rateLimiter.ts`, `lib/fxEngine.ts`) : les plafonds restent exprimés en XOF, mais chaque montant et chaque volume cumulé (mensuel, horaire, journalier) est converti au taux publié via `toReferenceCurrency` avant comparaison ; les volumes sont sommés par devise puis convertis. Une devise sans taux publié rend la limite non évaluable et l'opération est refusée. Le mois de référence est le mois calendaire UTC. Le dépassement de plafond est désormais une erreur typée `KycLimitError` renvoyée en `400 KYC_LIMIT` (elle sortait en 500). Les wallets acceptent maintenant toutes les devises servies par le moteur FX (XOF, XAF, EUR, USD, GBP, GHS, NGN, KES).
+- **Paiement de tontine ajusté à l'encaissé** (`lib/tontineScheduler.ts`) : le bénéficiaire reçoit le minimum entre le pot théorique et ce que le wallet de la tontine détient réellement (solde grand livre moins réserve de rendement et réserve de solidarité) ; une cotisation manquée réduit le versement au lieu de bloquer le round, et le manque à gagner (`shortfall`) est journalisé, publié dans l'événement et renvoyé par la route. La date du round suivant est ancrée sur la date planifiée et non sur l'instant d'exécution (plus de dérive) ; le cycle hybride lit le solde du grand livre plutôt que la colonne dénormalisée.
+- **Transfert de float atomique** (`lib/liquidityEngine.ts`) : enregistrement, débit conditionnel (pas de découvert ni de double dépense) et crédit dans une seule transaction ; le mouvement grand livre suit, idempotent sur l'identifiant du transfert ; en cas de refus du grand livre, la compensation des deux floats et le marquage `FAILED` sont eux aussi atomiques. Un enregistrement `PENDING` avec transaction grand livre existante est le signal de reprise.
+- **Idempotence des agents** (`routes/agents.ts`) : `POST /agents/:id/liquidity-transfer` passe par le middleware d'idempotence partagé (réservation par utilisateur dans `idempotency_keys`) au lieu d'une recherche texte dans la colonne `note` ; refus du transfert vers soi-même et 404 sur agent cible inconnu.
+- **Parts de pool** (`lib/communityFinance.ts`) : les parts sont émises à la valeur courante par part (capital détenu / parts en circulation) et non en proportion de l'objectif ; le rachat verse dans un wallet actif de la devise du pool, rend le principal seul tant que le pool est « open » (et réduit capital et parts du pool), principal plus rendement une fois « matured », et refuse quand le capital est déployé.
+- Bloc 14 de `test-integrity.mjs` (17 vérifications) : plafond niveau 0 appliqué à un wallet EUR (200 EUR refusés, 100 EUR acceptés, 100 + 60 EUR refusés), tontine avec un membre sans fonds payée 20 000 sur 30 000 avec `shortfall` 10 000, rejeu d'une clé d'idempotence d'agent, transfert vers soi refusé, float insuffisant sans effet, parts proportionnelles (5 000 et non 50), rachat en pool ouvert. Test 4a durci (400 `KYC_LIMIT`). Suites rejouées : 706 vérifications, 0 échec ; 336 routes sondées, 0 ouverte.
+
+**Reste ouvert** — reprise automatique des transferts de float restés `PENDING` après un arrêt brutal (signal en place, tâche de reprise à écrire).
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

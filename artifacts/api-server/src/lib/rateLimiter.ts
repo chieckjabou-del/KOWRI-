@@ -1,6 +1,20 @@
 import { db } from "@workspace/db";
 import { walletLimitsTable, transactionsTable } from "@workspace/db";
 import { eq, gte, and, sql } from "drizzle-orm";
+import { toReferenceCurrency } from "./fxEngine";
+
+// Volume caps are in XOF: outgoing amounts are summed per currency and converted
+// before comparison, so a EUR wallet is not measured against XOF figures at par.
+async function outgoingVolumeSince(walletId: string, since: Date): Promise<number> {
+  const rows = await db
+    .select({ currency: transactionsTable.currency, vol: sql<number>`COALESCE(SUM(CAST(${transactionsTable.amount} AS NUMERIC)), 0)` })
+    .from(transactionsTable)
+    .where(and(eq(transactionsTable.fromWalletId, walletId), gte(transactionsTable.createdAt, since)))
+    .groupBy(transactionsTable.currency);
+  let total = 0;
+  for (const r of rows) total += await toReferenceCurrency(Number(r.vol ?? 0), r.currency);
+  return total;
+}
 
 export class RateLimitExceededError extends Error {
   constructor(
@@ -79,8 +93,9 @@ setInterval(() => {
   }
 }, COUNTER_WINDOW_MS).unref();
 
-export async function checkRateLimit(walletId: string, transferAmount: number): Promise<void> {
+export async function checkRateLimit(walletId: string, transferAmount: number, currency = "XOF"): Promise<void> {
   const limits = await getLimits(walletId);
+  const referenceAmount = await toReferenceCurrency(transferAmount, currency);
 
   const counter = getInMemoryCount(walletId);
   if (counter.count >= limits.maxTxPerMinute) {
@@ -102,28 +117,18 @@ export async function checkRateLimit(walletId: string, transferAmount: number): 
     throw new RateLimitExceededError("too many transfers", limits.maxTxPerMinute, txPerMin, "1 minute");
   }
 
-  const [hourRow] = await db
-    .select({ vol: sql<number>`COALESCE(SUM(amount), 0)` })
-    .from(transactionsTable)
-    .where(and(eq(transactionsTable.fromWalletId, walletId), gte(transactionsTable.createdAt, oneHourAgo)));
-  const hourlyVol = Number(hourRow?.vol ?? 0) + transferAmount;
-
+  const hourlyVol = (await outgoingVolumeSince(walletId, oneHourAgo)) + referenceAmount;
   if (hourlyVol > limits.maxHourlyVolume) {
     throw new RateLimitExceededError("hourly volume exceeded", limits.maxHourlyVolume, hourlyVol, "1 hour");
   }
 
-  const [dayRow] = await db
-    .select({ vol: sql<number>`COALESCE(SUM(amount), 0)` })
-    .from(transactionsTable)
-    .where(and(eq(transactionsTable.fromWalletId, walletId), gte(transactionsTable.createdAt, oneDayAgo)));
-  const dailyVol = Number(dayRow?.vol ?? 0) + transferAmount;
-
+  const dailyVol = (await outgoingVolumeSince(walletId, oneDayAgo)) + referenceAmount;
   if (dailyVol > limits.maxDailyVolume) {
     throw new RateLimitExceededError("daily volume exceeded", limits.maxDailyVolume, dailyVol, "24 hours");
   }
 
   counter.count++;
-  counter.volumeSum += transferAmount;
+  counter.volumeSum += referenceAmount;
 }
 
 export async function setWalletLimits(

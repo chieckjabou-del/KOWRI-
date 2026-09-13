@@ -54,6 +54,10 @@ export function errorHandler(
       });
       return;
     }
+    if (err.name === "KycLimitError") {
+      res.status(400).json({ error: true, code: "KYC_LIMIT", message: msg });
+      return;
+    }
     if (err.name === "WalletUnavailableError" || err.name === "CurrencyMismatchError" || err.name === "InvalidAmountError") {
       res.status(400).json({ error: true, code: err.name, message: msg });
       return;

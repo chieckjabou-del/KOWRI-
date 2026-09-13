@@ -55,16 +55,20 @@ export async function investInPool(params: {
     skipFraudCheck: true,
   });
 
-  const totalInvested  = Number(pool.currentAmount) + params.amount;
-  const totalShares    = Number(pool.totalShares) || params.amount;
-  const newShares      = Number(pool.totalShares) === 0
-    ? params.amount
-    : (params.amount / Number(pool.goalAmount)) * totalShares;
+  // Shares are issued at the pool's current value per share (capital held /
+  // shares outstanding), so a later investor never gets more or fewer shares
+  // per unit of money than earlier ones. A brand-new pool issues 1 share per unit.
+  const priorAmount    = Number(pool.currentAmount);
+  const priorShares    = Number(pool.totalShares);
+  const totalInvested  = priorAmount + params.amount;
+  const newShares      = priorShares > 0 && priorAmount > 0
+    ? params.amount * (priorShares / priorAmount)
+    : params.amount;
 
   const [position] = await db.transaction(async (dbTx) => {
     await dbTx.update(investmentPoolsTable).set({
       currentAmount: String(totalInvested),
-      totalShares:   String(totalShares + newShares),
+      totalShares:   String(priorShares + newShares),
       status:        totalInvested >= Number(pool.goalAmount) ? "funded" : "open",
       updatedAt:     new Date(),
     }).where(eq(investmentPoolsTable.id, params.poolId));
@@ -150,14 +154,22 @@ export async function redeemPoolPosition(positionId: string, userId: string): Pr
   try {
     const [pool] = await db.select().from(investmentPoolsTable).where(eq(investmentPoolsTable.id, pos.poolId));
     if (!pool) throw new Error("Pool not found");
+    // "open": capital not yet deployed, the investor may withdraw their principal and
+    // the pool shrinks accordingly. "matured": principal plus declared return.
+    // "funded" (capital deployed): locked until maturity.
     if (pool.status !== "matured" && pool.status !== "open") {
-      throw new Error("Pool not yet matured");
+      throw new Error("Pool capital is deployed: positions are locked until maturity");
     }
 
-    const [userWallet] = await db.select().from(walletsTable).where(eq(walletsTable.userId, userId));
-    if (!userWallet) throw new Error("User wallet not found");
+    // Pay out in the pool's currency, to an active wallet the investor owns.
+    const userWallets = await db.select().from(walletsTable)
+      .where(and(eq(walletsTable.userId, userId), eq(walletsTable.currency, pool.currency), eq(walletsTable.status, "active")));
+    const userWallet = userWallets.find((w) => w.walletType === "personal") ?? userWallets[0];
+    if (!userWallet) throw new Error(`No active ${pool.currency} wallet to receive the redemption`);
 
-    const redeemAmount = Number(pos.investedAmount) + Number(pos.returnAmount);
+    const redeemAmount = pool.status === "matured"
+      ? Number(pos.investedAmount) + Number(pos.returnAmount)
+      : Number(pos.investedAmount);
 
     await processTransfer({
       fromWalletId: pool.walletId,
@@ -169,9 +181,18 @@ export async function redeemPoolPosition(positionId: string, userId: string): Pr
       idempotencyKey: `pool-redeem:${positionId}`,
     });
 
-    await db.update(poolPositionsTable).set({
-      status: "redeemed", redeemedAt: new Date(),
-    }).where(eq(poolPositionsTable.id, positionId));
+    await db.transaction(async (tx) => {
+      await tx.update(poolPositionsTable).set({
+        status: "redeemed", redeemedAt: new Date(),
+      }).where(eq(poolPositionsTable.id, positionId));
+      if (pool.status === "open") {
+        await tx.update(investmentPoolsTable).set({
+          currentAmount: sql`GREATEST(0, ${investmentPoolsTable.currentAmount}::numeric - ${Number(pos.investedAmount)})`,
+          totalShares:   sql`GREATEST(0, ${investmentPoolsTable.totalShares}::numeric - ${Number(pos.shares)})`,
+          updatedAt:     new Date(),
+        }).where(eq(investmentPoolsTable.id, pool.id));
+      }
+    });
 
     await eventBus.publish("investment.pool.redeemed", { poolId: pos.poolId, userId, amount: redeemAmount });
   } catch (err) {

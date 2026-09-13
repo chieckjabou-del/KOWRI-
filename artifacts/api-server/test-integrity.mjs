@@ -93,7 +93,7 @@ console.log("\n4. KYC ceiling & review workflow");
   const carol = await createUser({ firstName: "Carol" });
   await fund(carol.wallet.id, 300_000);
   const over = await carol.money(`/wallets/${carol.wallet.id}/transfer`, { toWalletId: bob.wallet.id, amount: 150_000, currency: "XOF" });
-  chk("4a KYC level 0 cannot exceed 100 000 XOF/month", over.s !== 200, `status=${over.s} ${over.b?.message ?? ""}`);
+  chk("4a KYC level 0 cannot exceed 100 000 XOF/month → 400 KYC_LIMIT", over.s === 400 && over.b?.code === "KYC_LIMIT", `status=${over.s} ${over.b?.message ?? ""}`);
 
   const submit = await carol.post(`/users/${carol.userId}/kyc`, {
     kycLevel: 1, documentType: "national_id", documentNumber: "CI-123456", fullName: "Carol Test", dateOfBirth: "1992-05-05",
@@ -523,6 +523,77 @@ console.log("\n11. Admin accounts and roles");
   const again = await alice.money(`/credit/loans/${loanId}/repay`, { walletId: alice.wallet.id, amount: 1 });
   chk("13v a repaid loan refuses further repayments → 400", again.s === 400, `status=${again.s}`);
   chk("13w treasury is back to its starting balance", (await treasuryXof()) === treasuryBefore, `now=${await treasuryXof()} before=${treasuryBefore}`);
+}
+
+// ── 14. Currency-aware ceilings, shortfall payouts, agent idempotency, pool shares ──
+{
+  // KYC ceiling applied to a EUR wallet at the published rate (100 000 XOF ≈ 152 EUR at level 0).
+  const eva  = await createUser({ firstName: "Eva",  lastName: "Euro" });
+  const finn = await createUser({ firstName: "Finn", lastName: "Euro" });
+  const evaEur  = await eva.post("/wallets",  { currency: "EUR", walletType: "personal" });
+  const finnEur = await finn.post("/wallets", { currency: "EUR", walletType: "personal" });
+  chk("14a EUR wallets created", evaEur.s === 201 && finnEur.s === 201, `status=${evaEur.s}/${finnEur.s} ${evaEur.b?.message ?? ""}`);
+  await fund(evaEur.b?.id, 500, "EUR");
+  const big = await eva.money(`/wallets/${evaEur.b?.id}/transfer`, { toWalletId: finnEur.b?.id, amount: 200, currency: "EUR" });
+  chk("14b 200 EUR (≈131 000 XOF) exceeds the level-0 ceiling → 400", big.s === 400 && /Limite mensuelle/.test(big.b?.message ?? ""), `status=${big.s} ${big.b?.message ?? ""}`);
+  const small = await eva.money(`/wallets/${evaEur.b?.id}/transfer`, { toWalletId: finnEur.b?.id, amount: 100, currency: "EUR" });
+  chk("14c 100 EUR (≈65 600 XOF) passes", small.s === 200, `status=${small.s} ${small.b?.message ?? ""}`);
+  const cumulative = await eva.money(`/wallets/${evaEur.b?.id}/transfer`, { toWalletId: finnEur.b?.id, amount: 60, currency: "EUR" });
+  chk("14d the month's EUR volume is converted too: 100 + 60 EUR ≈ 105 000 XOF → 400", cumulative.s === 400, `status=${cumulative.s}`);
+
+  // Tontine: a missed contribution reduces the payout instead of blocking the round.
+  const lea   = await createUser({ firstName: "Lea",   kycLevel: 1 });
+  const marc  = await createUser({ firstName: "Marc",  kycLevel: 1 });
+  const broke = await createUser({ firstName: "Broke", kycLevel: 1 });
+  await fund(lea.wallet.id, 100_000); await fund(marc.wallet.id, 100_000);
+  const t = await lea.post("/tontines", { name: "Shortfall tontine", contributionAmount: 10_000, currency: "XOF", frequency: "weekly", maxMembers: 3 });
+  const tontineId = t.b?.id;
+  await marc.post(`/community/tontines/${tontineId}/members`, {});
+  await lea.post(`/community/tontines/${tontineId}/members`, { userId: broke.userId });
+  const act = await lea.post(`/community/tontines/${tontineId}/activate`, { rotationModel: "fixed" });
+  chk("14e tontine with one unfunded member activated", act.s === 200, `status=${act.s}`);
+  const collect = await lea.money(`/community/tontines/${tontineId}/collect`, {});
+  chk("14f collection: 2 paid, 1 missed", collect.s === 200 && collect.b?.collected === 2 && (collect.b?.failed ?? []).includes(broke.userId), `status=${collect.s} collected=${collect.b?.collected}`);
+  const payout = await lea.money(`/community/tontines/${tontineId}/payout`, {});
+  chk("14g payout pays what was collected (20 000, not 30 000) and reports the shortfall", payout.s === 200 && payout.b?.amount === 20_000 && payout.b?.shortfall === 10_000, `status=${payout.s} ${JSON.stringify(payout.b)}`);
+  const sched = await lea.get(`/community/tontines/${tontineId}/schedule`);
+  chk("14h the next round stays anchored one period after the scheduled date", sched.s === 200, `status=${sched.s}`);
+  await lea.money(`/community/tontines/${tontineId}/cancel`, { reason: "test" });
+
+  // Agents: idempotent liquidity transfers through the shared middleware.
+  const owner = await createUser({ firstName: "Agent", lastName: "One" });
+  const peer  = await createUser({ firstName: "Agent", lastName: "Two" });
+  const admin = await adminOpts();
+  const a1 = await post("/agents", { userId: owner.userId, name: "A1", type: "AGENT", phone: uniquePhone(), zone: "Dakar" }, admin);
+  const a2 = await post("/agents", { userId: peer.userId,  name: "A2", type: "AGENT", phone: uniquePhone(), zone: "Dakar" }, admin);
+  const a1Id = a1.b?.agent?.id, a2Id = a2.b?.agent?.id;
+  const key = idem();
+  const first = await owner.post(`/agents/${a1Id}/liquidity-transfer`, { toAgentId: a2Id, amount: 5_000, type: "CASH" }, { idempotency: key });
+  chk("14i cash handoff recorded", first.s === 201 && first.b?.transfer?.id && !/idempkey/.test(first.b?.transfer?.note ?? ""), `status=${first.s} ${JSON.stringify(first.b).slice(0, 120)}`);
+  const replay = await owner.post(`/agents/${a1Id}/liquidity-transfer`, { toAgentId: a2Id, amount: 5_000, type: "CASH" }, { idempotency: key });
+  chk("14j replaying the same key returns the same transfer", (replay.s === 201 || replay.s === 200) && replay.b?.transfer?.id === first.b?.transfer?.id, `status=${replay.s} id=${replay.b?.transfer?.id?.slice(0, 8)} first=${first.b?.transfer?.id?.slice(0, 8)}`);
+  const self = await owner.post(`/agents/${a1Id}/liquidity-transfer`, { toAgentId: a1Id, amount: 1, type: "CASH" }, { idempotency: true });
+  chk("14k transfer to the same agent → 400", self.s === 400, `status=${self.s}`);
+  const noFloat = await owner.post(`/agents/${a1Id}/liquidity-transfer`, { toAgentId: a2Id, amount: 1_000, type: "FLOAT" }, { idempotency: true });
+  const a1After = await owner.get(`/agents/${a1Id}/liquidity`);
+  chk("14l float transfer without float is refused and leaves balances untouched", noFloat.s !== 201 && Number(a1After.b?.floatBalance) === 0, `status=${noFloat.s} float=${a1After.b?.floatBalance}`);
+
+  // Investment pools: shares issued at the pool's value per share, principal back while open.
+  const mgr  = await createUser({ firstName: "Mgr",  kycLevel: 2 });
+  const inv1 = await createUser({ firstName: "Inv1", kycLevel: 2 });
+  const inv2 = await createUser({ firstName: "Inv2", kycLevel: 2 });
+  await fund(inv1.wallet.id, 100_000); await fund(inv2.wallet.id, 100_000);
+  const pool = await mgr.post("/pools/investment", { name: `Shares pool ${Date.now()}`, managerId: mgr.userId, goalAmount: 1_000_000, currency: "XOF", minInvestment: 1_000, expectedReturn: 10 });
+  const poolId = pool.b?.id;
+  chk("14m pool created", pool.s === 201 && !!poolId, `status=${pool.s} ${pool.b?.message ?? ""}`);
+  const p1 = await inv1.money(`/pools/investment/${poolId}/invest`, { fromWalletId: inv1.wallet.id, amount: 10_000 });
+  chk("14n first investor: 1 share per unit", p1.s === 201 && p1.b?.shares === 10_000, `status=${p1.s} shares=${p1.b?.shares}`);
+  const p2 = await inv2.money(`/pools/investment/${poolId}/invest`, { fromWalletId: inv2.wallet.id, amount: 5_000 });
+  chk("14o second investor gets shares in proportion to money (5 000, not 50)", p2.s === 201 && p2.b?.shares === 5_000, `status=${p2.s} shares=${p2.b?.shares}`);
+  const redeem = await inv2.money(`/pools/investment/positions/${p2.b?.id}/redeem`, {});
+  chk("14p principal redeemed while the pool is still open", redeem.s === 200 && (await balance(inv2, inv2.wallet.id)) === 100_000, `status=${redeem.s} ${redeem.b?.message ?? ""}`);
+  const poolAfter = await mgr.get(`/pools/investment/${poolId}`);
+  chk("14q pool capital and shares shrink with the redemption", Number(poolAfter.b?.currentAmount) === 10_000 && Number(poolAfter.b?.totalShares ?? 10_000) === 10_000, `current=${poolAfter.b?.currentAmount} shares=${poolAfter.b?.totalShares}`);
 }
 
 const { fail } = summary("INTEGRITY SUITE");

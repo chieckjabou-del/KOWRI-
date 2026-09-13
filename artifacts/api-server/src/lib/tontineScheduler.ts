@@ -8,7 +8,7 @@ import {
 } from "@workspace/db";
 import { eq, and, sql, asc, desc, ne, like, isNull } from "drizzle-orm";
 import { generateId } from "./id";
-import { processTransfer, isDuplicateIdempotencyKey } from "./walletService";
+import { processTransfer, isDuplicateIdempotencyKey, getWalletBalance } from "./walletService";
 import { pickDebitWallet } from "./walletSelection";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
@@ -241,7 +241,7 @@ export async function runContributionCycle(tontineId: string): Promise<{
 }
 
 export async function runPayoutCycle(tontineId: string): Promise<{
-  recipientUserId: string; amount: number; round: number;
+  recipientUserId: string; amount: number; round: number; shortfall?: number;
 }> {
   const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
   if (!tontine) throw new Error(`Tontine ${tontineId} not found`);
@@ -281,15 +281,24 @@ export async function runPayoutCycle(tontineId: string): Promise<{
       recipientWallets[0];
     if (!recipientWallet) throw new Error(`Recipient has no active ${tontine.currency} wallet`);
 
-    // Multi-amount: payout = sum of each member's personal contribution (or tontine default)
+    // Multi-amount: theoretical payout = sum of each member's personal contribution (or tontine default)
     const allMembers   = await db.select().from(tontineMembersTable).where(eq(tontineMembersTable.tontineId, tontineId));
     const defaultAmt   = Number(tontine.contributionAmount);
-    const payoutAmount = allMembers.reduce((sum, m) => sum + Number(m.personalContribution ?? defaultAmt), 0);
+    const theoretical  = allMembers.reduce((sum, m) => sum + Number(m.personalContribution ?? defaultAmt), 0);
+    const yieldPoolBal = Number(tontine.yieldPoolBalance ?? 0);
+
+    // The recipient gets what was actually collected: the pool's ledger balance
+    // minus the reserves that are not this round's money (yield pool, solidarity).
+    // A missed contribution reduces the payout instead of blocking the round.
+    const poolBalance   = await getWalletBalance(tontine.walletId!);
+    const distributable = Math.max(0, poolBalance - yieldPoolBal - Number(tontine.solidarityReserve ?? 0));
+    const payoutAmount  = Math.round(Math.min(theoretical, distributable) * 10000) / 10000;
+    const shortfall     = Math.round((theoretical - payoutAmount) * 10000) / 10000;
+    if (payoutAmount <= 0) throw new Error(`Tontine ${tontineId} has no collected funds to pay out for round ${nextOrder}`);
 
     // ── Yield tontine mechanics ───────────────────────────────────────────────
     let yieldShare = 0;
     let yieldOwed  = 0;
-    const yieldPoolBal = Number(tontine.yieldPoolBalance ?? 0);
 
     if (tontine.tontineType === "yield" && tontine.yieldRate) {
       const yieldRate           = Number(tontine.yieldRate);
@@ -320,7 +329,7 @@ export async function runPayoutCycle(tontineId: string): Promise<{
 
     const newRound       = nextOrder;
     const isComplete     = newRound >= tontine.totalRounds;
-    const nextPayoutDate = computeNextDate(tontine.frequency);
+    const nextPayoutDate = computeNextDate(tontine.frequency, tontine.nextPayoutDate);
     const newYieldPool   = Math.max(0, yieldPoolBal - yieldShare).toFixed(4);
 
     await db.transaction(async (tx) => {
@@ -347,16 +356,16 @@ export async function runPayoutCycle(tontineId: string): Promise<{
       action:   "tontine.payout.completed",
       entity:   "tontine",
       entityId: tontineId,
-      metadata: { round: newRound, recipientUserId: recipient.userId, payoutAmount: actualPayoutAmount, yieldShare, yieldOwed },
+      metadata: { round: newRound, recipientUserId: recipient.userId, payoutAmount: actualPayoutAmount, theoretical, shortfall, yieldShare, yieldOwed },
     });
 
     await eventBus.publish("tontine.payout.completed", {
       tontineId, round: newRound, recipientUserId: recipient.userId,
-      payoutAmount: actualPayoutAmount, yieldShare, yieldOwed,
+      payoutAmount: actualPayoutAmount, theoretical, shortfall, yieldShare, yieldOwed,
       currency: tontine.currency, tontineName: tontine.name,
     });
 
-    return { recipientUserId: recipient.userId, amount: actualPayoutAmount, round: newRound };
+    return { recipientUserId: recipient.userId, amount: actualPayoutAmount, round: newRound, shortfall };
   } catch (err) {
     await db.update(tontineMembersTable)
       .set({ hasReceivedPayout: 0 })
@@ -365,11 +374,19 @@ export async function runPayoutCycle(tontineId: string): Promise<{
   }
 }
 
-export function computeNextDate(frequency: string): Date {
-  const d = new Date();
-  if (frequency === "weekly")   d.setDate(d.getDate() + 7);
-  else if (frequency === "biweekly") d.setDate(d.getDate() + 14);
-  else d.setMonth(d.getMonth() + 1);
+// Next due date is anchored on the scheduled date (not on the moment the job
+// happened to run) so rounds do not drift later with every late execution; if
+// the anchor is far in the past, periods are skipped until the date is in the future.
+export function computeNextDate(frequency: string, from?: Date | null): Date {
+  const now = new Date();
+  const d = from ? new Date(from) : new Date(now);
+  const advance = () => {
+    if (frequency === "weekly")        d.setDate(d.getDate() + 7);
+    else if (frequency === "biweekly") d.setDate(d.getDate() + 14);
+    else                               d.setMonth(d.getMonth() + 1);
+  };
+  advance();
+  for (let guard = 0; d <= now && guard < 120; guard++) advance();
   return d;
 }
 
@@ -608,13 +625,13 @@ export async function runHybridCycle(tontineId: string): Promise<{
   const round = tontine.currentRound + 1;
   const currency = tontine.currency;
 
-  // ── Get pool wallet balance (= what was collected in this cycle) ──────────
-  const [poolWallet] = await db.select().from(walletsTable).where(eq(walletsTable.id, tontine.walletId));
+  // ── Pool ledger balance (= what was actually collected so far) ────────────
+  const [poolWallet] = await db.select({ id: walletsTable.id }).from(walletsTable).where(eq(walletsTable.id, tontine.walletId));
   if (!poolWallet) throw new Error("Pool wallet not found");
 
-  // Available = balance minus already-reserved solidarity fund
+  // Available = ledger balance minus already-reserved solidarity fund
   const existingReserve = Number(tontine.solidarityReserve ?? 0);
-  const totalBalance    = Number(poolWallet.balance);
+  const totalBalance    = await getWalletBalance(tontine.walletId);
   const available       = Math.max(0, totalBalance - existingReserve);
 
   if (available <= 0) throw new Error("No funds available for hybrid distribution (all reserved as solidarity)");
@@ -750,7 +767,7 @@ export async function runHybridCycle(tontineId: string): Promise<{
 
     // ── Persist cycle record + update tontine state ───────────────────────
     const isComplete = round >= tontine.totalRounds;
-    const nextPayoutDate = computeNextDate(tontine.frequency);
+    const nextPayoutDate = computeNextDate(tontine.frequency, tontine.nextPayoutDate);
 
     await db.transaction(async (tx) => {
       await tx.insert(tontineHybridCyclesTable).values({

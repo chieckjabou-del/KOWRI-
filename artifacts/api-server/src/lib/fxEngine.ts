@@ -31,6 +31,28 @@ export async function convertAmount(
   return { convertedAmount, rate };
 }
 
+// Platform limits (KYC ceilings, velocity caps) are expressed in XOF. Every
+// amount in another currency is converted at the published rate before being
+// compared; a currency with no published rate cannot be evaluated, so the
+// caller must refuse rather than silently apply the XOF figure.
+export const REFERENCE_CURRENCY = "XOF";
+
+export async function toReferenceCurrency(amount: number, currency: string): Promise<number> {
+  const cur = currency.toUpperCase();
+  if (cur === REFERENCE_CURRENCY) return amount;
+  try {
+    return amount * (await getRate(cur, REFERENCE_CURRENCY));
+  } catch (err) {
+    if (!(err instanceof FXNotFoundError)) throw err;
+  }
+  try {
+    return amount / (await getRate(REFERENCE_CURRENCY, cur));
+  } catch (err) {
+    if (!(err instanceof FXNotFoundError)) throw err;
+  }
+  throw new Error(`Taux de change indisponible pour ${cur} : limite non évaluable`);
+}
+
 export async function getAllRates(): Promise<
   Array<{ baseCurrency: string; targetCurrency: string; rate: number; updatedAt: Date }>
 > {
