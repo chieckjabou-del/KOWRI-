@@ -44,7 +44,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { motion, AnimatePresence } from "framer-motion";
-import { adminLogout, currentOperator, roleLabel, subscribeAdminSession } from "@/lib/adminAuth";
+import { adminLogout, currentOperator, hasPermission, roleLabel, subscribeAdminSession } from "@/lib/adminAuth";
 
 function useOperator() {
   const [operator, setOperator] = useState(currentOperator());
@@ -52,18 +52,27 @@ function useOperator() {
   return operator;
 }
 
-const navItems = [
+// `permission`: the entry is shown only to operators holding it. Read-only
+// screens carry none (every role may read); screens built around a write
+// action are hidden from roles the API would refuse anyway.
+type NavEntry = { title: string; url: string; icon: typeof LayoutDashboard; exact?: boolean; permission?: string };
+
+const navItems: NavEntry[] = [
   { title: "Dashboard", url: "/", icon: LayoutDashboard },
-  { title: "War Room",  url: "/war-room", icon: Siren },
-  { title: "Users", url: "/users", icon: Users },
+  { title: "War Room",  url: "/war-room", icon: Siren, permission: "system.control" },
+  { title: "Users", url: "/users", icon: Users, permission: "users.read" },
   { title: "Wallets", url: "/wallets", icon: Wallet },
   { title: "Transactions", url: "/transactions", icon: ArrowLeftRight },
   { title: "Tontines", url: "/tontines", icon: PiggyBank },
   { title: "Credit & Loans", url: "/credit", icon: Landmark },
   { title: "Merchants", url: "/merchants", icon: Store },
-  { title: "Compliance", url: "/compliance", icon: ShieldCheck },
+  { title: "Compliance", url: "/compliance", icon: ShieldCheck, permission: "kyc.review" },
   { title: "Ledger", url: "/ledger", icon: BookOpen },
 ];
+
+function visibleTo(items: NavEntry[]): NavEntry[] {
+  return items.filter((item) => !item.permission || hasPermission(item.permission));
+}
 
 const devNavItems = [
   { title: "Dashboard",      url: "/developer/dashboard", icon: LayoutDashboard, exact: true },
@@ -74,18 +83,18 @@ const devNavItems = [
   { title: "Webhooks",       url: "/developer/webhooks",  icon: Webhook },
 ];
 
-const adminNavItems = [
+const adminNavItems: NavEntry[] = [
   { title: "Vue d'ensemble", url: "/admin", icon: LayoutDashboard, exact: true },
-  { title: "Utilisateurs",   url: "/admin/users",      icon: UserCog },
-  { title: "KYC",            url: "/admin/kyc",        icon: ShieldCheck },
-  { title: "AML",            url: "/admin/aml",        icon: ShieldAlert },
-  { title: "Frais",          url: "/admin/fees",       icon: DollarSign },
+  { title: "Utilisateurs",   url: "/admin/users",      icon: UserCog,     permission: "users.read" },
+  { title: "KYC",            url: "/admin/kyc",        icon: ShieldCheck, permission: "kyc.review" },
+  { title: "AML",            url: "/admin/aml",        icon: ShieldAlert, permission: "aml.review" },
+  { title: "Frais",          url: "/admin/fees",       icon: DollarSign,  permission: "system.control" },
   { title: "Analytics",      url: "/admin/analytics",  icon: BarChart2 },
-  { title: "Support",        url: "/admin/support",    icon: Ticket },
-  { title: "Agents",         url: "/admin/agents",     icon: Store },
+  { title: "Support",        url: "/admin/support",    icon: Ticket,      permission: "support.manage" },
+  { title: "Agents",         url: "/admin/agents",     icon: Store,       permission: "wallets.manage" },
 ];
 
-function NavItem({ item, location }: { item: typeof navItems[0] & { exact?: boolean }; location: string }) {
+function NavItem({ item, location }: { item: NavEntry; location: string }) {
   const isActive = item.exact
     ? location === item.url
     : location === item.url || (item.url !== "/" && location.startsWith(item.url));
@@ -109,6 +118,7 @@ function NavItem({ item, location }: { item: typeof navItems[0] & { exact?: bool
 }
 
 function AppSidebar({ location }: { location: string }) {
+  useOperator(); // re-render when the operator (and thus the visible entries) changes
   return (
     <Sidebar className="border-r border-border/50 bg-background/50 backdrop-blur-xl">
       <SidebarHeader className="h-16 px-6 flex items-center justify-center border-b border-border/50">
@@ -123,7 +133,7 @@ function AppSidebar({ location }: { location: string }) {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu className="gap-1">
-              {navItems.map((item) => (
+              {visibleTo(navItems).map((item) => (
                 <NavItem key={item.title} item={item} location={location} />
               ))}
             </SidebarMenu>
@@ -223,6 +233,7 @@ function DeveloperSidebar({ location }: { location: string }) {
 }
 
 function AdminSidebar({ location }: { location: string }) {
+  useOperator();
   return (
     <Sidebar className="border-r border-border/50 bg-background/50 backdrop-blur-xl">
       <SidebarHeader className="h-16 px-6 flex items-center border-b border-border/50 gap-3">
@@ -239,7 +250,7 @@ function AdminSidebar({ location }: { location: string }) {
           <SidebarGroupLabel className="text-xs text-muted-foreground/60 uppercase tracking-wider px-3 mb-1">Administration</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu className="gap-1">
-              {adminNavItems.map((item) => (
+              {visibleTo(adminNavItems).map((item) => (
                 <NavItem key={item.title} item={item} location={location} />
               ))}
             </SidebarMenu>

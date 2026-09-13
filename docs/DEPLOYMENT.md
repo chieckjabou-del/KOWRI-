@@ -42,6 +42,10 @@ Inscription et données personnelles :
 
 Trésorerie plateforme : les prêts sont décaissés depuis les wallets de l'utilisateur système `kowri_treasury` (un par devise, créés à la demande) et remboursés vers eux. En production ces wallets démarrent à zéro : lister leurs identifiants avec `GET /api/admin/treasury`, puis les approvisionner avec `POST /api/wallets/:id/deposit` (permission `ledger.write`). Tant qu'une devise n'est pas approvisionnée, les demandes de prêt dans cette devise répondent `503 TREASURY_LIQUIDITY`. Hors production, XOF et XAF sont amorcés automatiquement au premier démarrage.
 
+## Intégration continue
+
+`.github/workflows/ci.yml` s'exécute sur chaque pull request et sur `main` : typecheck et build des deux front-ends d'un côté ; de l'autre, un PostgreSQL 16 de service reçoit les migrations versionnées, l'API démarre et les sept suites (`test-gating`, `test-integrity`, phases 3 à 7) sont rejouées, puis l'arrêt gracieux est vérifié. Une PR dont la CI est rouge ne doit pas être fusionnée. Le dépôt ne fournit pas de lockfile, la CI installe donc avec `--no-frozen-lockfile`.
+
 ## Vercel
 
 Le dépôt est relié à trois projets Vercel. Leur rôle :

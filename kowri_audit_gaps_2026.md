@@ -553,6 +553,16 @@ Constats M5, M7, M8, M11 et M12 de `kowri_audit_v2_2026.md` ; M9 différé (voir
 
 **M9 différé, avec plan** — ajouter les clés étrangères manquantes exige d'abord un audit des lignes orphelines sur la base de production (un `ALTER TABLE … ADD FOREIGN KEY` échoue s'il en reste) ; à faire en migration dédiée avec script de détection. Le solde par wallet reste calculé par somme du grand livre ; la table `ledger_balance_summary` maintenue par déclencheur couvre le total global, la déclinaison par wallet est le pas suivant quand le volume l'imposera.
 
+## Audit v2, chantier F — processus et interfaces (13 septembre 2026)
+
+Constats F1, F3, F4 et F6 de `kowri_audit_v2_2026.md` ; F2 (lockfile) laissé de côté sur instruction (voir plus bas).
+
+- **CI GitHub Actions** (`.github/workflows/ci.yml`) sur chaque PR et sur `main`, Node 24 et pnpm 10.33 : un job « typecheck et build » (bibliothèques, API, application mobile, back-office, plus les deux bundles Vite) et un job « intégration API » avec un service PostgreSQL 16 qui applique les **migrations versionnées** (`0000` à `0002`), démarre l'API, attend `/api/health`, puis exécute la suite de verrouillage des routes, la suite d'intégrité, les phases 3 à 7, et vérifie enfin l'arrêt gracieux par SIGTERM ; le journal serveur est affiché en cas d'échec. La recette a été rejouée en local sur une base vierge construite uniquement par les migrations : 725 vérifications, 0 échec, ce qui prouve au passage que les migrations suffisent à produire un schéma fonctionnel (le CI ne passe plus par `push`).
+- Le `typecheck` racine incluait `artifacts/mockup-sandbox` (maquette sans dépendances installées, en échec) ; la CI vérifie explicitement les bibliothèques, l'API et les deux front-ends. Le décalage Node 22 local / Node 24 cible (F6) est couvert : la CI tourne sur Node 24.
+- **Menus du back-office filtrés par permission** (`kowri-dashboard/src/components/layout.tsx`) : chaque entrée porte la permission qu'elle suppose (War Room et Frais → `system.control`, Compliance et KYC → `kyc.review`, AML → `aml.review`, Support → `support.manage`, Agents → `wallets.manage`, Utilisateurs → `users.read`) ; les écrans de lecture pure restent visibles à tous les rôles. Le menu se recalcule au changement d'opérateur. Un auditeur ne voit plus des actions que l'API lui refuserait.
+- **Jeton mobile** (`kowri-app/src/lib/auth.tsx`) : la copie stockée est horodatée et abandonnée après 24 h sans aller-retour serveur (durée de vie des sessions produit) ; la déconnexion révoque désormais la session côté serveur (`POST /wallet/logout`) au lieu de simplement effacer la copie locale. Le jeton reste en stockage web (application installable, doit survivre à la fermeture de l'onglet) ; le passage à un cookie `httpOnly` avec protection CSRF est le pas suivant si l'on veut neutraliser totalement le vol par XSS.
+- **Lockfile (F2) non ajouté** : instruction de ne pas committer `pnpm-lock.yaml` maintenue ; `.vercelignore` l'exclut aussi. Conséquence assumée : les installations (CI, Vercel, Railway) ne sont pas reproductibles au bit près et `pnpm audit` reste inexploitable. Lever la contrainte revient à committer le fichier et à passer la CI et les `vercel.json` en `--frozen-lockfile`.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

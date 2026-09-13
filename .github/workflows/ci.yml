@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PNPM_VERSION: 10.33.0
+  NODE_VERSION: 24
+
+jobs:
+  typecheck-and-build:
+    name: Typecheck and build front-ends
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # The repository ships no lockfile (kept out on purpose), so installs
+      # resolve from the manifests and the workspace catalog.
+      - run: pnpm install --no-frozen-lockfile
+      - name: Typecheck libraries
+        run: pnpm run typecheck:libs
+      - name: Typecheck the API server and both front-ends
+        run: pnpm --filter @workspace/api-server --filter @workspace/kowri-app --filter @workspace/kowri-dashboard run typecheck
+      - name: Build the mobile app bundle
+        run: pnpm --filter @workspace/kowri-app run build
+      - name: Build the back-office bundle
+        run: pnpm --filter @workspace/kowri-dashboard run build
+
+  api-integration:
+    name: API integration suites (PostgreSQL 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: kowri
+          POSTGRES_PASSWORD: kowri
+          POSTGRES_DB: kowri
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U kowri"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgres://kowri:kowri@localhost:5432/kowri
+      PORT: "8080"
+      NODE_ENV: development
+      ADMIN_API_KEY: test-admin-key
+      CORS_ORIGINS: http://localhost:5173
+      SIGNING_SECRET: ci-signing-secret-0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: pnpm install --no-frozen-lockfile
+      - name: Build shared libraries
+        run: pnpm run typecheck:libs
+      - name: Apply versioned migrations
+        run: pnpm --filter @workspace/db migrate
+      - name: Start the API server
+        working-directory: artifacts/api-server
+        run: |
+          nohup npx tsx src/index.ts > "$RUNNER_TEMP/server.log" 2>&1 &
+          for i in $(seq 1 60); do
+            sleep 2
+            if curl -sf http://localhost:8080/api/health > /dev/null; then echo "API up after $((i*2))s"; exit 0; fi
+          done
+          echo "API did not come up"; tail -100 "$RUNNER_TEMP/server.log"; exit 1
+      - name: Let seeds and startup jobs settle
+        run: sleep 8
+      - name: Route gating (no route answers without a credential)
+        working-directory: artifacts/api-server
+        run: node test-gating.mjs
+      - name: Integrity suite
+        working-directory: artifacts/api-server
+        run: node test-integrity.mjs
+      - name: Phase 3 suite
+        working-directory: artifacts/api-server
+        run: node test-phase3.mjs
+      - name: Phase 4 suite
+        working-directory: artifacts/api-server
+        run: node test-phase4.mjs
+      - name: Phase 5 suite
+        working-directory: artifacts/api-server
+        run: node test-phase5.mjs
+      - name: Phase 7 suite
+        working-directory: artifacts/api-server
+        run: node test-phase7.mjs
+      - name: Phase 6 suite
+        run: node test-phase6.mjs
+      - name: Graceful shutdown drains cleanly
+        run: |
+          pkill -TERM -f "tsx src/index.ts" || true
+          for i in $(seq 1 20); do sleep 1; pgrep -f "tsx src/index.ts" > /dev/null || break; done
+          grep -q "\[Shutdown\] complete" "$RUNNER_TEMP/server.log" && echo "clean shutdown confirmed"
+      - name: Server log
+        if: always()
+        run: tail -200 "$RUNNER_TEMP/server.log" || true
