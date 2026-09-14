@@ -2,7 +2,11 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 
+import { requireAdmin, gateWrites } from "../middleware/auth";
+
 const router = Router();
+router.use(requireAdmin);
+router.use(gateWrites("system.control"));
 
 const REGIONS = [
   {

@@ -5,10 +5,12 @@ import { eq, sql, count, and, or, inArray } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { requireAuth } from "../lib/productAuth";
 
+import { authenticate } from "../middleware/auth";
+
 const router = Router();
 
 const VALID_TONTINE_STATUSES = new Set(["pending", "active", "completed", "cancelled"]);
-const VALID_TONTINE_TYPES    = new Set(["classic", "investment", "project", "solidarity", "business", "diaspora", "yield", "growth"]);
+const VALID_TONTINE_TYPES    = new Set(["classic", "investment", "project", "solidarity", "business", "diaspora", "yield", "growth", "hybrid"]);
 
 // ── Public discovery — no auth required ────────────────────────────────────────
 router.get("/public", async (req, res, next) => {
@@ -80,13 +82,7 @@ router.get("/public", async (req, res, next) => {
 });
 
 // ── All routes below require auth ──────────────────────────────────────────────
-router.use(async (req, res, next) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) {
-    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-  }
-  return next();
-});
+router.use(authenticate());
 
 router.get("/", async (req, res, next) => {
   try {
@@ -120,12 +116,16 @@ router.get("/", async (req, res, next) => {
 router.post("/", async (req, res, next) => {
   try {
     const {
-      name, description, contributionAmount, currency, frequency, maxMembers, adminUserId,
+      name, description, contributionAmount, currency, frequency, maxMembers,
       tontine_type, is_public, is_multi_amount, goal_description, goal_amount, merchant_id,
     } = req.body;
+    const adminUserId = req.auth!.userId;
 
-    if (!name || !contributionAmount || !currency || !frequency || !maxMembers || !adminUserId) {
-      return res.status(400).json({ error: true, message: "Missing required fields: name, contributionAmount, currency, frequency, maxMembers, adminUserId" });
+    if (!name || !contributionAmount || !currency || !frequency || !maxMembers) {
+      return res.status(400).json({ error: true, message: "Missing required fields: name, contributionAmount, currency, frequency, maxMembers" });
+    }
+    if (!Number.isFinite(Number(contributionAmount)) || Number(contributionAmount) <= 0) {
+      return res.status(400).json({ error: true, message: "contributionAmount must be a positive number" });
     }
 
     if (tontine_type && !VALID_TONTINE_TYPES.has(tontine_type)) {

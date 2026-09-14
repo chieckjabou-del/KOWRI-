@@ -556,7 +556,9 @@ function ImpactSection({ impact }: { impact: ReturnType<typeof useImpact> }) {
 // ─────────────────────────────────────────────────────────
 
 const KS_ORDER = [
-  "outbound_transfers", "settlements", "batch_writes",
+  // Financial switches first: these are the ones an operator reaches for.
+  "cash_in", "outbound_transfers", "credit", "agent_operations", "creator_earnings",
+  "cash_out", "external_rails", "fx", "settlements", "batch_writes",
   "saga_creation", "outbox_dispatch", "replica_reads", "all",
 ];
 

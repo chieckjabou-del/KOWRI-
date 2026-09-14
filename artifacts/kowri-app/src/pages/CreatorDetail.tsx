@@ -48,7 +48,7 @@ function EarningsModal({
     <div className="fixed inset-0 z-50 flex items-end" style={{ background: "rgba(0,0,0,0.4)" }}>
       <div className="w-full bg-white rounded-t-3xl p-5 pb-10 max-w-lg mx-auto">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="font-bold text-gray-900">Enregistrer des gains</h3>
+          <h3 className="font-bold text-gray-900">Déclarer des gains</h3>
           <button onClick={onClose} className="p-2 rounded-full hover:bg-gray-100">
             <X size={18} />
           </button>
@@ -59,7 +59,8 @@ function EarningsModal({
             <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto" style={{ background: "#F0FDF4" }}>
               <CheckCircle2 size={32} style={{ color: "#1A6B32" }} />
             </div>
-            <p className="font-bold text-gray-900">Gains distribués !</p>
+            <p className="font-bold text-gray-900">Gains enregistrés</p>
+            <p className="text-xs text-gray-500">Aucun montant n'est crédité ici : la commission est réglée par un paiement réel validé par la plateforme.</p>
             <div className="rounded-xl p-3 space-y-1.5 border border-gray-100 text-xs" style={{ background: "#F9FAFB" }}>
               {result.creatorShare != null && (
                 <div className="flex justify-between">
@@ -130,7 +131,7 @@ function EarningsModal({
               style={{ background: "#1A6B32", minHeight: 52 }}
             >
               {earningsMut.isPending ? <Loader2 size={16} className="animate-spin" /> : null}
-              Distribuer les gains
+              Déclarer les gains
             </button>
           </div>
         )}

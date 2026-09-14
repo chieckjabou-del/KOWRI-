@@ -5,9 +5,10 @@ import {
 } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { generateId } from "./id";
-import { processDeposit } from "./walletService";
 import { eventBus } from "./eventBus";
 import { audit } from "./auditLogger";
+import { assertModuleEnabled } from "./launchScope";
+import { guard } from "./killSwitch";
 
 export async function createCommunity(params: {
   name: string; description?: string; creatorId: string; handle: string;
@@ -94,39 +95,37 @@ export async function joinCommunity(communityId: string, userId: string): Promis
   await eventBus.publish("creator.community.joined", { communityId, userId });
 }
 
-export async function distributeCreatorEarnings(communityId: string, transactionAmount: number, currency: string): Promise<{
-  platformFee: number; creatorFee: number;
+// Records a community's declared volume and the commissions it implies. No
+// money moves here: the previous version credited the creator's wallet from
+// platform float on the strength of a number typed by the caller, i.e. it
+// minted money. A creator commission is settled by a real payment (a transfer
+// from the paying member, or a cash-in request approved by a second operator),
+// never by this call. `credited` is always false and says so to the client.
+export async function distributeCreatorEarnings(communityId: string, transactionAmount: number, currency: string, declaredBy: string): Promise<{
+  platformFee: number; creatorFee: number; credited: false; settlement: string;
 }> {
+  assertModuleEnabled("creator_earnings");
+  guard("creator_earnings");
+  if (!Number.isFinite(transactionAmount) || transactionAmount <= 0) throw new Error("transactionAmount must be a positive number");
   const [community] = await db.select().from(creatorCommunitiesTable)
     .where(eq(creatorCommunitiesTable.id, communityId));
   if (!community) throw new Error("Community not found");
 
-  const platformFee = transactionAmount * (Number(community.platformFeeRate) / 100);
-  const creatorFee  = transactionAmount * (Number(community.creatorFeeRate)  / 100);
-
-  const [creatorWallet] = await db.select().from(walletsTable)
-    .where(and(eq(walletsTable.userId, community.creatorId), eq(walletsTable.status, "active")));
-
-  if (creatorWallet && creatorFee > 0) {
-    await processDeposit({
-      walletId:    creatorWallet.id,
-      amount:      creatorFee,
-      currency,
-      reference:   `CREATOR-FEE-${communityId}-${Date.now()}`,
-      description: `Creator commission – ${community.name}`,
-    });
-  }
+  const platformFee = Math.round(transactionAmount * (Number(community.platformFeeRate) / 100) * 10000) / 10000;
+  const creatorFee  = Math.round(transactionAmount * (Number(community.creatorFeeRate)  / 100) * 10000) / 10000;
 
   await db.update(creatorCommunitiesTable).set({
     totalVolume: sql`COALESCE(${creatorCommunitiesTable.totalVolume}, '0')::numeric + ${String(transactionAmount)}`,
     updatedAt: new Date(),
   }).where(eq(creatorCommunitiesTable.id, communityId));
 
+  await audit({ action: "creator.earnings.recorded", entity: "creator_community", entityId: communityId, actor: declaredBy,
+    metadata: { transactionAmount, currency, platformFee, creatorFee, credited: false } });
   await eventBus.publish("creator.earnings.distributed", {
-    communityId, transactionAmount, platformFee, creatorFee, currency,
+    communityId, transactionAmount, platformFee, creatorFee, currency, credited: false,
   });
 
-  return { platformFee, creatorFee };
+  return { platformFee, creatorFee, credited: false, settlement: "Commission recorded; it is paid by a real transfer or an approved cash-in, not by this call." };
 }
 
 export async function getCommunityPools(communityId: string) {

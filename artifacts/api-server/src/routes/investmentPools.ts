@@ -1,23 +1,19 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { investmentPoolsTable, poolPositionsTable, walletsTable } from "@workspace/db";
-import { eq, and, desc, count, sql } from "drizzle-orm";
+import { eq, and, desc, count } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import {
   createInvestmentPool, investInPool,
   distributePoolReturns, redeemPoolPosition,
 } from "../lib/communityFinance";
-import { requireAuth } from "../lib/productAuth";
+import { authenticate, isAdminRequest, walletBelongsToUser } from "../middleware/auth";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
 
-router.use(async (req, res, next) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) {
-    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-  }
-  return next();
-});
+router.use(authenticate());
 
 router.get("/", async (req, res, next) => {
   try {
@@ -56,11 +52,12 @@ router.get("/", async (req, res, next) => {
 
 router.post("/", async (req, res, next) => {
   try {
-    const { name, description, poolType = "general", managerId, currency = "XOF",
+    const { name, description, poolType = "general", currency = "XOF",
             goalAmount, minInvestment = 1000, expectedReturn = 0, closingDate, maturityDate } = req.body;
+    const managerId = req.auth!.userId;
 
-    if (!name || !managerId || !goalAmount) {
-      return res.status(400).json({ error: true, message: "name, managerId, goalAmount required" });
+    if (!name || !goalAmount) {
+      return res.status(400).json({ error: true, message: "name, goalAmount required" });
     }
 
     const poolWalletId = generateId();
@@ -90,14 +87,17 @@ router.post("/", async (req, res, next) => {
 
 router.get("/:poolId", async (req, res, next) => {
   try {
+    const poolId = routeParamString(req, "poolId")!;
     const [pool] = await db.select().from(investmentPoolsTable)
-      .where(eq(investmentPoolsTable.id, req.params.poolId));
+      .where(eq(investmentPoolsTable.id, poolId));
     if (!pool) return res.status(404).json({ error: true, message: "Pool not found" });
 
     const positions = await db.select().from(poolPositionsTable)
-      .where(eq(poolPositionsTable.poolId, req.params.poolId));
+      .where(eq(poolPositionsTable.poolId, poolId));
 
     const totalShares = Number(pool.totalShares);
+    const viewerId = req.auth!.userId;
+    const canSeeAll = isAdminRequest(req) || pool.managerId === viewerId;
     return res.json({
       ...pool,
       goalAmount:    Number(pool.goalAmount),
@@ -107,25 +107,32 @@ router.get("/:poolId", async (req, res, next) => {
       totalShares,
       nav: totalShares > 0 ? Number(pool.currentAmount) / totalShares : 1,
       investorCount: positions.length,
-      positions: positions.map(p => ({
-        ...p,
-        investedAmount: Number(p.investedAmount),
-        shares:        Number(p.shares),
-        returnAmount:  Number(p.returnAmount),
-      })),
+      positions: positions
+        .filter(p => canSeeAll || p.userId === viewerId)
+        .map(p => ({
+          ...p,
+          investedAmount: Number(p.investedAmount),
+          shares:        Number(p.shares),
+          returnAmount:  Number(p.returnAmount),
+        })),
     });
   } catch (err) { return next(err); }
 });
 
-router.post("/:poolId/invest", async (req, res, next) => {
+router.post("/:poolId/invest", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { userId, fromWalletId, amount } = req.body;
-    if (!userId || !fromWalletId || !amount) {
-      return res.status(400).json({ error: true, message: "userId, fromWalletId, amount required" });
+    const { fromWalletId, amount } = req.body;
+    const userId = req.auth!.userId;
+    if (!fromWalletId || !amount) {
+      return res.status(400).json({ error: true, message: "fromWalletId, amount required" });
+    }
+    if (!(await walletBelongsToUser(String(fromWalletId), userId))) {
+      return res.status(403).json({ error: true, message: "You do not own the source wallet" });
     }
     const position = await investInPool({
-      poolId: req.params.poolId, userId,
+      poolId: routeParamString(req, "poolId")!, userId,
       fromWalletId, amount: Number(amount),
+      idempotencyKey: `pool-invest:${userId}:${req.idempotencyKey}`,
     });
     return res.status(201).json({
       ...position,
@@ -138,22 +145,24 @@ router.post("/:poolId/invest", async (req, res, next) => {
   }
 });
 
-router.post("/:poolId/distribute", async (req, res, next) => {
+router.post("/:poolId/distribute", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const { totalReturn } = req.body;
     if (!totalReturn) return res.status(400).json({ error: true, message: "totalReturn required" });
-    const distributed = await distributePoolReturns(req.params.poolId, Number(totalReturn));
+    const distributed = await distributePoolReturns(
+      routeParamString(req, "poolId")!,
+      Number(totalReturn),
+      { userId: req.auth!.userId, isPlatformAdmin: isAdminRequest(req) },
+    );
     return res.json({ success: true, distributed });
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
   }
 });
 
-router.post("/positions/:positionId/redeem", async (req, res, next) => {
+router.post("/positions/:positionId/redeem", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { userId } = req.body;
-    if (!userId) return res.status(400).json({ error: true, message: "userId required" });
-    await redeemPoolPosition(req.params.positionId, userId);
+    await redeemPoolPosition(routeParamString(req, "positionId")!, req.auth!.userId);
     return res.json({ success: true, message: "Position redeemed successfully" });
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
@@ -162,8 +171,9 @@ router.post("/positions/:positionId/redeem", async (req, res, next) => {
 
 router.get("/:poolId/nav", async (req, res, next) => {
   try {
+    const poolId = routeParamString(req, "poolId")!;
     const [pool] = await db.select().from(investmentPoolsTable)
-      .where(eq(investmentPoolsTable.id, req.params.poolId));
+      .where(eq(investmentPoolsTable.id, poolId));
     if (!pool) return res.status(404).json({ error: true, message: "Pool not found" });
 
     const totalShares   = Number(pool.totalShares);

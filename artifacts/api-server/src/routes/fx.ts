@@ -1,12 +1,17 @@
 import { Router } from "express";
-import { getAllRates, convertAmount, upsertRate, getRate, FXNotFoundError } from "../lib/fxEngine";
+import { getAllRates, convertAmount, upsertRate, getRate, FXNotFoundError, FxArbitrageError, findArbitragePairs } from "../lib/fxEngine";
 import { generateId } from "../lib/id";
 import { db } from "@workspace/db";
 import { fxRateHistoryTable, exchangeRatesTable } from "@workspace/db";
 import { eq, and, desc, asc } from "drizzle-orm";
 import { messageQueue, MESSAGE_TOPICS } from "../lib/messageQueue";
+import { authenticate, requirePermission } from "../middleware/auth";
 
 const router = Router();
+
+// Published rates are public (the mobile app shows them before login); quoting a
+// conversion needs a session, and anything that writes rates or history needs
+// an operator with system.control.
 
 router.get("/rates", async (_req, res, next) => {
   try {
@@ -28,7 +33,7 @@ router.get("/rates/:from/:to", async (req, res, next) => {
   }
 });
 
-router.post("/convert", async (req, res, next) => {
+router.post("/convert", authenticate(), async (req, res, next) => {
   try {
     const { amount, from, to } = req.body;
     if (!amount || !from || !to) {
@@ -55,7 +60,7 @@ router.post("/convert", async (req, res, next) => {
   }
 });
 
-router.put("/rates", async (req, res, next) => {
+router.put("/rates", requirePermission("system.control"), async (req, res, next) => {
   try {
     const { base_currency, target_currency, rate, source = "manual" } = req.body;
     if (!base_currency || !target_currency || !rate) {
@@ -68,7 +73,12 @@ router.put("/rates", async (req, res, next) => {
     const from = base_currency.toUpperCase();
     const to   = target_currency.toUpperCase();
     const id   = `fx-${from.toLowerCase()}-${to.toLowerCase()}`;
-    await upsertRate(id, from, to, numRate);
+    try {
+      await upsertRate(id, from, to, numRate);
+    } catch (err) {
+      if (err instanceof FxArbitrageError) return res.status(409).json({ error: true, code: "FX_ARBITRAGE", message: err.message });
+      throw err;
+    }
     await db.insert(fxRateHistoryTable).values({
       id:             generateId(),
       baseCurrency:   from,
@@ -80,6 +90,14 @@ router.put("/rates", async (req, res, next) => {
       event: "rate.updated", from, to, rate: numRate, source,
     });
     return res.json({ baseCurrency: from, targetCurrency: to, rate: numRate, updated: true, source });
+  } catch (err) { return next(err); }
+});
+
+// Operators: pairs whose published inverse would let a round trip create money.
+router.get("/rates/consistency", requirePermission("system.control"), async (_req, res, next) => {
+  try {
+    const arbitrage = await findArbitragePairs();
+    return res.json({ consistent: arbitrage.length === 0, arbitrage });
   } catch (err) { return next(err); }
 });
 
@@ -97,7 +115,7 @@ router.get("/rates/history/:from/:to", async (req, res, next) => {
   } catch (err) { return next(err); }
 });
 
-router.post("/rates/snapshot", async (req, res, next) => {
+router.post("/rates/snapshot", requirePermission("system.control"), async (req, res, next) => {
   try {
     const rates = await getAllRates();
     const entries = rates.map((r) => ({

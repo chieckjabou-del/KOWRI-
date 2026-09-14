@@ -9,15 +9,13 @@ import {
 } from "../lib/creatorEconomy";
 import { requireAuth } from "../lib/productAuth";
 
+import { authenticate, isAdminRequest } from "../middleware/auth";
+import { launchModule } from "../middleware/launchScope";
+import { routeParamString } from "../lib/routeParams";
+
 const router = Router();
 
-router.use(async (req, res, next) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) {
-    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-  }
-  return next();
-});
+router.use(authenticate());
 
 router.get("/communities", async (req, res, next) => {
   try {
@@ -80,17 +78,28 @@ router.get("/communities/:communityId/pools", async (req, res, next) => {
   }
 });
 
-router.post("/communities/:communityId/earnings", async (req, res, next) => {
+// Declares a community's volume. Only the community's creator (or an
+// operator) may declare it, and nothing is credited: see lib/creatorEconomy.ts.
+router.post("/communities/:communityId/earnings", launchModule("creator_earnings"), async (req, res, next) => {
   try {
+    const communityId = routeParamString(req, "communityId")!;
     const { transactionAmount, currency = "XOF" } = req.body;
     if (!transactionAmount) {
       return res.status(400).json({ error: true, message: "transactionAmount required" });
     }
+    const [community] = await db.select({ creatorId: creatorCommunitiesTable.creatorId }).from(creatorCommunitiesTable)
+      .where(eq(creatorCommunitiesTable.id, communityId)).limit(1);
+    if (!community) return res.status(404).json({ error: true, message: "Community not found" });
+    if (!isAdminRequest(req) && community.creatorId !== req.auth!.userId) {
+      return res.status(403).json({ error: true, message: "Only the community creator can declare its earnings" });
+    }
     const result = await distributeCreatorEarnings(
-      req.params.communityId, Number(transactionAmount), currency,
+      communityId, Number(transactionAmount), currency, req.admin?.email ?? req.auth!.userId,
     );
     return res.json({ success: true, ...result });
   } catch (err: any) {
+    // Scope and kill-switch refusals keep their 503 semantics.
+    if (err?.name === "ModuleDisabledError" || err?.name === "KillSwitchError") return next(err);
     return res.status(400).json({ error: true, message: err.message });
   }
 });

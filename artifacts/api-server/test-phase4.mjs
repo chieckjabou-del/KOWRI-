@@ -1,6 +1,11 @@
 import { randomUUID } from "crypto";
 
+import { login, ADMIN_KEY, OPERATOR_PHONE, operators } from "./test-lib.mjs";
+
 const BASE = "http://localhost:8080/api";
+// Legacy suite predates authentication: run it as a platform operator.
+const OPERATOR = await login(OPERATOR_PHONE);
+const DEFAULT_HEADERS = { Authorization: `Bearer ${OPERATOR.token}`, "X-Admin-Key": ADMIN_KEY };
 const results = [];
 let pass = 0, fail = 0;
 
@@ -14,7 +19,7 @@ function chk(name, ok, detail = "") {
 
 async function get(path) {
   try {
-    const r = await fetch(`${BASE}${path}`);
+    const r = await fetch(`${BASE}${path}`, { headers: DEFAULT_HEADERS });
     const b = await r.json().catch(() => null);
     return { s: r.status, b };
   } catch (e) { return { s: 0, b: null, err: e.message }; }
@@ -24,7 +29,7 @@ async function post(path, body, headers = {}) {
   try {
     const r = await fetch(`${BASE}${path}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...headers },
+      headers: { "Content-Type": "application/json", ...DEFAULT_HEADERS, "Idempotency-Key": randomUUID(), ...headers },
       body: JSON.stringify(body),
     });
     const b = await r.json().catch(() => null);
@@ -36,7 +41,7 @@ async function patch(path, body) {
   try {
     const r = await fetch(`${BASE}${path}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...DEFAULT_HEADERS, "Idempotency-Key": randomUUID() },
       body: JSON.stringify(body),
     });
     const b = await r.json().catch(() => null);
@@ -48,7 +53,7 @@ async function put(path, body) {
   try {
     const r = await fetch(`${BASE}${path}`, {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...DEFAULT_HEADERS, "Idempotency-Key": randomUUID() },
       body: JSON.stringify(body),
     });
     const b = await r.json().catch(() => null);
@@ -196,7 +201,10 @@ const fxHistSnap = await post("/fx/rates/snapshot", {});
 chk("P4-6a POST /fx/rates/snapshot 200", fxHistSnap.s === 200);
 chk("P4-6b Snapshot count > 0", (fxHistSnap.b?.snapshotted ?? 0) > 0);
 
-const updResp = await put("/fx/rates", { base_currency: "XOF", target_currency: "USD", rate: 0.00168, source: "test_provider" });
+// 0.00168 × 610 (USD→XOF) > 1: a round trip would create money, so the rate is refused.
+const badResp = await put("/fx/rates", { base_currency: "XOF", target_currency: "USD", rate: 0.00168, source: "test_provider" });
+chk("P4-6c-pre PUT /fx/rates refuses an arbitrage-creating inverse (409 FX_ARBITRAGE)", badResp.s === 409 && badResp.b?.code === "FX_ARBITRAGE", `status=${badResp.s}`);
+const updResp = await put("/fx/rates", { base_currency: "XOF", target_currency: "USD", rate: 0.00160, source: "test_provider" });
 chk("P4-6c PUT /fx/rates with source 200", updResp.s === 200);
 chk("P4-6d Source is stored", updResp.b?.source === "test_provider");
 
@@ -292,11 +300,12 @@ chk("P4-10b Multi-currency concurrent FX (6 requests)", fxConcurrent.filter((r) 
 
 // Concurrent AML checks
 const amlConcurrent = await Promise.all(
-  Array.from({ length: 10 }, () =>
+  Array.from({ length: 10 }, (_, i) =>
     post("/aml/check", {
       walletId:      w1?.id ?? "stress-wallet",
       transactionId: randomUUID(),
-      amount:        Math.random() > 0.3 ? 500 : 12_000_000,
+      // At least one high-value check per run, the rest random (the old all-random draw failed ~3% of runs).
+      amount:        i === 0 || Math.random() <= 0.3 ? 12_000_000 : 500,
       currency:      "XOF",
     })
   )
@@ -344,11 +353,14 @@ chk("P4-10g Fraud burst triggers alerts", (fraudBurstAlerts.b?.alerts?.length ??
 // Idempotency stress test
 const idemKey  = randomUUID();
 const idemRef  = `STRESS-IDEM-${idemKey.slice(0, 8)}`;
+// Money creation goes through the cash-in maker-checker: the same key fired
+// five times by the maker must yield exactly one request.
+const { maker: idemMaker } = await operators();
 const idemResults = await Promise.all(
   Array.from({ length: 5 }, () =>
-    post("/wallets/" + (w1?.id ?? "test") + "/deposit",
-      { amount: 1, currency: "XOF", reference: idemRef },
-      { "Idempotency-Key": idemKey }
+    post("/admin/cash-in",
+      { walletId: w1?.id ?? "test", amount: 1, currency: "XOF", reference: idemRef, source: "test_funding" },
+      { "Idempotency-Key": idemKey, "X-Admin-Token": idemMaker.token }
     )
   )
 );

@@ -1,36 +1,58 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
-import { creditScoresTable, loansTable, loanRepaymentsTable, walletsTable } from "@workspace/db";
+import { creditScoresTable, loansTable, loanRepaymentsTable } from "@workspace/db";
 import { eq, and, sql, count, desc } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import { validateQueryParams, VALID_LOAN_STATUSES } from "../middleware/validate";
 import { sagaOrchestrator } from "../lib/sagaOrchestrator";
-import { processDeposit, processTransfer } from "../lib/walletService";
+import { processTransfer, reverseTransaction, lockEntity, normalizeAmount } from "../lib/walletService";
+import { AppError } from "../middleware/errorHandler";
 import { eventBus } from "../lib/eventBus";
 import { computeCreditScoreFromActivity } from "../lib/reputationEngine";
-import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
 
+// The treasury wallet for the loan's currency cannot cover the disbursement.
+class TreasuryLiquidityError extends Error {
+  constructor(currency: string) {
+    super(`Platform treasury has insufficient ${currency} liquidity for this loan`);
+    this.name = "TreasuryLiquidityError";
+  }
+}
+
+import { authenticate, walletBelongsToUser, isAdminRequest, requireSelfOrAdmin } from "../middleware/auth";
+import { getTreasuryWallet } from "../lib/treasury";
+import { assertModuleEnabled } from "../lib/launchScope";
+import { guard } from "../lib/killSwitch";
+
 const router = Router();
 
-router.use(async (req, res, next) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) {
-    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-  }
-  return next();
-});
+router.use(authenticate());
+
+// Every read is scoped to the caller unless the caller is an operator: a user
+// only ever sees their own score, loans and repayments.
+function scopedUserId(req: import("express").Request): string | undefined {
+  return isAdminRequest(req) ? undefined : req.auth!.userId;
+}
+
+async function loadLoanForCaller(req: import("express").Request, loanId: string) {
+  const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, loanId));
+  if (!loan) return { status: 404 as const, loan: null };
+  if (!isAdminRequest(req) && loan.userId !== req.auth!.userId) return { status: 403 as const, loan: null };
+  return { status: 200 as const, loan };
+}
 
 router.get("/scores", async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
     const offset = (page - 1) * limit;
+    const owner = scopedUserId(req);
+    const where = owner ? eq(creditScoresTable.userId, owner) : undefined;
 
     const [scores, [{ total }]] = await Promise.all([
-      db.select().from(creditScoresTable).limit(limit).offset(offset).orderBy(sql`${creditScoresTable.score} DESC`),
-      db.select({ total: count() }).from(creditScoresTable),
+      db.select().from(creditScoresTable).where(where).limit(limit).offset(offset).orderBy(sql`${creditScoresTable.score} DESC`),
+      db.select({ total: count() }).from(creditScoresTable).where(where),
     ]);
 
     return res.json({
@@ -53,7 +75,7 @@ router.get("/scores", async (req, res, next) => {
   }
 });
 
-router.get("/scores/:userId", async (req, res, next) => {
+router.get("/scores/:userId", requireSelfOrAdmin("userId"), async (req, res, next) => {
   try {
     const userId = routeParamString(req, "userId")!;
     const [score] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, userId));
@@ -83,8 +105,12 @@ router.get("/loans", validateQueryParams({ status: VALID_LOAN_STATUSES }), async
     const limit = Number(req.query.limit) || 20;
     const offset = (page - 1) * limit;
     const status = req.query.status as string | undefined;
+    const owner = scopedUserId(req);
 
-    const where = status ? eq(loansTable.status, status as any) : undefined;
+    const where = and(
+      status ? eq(loansTable.status, status as any) : undefined,
+      owner ? eq(loansTable.userId, owner) : undefined,
+    );
 
     const [loans, [{ total }]] = await Promise.all([
       db.select().from(loansTable).where(where).limit(limit).offset(offset).orderBy(sql`${loansTable.createdAt} DESC`),
@@ -107,9 +133,18 @@ router.get("/loans", validateQueryParams({ status: VALID_LOAN_STATUSES }), async
 
 router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { userId, walletId, amount, currency, termDays, purpose } = req.body;
-    if (!userId || !walletId || !amount || !currency || !termDays) {
-      return res.status(400).json({ error: true, message: "Missing required fields: userId, walletId, amount, currency, termDays" });
+    assertModuleEnabled("credit");
+    guard("credit");
+    const { walletId, amount, currency, termDays, purpose } = req.body;
+    const userId = req.auth!.userId;
+    if (!walletId || !amount || !currency || !termDays) {
+      return res.status(400).json({ error: true, message: "Missing required fields: walletId, amount, currency, termDays" });
+    }
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: true, message: "amount must be a positive number" });
+    }
+    if (!(await walletBelongsToUser(String(walletId), userId))) {
+      return res.status(403).json({ error: true, message: "You do not own this wallet" });
     }
 
     const [creditScore] = await db.select().from(creditScoresTable).where(eq(creditScoresTable.userId, userId));
@@ -121,6 +156,7 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       return res.status(400).json({ error: true, message: `Loan amount exceeds maximum allowed: ${creditScore.maxLoanAmount}` });
     }
 
+    const requested = normalizeAmount(Number(amount));
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + Number(termDays));
     const loanId = generateId();
@@ -144,7 +180,7 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
         loanId,
         userId,
         walletId,
-        amount: Number(amount),
+        amount: requested,
         currency,
         termDays: Number(termDays),
         dueDate,
@@ -155,19 +191,37 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       [
         {
           name: "create_loan_record",
+          // The credit line is a ceiling on the borrower's TOTAL outstanding
+          // principal, not on each loan taken separately. The check and the
+          // insert run under a per-user lock so parallel requests cannot each
+          // pass the check before any of them is recorded.
           execute: async (ctx) => {
-            await db.insert(loansTable).values({
-              id: ctx.loanId,
-              userId: ctx.userId,
-              walletId: ctx.walletId,
-              amount: String(ctx.amount),
-              currency: ctx.currency,
-              interestRate: ctx.interestRate,
-              termDays: ctx.termDays,
-              status: "approved",
-              amountRepaid: "0",
-              purpose: ctx.purpose,
-              dueDate: ctx.dueDate,
+            await db.transaction(async (tx) => {
+              await lockEntity(tx as any, "loan-user", ctx.userId);
+              const [exposure] = await tx.select({
+                outstanding: sql<number>`COALESCE(SUM(CAST(${loansTable.amount} AS NUMERIC) - CAST(${loansTable.amountRepaid} AS NUMERIC)), 0)`,
+              }).from(loansTable).where(and(
+                eq(loansTable.userId, ctx.userId),
+                sql`${loansTable.status} IN ('pending', 'approved', 'disbursed')`,
+              ));
+              const outstanding = Number(exposure?.outstanding ?? 0);
+              const ceiling = Number(creditScore.maxLoanAmount);
+              if (outstanding + ctx.amount > ceiling + 1e-6) {
+                throw new AppError(409, `Outstanding credit ${outstanding} plus ${ctx.amount} exceeds your credit line of ${ceiling}`);
+              }
+              await tx.insert(loansTable).values({
+                id: ctx.loanId,
+                userId: ctx.userId,
+                walletId: ctx.walletId,
+                amount: String(ctx.amount),
+                currency: ctx.currency,
+                interestRate: ctx.interestRate,
+                termDays: ctx.termDays,
+                status: "approved",
+                amountRepaid: "0",
+                purpose: ctx.purpose,
+                dueDate: ctx.dueDate,
+              });
             });
             return ctx;
           },
@@ -177,23 +231,43 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
         },
         {
           name: "disburse_funds",
+          // Real money leaves the platform treasury: the ledger stays balanced and
+          // the loan book can be reconciled against the treasury wallet.
           execute: async (ctx) => {
-            await processDeposit({
-              walletId: ctx.walletId,
-              amount: ctx.amount,
-              currency: ctx.currency,
-              reference: `LOAN-${ctx.loanId}`,
-              description: `Loan disbursement #${ctx.loanId}`,
-            });
-            await db.update(loansTable)
-              .set({ status: "disbursed" as any, disbursedAt: new Date() })
-              .where(eq(loansTable.id, ctx.loanId));
-            return { ...ctx, disbursed: true };
+            const treasury = await getTreasuryWallet(ctx.currency);
+            let tx;
+            try {
+              tx = await processTransfer({
+                fromWalletId: treasury.id,
+                toWalletId: ctx.walletId,
+                amount: ctx.amount,
+                currency: ctx.currency,
+                reference: `LOAN-${ctx.loanId}`,
+                description: `Loan disbursement #${ctx.loanId}`,
+                idempotencyKey: `loan-disburse:${ctx.loanId}`,
+                skipKycCheck: true, skipFraudCheck: true, skipRateLimitCheck: true,
+                // The loan is marked disbursed in the same transaction as the money.
+                attach: async (t) => {
+                  await t.update(loansTable)
+                    .set({ status: "disbursed" as any, disbursedAt: new Date() })
+                    .where(eq(loansTable.id, ctx.loanId));
+                },
+              });
+            } catch (err) {
+              if (err instanceof Error && err.message === "Insufficient funds") {
+                throw new TreasuryLiquidityError(ctx.currency);
+              }
+              throw err;
+            }
+            return { ...ctx, disbursed: true, disbursementTxId: tx.id };
           },
+          // Undo the actual money movement, then record the loan as never having gone out.
           compensate: async (ctx) => {
-            await db.update(loansTable)
-              .set({ status: "defaulted" as any })
-              .where(eq(loansTable.id, ctx.loanId));
+            const txId = (ctx as any).disbursementTxId as string | undefined;
+            if (txId) {
+              await reverseTransaction({ transactionId: txId, reason: `Loan ${ctx.loanId} saga compensation`, idempotencyKey: `loan-disburse:${ctx.loanId}:reversal` });
+            }
+            await db.delete(loansTable).where(eq(loansTable.id, ctx.loanId));
           },
         },
         {
@@ -227,24 +301,33 @@ router.post("/loans", requireIdempotencyKey, checkIdempotency, async (req, res, 
     );
 
     const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, loanId));
-    return res.status(201).json({
+    const body = {
       ...loan,
       amount: Number(loan.amount),
       interestRate: Number(loan.interestRate),
       amountRepaid: Number(loan.amountRepaid),
       saga: { loanId: ctx.loanId, disbursed: ctx.disbursed },
-    });
+    };
+    await req.saveIdempotentResponse?.(body);
+    return res.status(201).json(body);
   } catch (err) {
-    return next(err);
+    const cause = err instanceof Error && err.cause instanceof Error ? err.cause : err;
+    if (cause instanceof TreasuryLiquidityError) {
+      return res.status(503).json({ error: true, code: "TREASURY_LIQUIDITY", message: cause.message });
+    }
+    if (cause instanceof AppError) {
+      return res.status(cause.statusCode).json({ error: true, code: "CREDIT_LINE_EXCEEDED", message: cause.message });
+    }
+    return next(cause);
   }
 });
 
 router.get("/loans/:loanId", async (req, res, next) => {
   try {
     const loanId = routeParamString(req, "loanId")!;
-    const [loan] = await db.select().from(loansTable).where(eq(loansTable.id, loanId));
+    const { status, loan } = await loadLoanForCaller(req, loanId);
     if (!loan) {
-      return res.status(404).json({ error: true, message: "Loan not found" });
+      return res.status(status).json({ error: true, message: status === 404 ? "Loan not found" : "Forbidden" });
     }
     return res.json({
       ...loan,
@@ -259,7 +342,9 @@ router.get("/loans/:loanId", async (req, res, next) => {
 
 router.get("/repayments", async (req, res, next) => {
   try {
-    const { userId, loanId, status } = req.query;
+    const { userId: requestedUserId, loanId, status } = req.query;
+    // A user always gets their own repayments, whatever userId they ask for.
+    const userId = scopedUserId(req) ?? requestedUserId;
     if (!userId && !loanId) {
       return res.status(400).json({ error: true, message: "userId or loanId required" });
     }
@@ -288,6 +373,10 @@ router.get("/repayments", async (req, res, next) => {
 router.get("/loans/:loanId/repayments", async (req, res, next) => {
   try {
     const loanId = routeParamString(req, "loanId")!;
+    const { status, loan } = await loadLoanForCaller(req, loanId);
+    if (!loan) {
+      return res.status(status).json({ error: true, message: status === 404 ? "Loan not found" : "Forbidden" });
+    }
     const repayments = await db.select().from(loanRepaymentsTable)
       .where(eq(loanRepaymentsTable.loanId, loanId))
       .orderBy(desc(loanRepaymentsTable.createdAt));
@@ -300,9 +389,18 @@ router.get("/loans/:loanId/repayments", async (req, res, next) => {
 
 router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { walletId, amount, userId } = req.body;
-    if (!walletId || !amount || !userId) {
-      return res.status(400).json({ error: true, message: "walletId, amount, userId required" });
+    assertModuleEnabled("credit");
+    guard("credit");
+    const { walletId, amount } = req.body;
+    const userId = req.auth!.userId;
+    if (!walletId || !amount) {
+      return res.status(400).json({ error: true, message: "walletId, amount required" });
+    }
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: true, message: "amount must be a positive number" });
+    }
+    if (!(await walletBelongsToUser(String(walletId), userId))) {
+      return res.status(403).json({ error: true, message: "You do not own this wallet" });
     }
 
     const loanId = routeParamString(req, "loanId")!;
@@ -312,52 +410,70 @@ router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, asy
     if (!["approved", "disbursed"].includes(loan.status)) {
       return res.status(400).json({ error: true, message: `Cannot repay loan with status: ${loan.status}` });
     }
-
-    const loanWallet = await db.select().from(walletsTable).where(eq(walletsTable.userId, "system")).limit(1);
-    const systemWalletId = loanWallet[0]?.id;
-
-    let txId: string | null = null;
-    if (systemWalletId) {
-      const tx = await processTransfer({
-        fromWalletId: walletId,
-        toWalletId:   systemWalletId,
-        amount:       Number(amount),
-        currency:     loan.currency,
-        description:  `Loan repayment – ${loan.id}`,
-        skipFraudCheck: true,
-      });
-      txId = tx.id;
+    const outstanding = Number(loan.amount) - Number(loan.amountRepaid);
+    if (Number(amount) > outstanding + 1e-6) {
+      return res.status(400).json({ error: true, message: `Repayment exceeds outstanding balance (${outstanding})` });
     }
 
+    // The repayment is a real transfer back to the platform treasury. The loan
+    // row is locked and re-checked INSIDE the ledger transaction, and the
+    // repayment record and the new balance are written there too: two
+    // simultaneous repayments cannot both be accepted, and the money can never
+    // leave the borrower's wallet without the loan being credited for it.
+    const treasury = await getTreasuryWallet(loan.currency);
     const repaymentId = generateId();
-    await db.insert(loanRepaymentsTable).values({
-      id:            repaymentId,
-      loanId:        loan.id,
-      userId,
-      amount:        String(amount),
-      currency:      loan.currency,
-      transactionId: txId,
-      paidAt:        new Date(),
-      status:        "completed",
+    const repayAmount = normalizeAmount(Number(amount));
+    let newRepaid = 0;
+    let isFullyRepaid = false;
+    const tx = await processTransfer({
+      fromWalletId: walletId,
+      toWalletId:   treasury.id,
+      amount:       repayAmount,
+      currency:     loan.currency,
+      reference:    `LOAN-REPAY-${repaymentId}`,   // transaction references are unique
+      description:  `Loan repayment – ${loan.id}`,
+      skipFraudCheck: true,
+      idempotencyKey: `loan-repay:${userId}:${req.idempotencyKey}`,
+      attach: async (t) => {
+        const [fresh] = await t.select().from(loansTable).where(eq(loansTable.id, loan.id)).for("update");
+        if (!fresh) throw new AppError(404, "Loan not found");
+        if (!["approved", "disbursed"].includes(fresh.status)) {
+          throw new AppError(409, `Cannot repay loan with status: ${fresh.status}`);
+        }
+        const remaining = Number(fresh.amount) - Number(fresh.amountRepaid);
+        if (repayAmount > remaining + 1e-6) {
+          throw new AppError(409, `Repayment exceeds outstanding balance (${remaining})`);
+        }
+        newRepaid = Math.round((Number(fresh.amountRepaid) + repayAmount) * 10000) / 10000;
+        isFullyRepaid = newRepaid + 1e-6 >= Number(fresh.amount);
+        await t.insert(loanRepaymentsTable).values({
+          id:            repaymentId,
+          loanId:        loan.id,
+          userId,
+          amount:        String(repayAmount),
+          currency:      loan.currency,
+          transactionId: null, // the ledger transaction id is not known until commit; see reference LOAN-REPAY-<id>
+          paidAt:        new Date(),
+          status:        "completed",
+        });
+        await t.update(loansTable).set({
+          amountRepaid: String(newRepaid),
+          status:       isFullyRepaid ? "repaid" : fresh.status,
+          updatedAt:    new Date(),
+        }).where(eq(loansTable.id, loan.id));
+      },
     });
-
-    const newRepaid = Number(loan.amountRepaid) + Number(amount);
-    const isFullyRepaid = newRepaid >= Number(loan.amount);
-
-    await db.update(loansTable).set({
-      amountRepaid: String(newRepaid),
-      status:       isFullyRepaid ? "repaid" : loan.status,
-      updatedAt:    new Date(),
-    }).where(eq(loansTable.id, loan.id));
+    await db.update(loanRepaymentsTable).set({ transactionId: tx.id }).where(eq(loanRepaymentsTable.id, repaymentId));
 
     await eventBus.publish("loan.repayment.made", {
-      loanId: loan.id, userId, amount: Number(amount), newRepaid, isFullyRepaid,
+      loanId: loan.id, userId, amount: repayAmount, newRepaid, isFullyRepaid,
     });
 
     const body = {
       repaymentId,
       loanId:       loan.id,
-      amount:       Number(amount),
+      transactionId: tx.id,
+      amount:       repayAmount,
       newRepaid,
       remaining:    Math.max(0, Number(loan.amount) - newRepaid),
       isFullyRepaid,
@@ -365,12 +481,13 @@ router.post("/loans/:loanId/repay", requireIdempotencyKey, checkIdempotency, asy
     };
     await req.saveIdempotentResponse?.(body);
     return res.status(201).json(body);
-  } catch (err: any) {
-    return res.status(400).json({ error: true, message: err.message });
+  } catch (err) {
+    // Business errors (insufficient funds, frozen wallet, kill switch) are mapped by the error handler.
+    return next(err);
   }
 });
 
-router.post("/scores/:userId/compute", async (req, res, next) => {
+router.post("/scores/:userId/compute", requireSelfOrAdmin("userId"), async (req, res, next) => {
   try {
     const userId = routeParamString(req, "userId")!;
     const factors = await computeCreditScoreFromActivity(userId);
@@ -420,8 +537,8 @@ router.post("/scores/:userId/compute", async (req, res, next) => {
       interestRate:  Number(result.interestRate),
       factors,
     });
-  } catch (err: any) {
-    return res.status(400).json({ error: true, message: err.message });
+  } catch (err) {
+    return next(err);
   }
 });
 

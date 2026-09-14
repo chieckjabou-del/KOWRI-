@@ -3,18 +3,33 @@ import cors from "cors";
 import router from "./routes";
 import { seedDatabase, patchTontineMembers } from "./lib/seed";
 import { seedFeeConfig } from "./lib/feeEngine";
+import { seedExchangeRates } from "./lib/fxEngine";
+import { bootstrapAdminFromEnv } from "./lib/adminAuth";
+import { checkSecretsAtBoot } from "./lib/secretsCheck";
 import { globalSanitizer, validatePagination } from "./middleware/validate";
 import { errorHandler, notFoundHandler } from "./middleware/errorHandler";
+import { requireAdmin } from "./middleware/auth";
+import { seedTreasuryFloat } from "./lib/treasury";
 import { stickyPrimaryRequest, stickyPrimaryResponse } from "./middleware/stickyPrimary";
 import { paymentRouter } from "./lib/paymentRouter";
 import { seedConnectors } from "./lib/connectors";
+import { corsOptions, securityHeaders } from "./middleware/security";
 import "./services/index";
 
 const app: Express = express();
 
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Behind Railway/Vercel-style proxies: trust the first hop so req.ip and the
+// login rate limiter see the client address, not the proxy.
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+
+app.use(securityHeaders);
+app.use(cors(corsOptions()));
+// KYC submissions carry base64 documents, hence a limit well above the JSON
+// default (100 kb) but bounded so a client cannot exhaust memory.
+const bodyLimit = process.env.JSON_BODY_LIMIT ?? "2mb";
+app.use(express.json({ limit: bodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
 app.use(globalSanitizer);
 app.use(validatePagination);
@@ -29,7 +44,8 @@ app.get("/api/health", (_req, res) => {
   return res.json({ service: "kowri-backend", status: "running" });
 });
 
-app.get("/api/debug-build", async (req, res) => {
+// Reveals filesystem layout: operators only.
+app.get("/api/debug-build", requireAdmin, async (req, res) => {
   const fs   = await import("fs");
   const path = await import("path");
   const cwd  = process.cwd();
@@ -58,12 +74,30 @@ app.use("/api", router);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-seedDatabase()
-  .then(() => patchTontineMembers())
-  .then((result) => { if (result.patched) console.log("✅ Tontine patch applied:", result.message); })
-  .then(() => paymentRouter.seedDefaultRoutes())
-  .then(() => seedConnectors())
-  .then(() => seedFeeConfig())
-  .catch((err) => console.error("Seed/patch error:", err));
+// Demo data (twenty users with a known PIN and pre-funded wallets) is for
+// development and CI only. A production database must never be populated with
+// accounts anyone can log into; the explicit override exists for staging
+// environments that deliberately want the fixtures.
+const demoSeedAllowed = process.env.NODE_ENV !== "production" || process.env.ALLOW_DEMO_SEED === "true";
+if (!demoSeedAllowed) console.log("[Seed] production: demo fixtures skipped");
+
+// Every boot step runs even if an earlier one fails: a broken demo fixture must
+// never skip the treasury, the first admin account or the secrets review.
+const bootSteps: Array<[string, () => Promise<unknown>]> = [
+  ["demo seed",       () => demoSeedAllowed ? seedDatabase() : Promise.resolve()],
+  ["tontine patch",   async () => { if (!demoSeedAllowed) return; const r = await patchTontineMembers(); if (r.patched) console.log("✅ Tontine patch applied:", r.message); }],
+  ["payment routes",  () => paymentRouter.seedDefaultRoutes()],
+  ["connectors",      () => seedConnectors()],
+  ["fee config",      () => seedFeeConfig()],
+  ["exchange rates",  () => seedExchangeRates()],
+  ["treasury float",  () => seedTreasuryFloat()],
+  ["admin bootstrap", () => bootstrapAdminFromEnv()],
+  ["secrets review",  () => checkSecretsAtBoot()],
+];
+(async () => {
+  for (const [name, step] of bootSteps) {
+    try { await step(); } catch (err) { console.error(`[Boot] ${name} failed:`, err); }
+  }
+})();
 
 export default app;

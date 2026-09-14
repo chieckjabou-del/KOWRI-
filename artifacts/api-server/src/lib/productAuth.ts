@@ -3,7 +3,7 @@ import {
   productSessionsTable,
   usersTable,
 } from "@workspace/db";
-import { eq, and, gt } from "drizzle-orm";
+import { eq, and, gt, ne } from "drizzle-orm";
 import { randomBytes, createHash } from "crypto";
 import { generateId } from "./id";
 
@@ -28,7 +28,7 @@ export async function createSession(
   await db.insert(productSessionsTable).values({
     id:        sessionId,
     userId,
-    token,
+    token:     hashToken(token),
     type,
     deviceId:  opts.deviceId,
     ipAddress: opts.ipAddress,
@@ -49,7 +49,7 @@ export async function validateSession(token: string): Promise<{
   const rows = await db.select()
     .from(productSessionsTable)
     .where(and(
-      eq(productSessionsTable.token, token),
+      eq(productSessionsTable.token, hashToken(token)),
       gt(productSessionsTable.expiresAt, now),
     ))
     .limit(1);
@@ -64,13 +64,21 @@ export async function validateSession(token: string): Promise<{
 }
 
 export async function revokeSession(token: string): Promise<boolean> {
-  const result = await db.delete(productSessionsTable)
-    .where(eq(productSessionsTable.token, token));
+  await db.delete(productSessionsTable)
+    .where(eq(productSessionsTable.token, hashToken(token)));
   return true;
 }
 
 export async function revokeAllUserSessions(userId: string): Promise<void> {
   await db.delete(productSessionsTable).where(eq(productSessionsTable.userId, userId));
+}
+
+// Closes every session of the user except the one making the request (PIN change).
+export async function revokeOtherUserSessions(userId: string, keepSessionId: string): Promise<number> {
+  const rows = await db.delete(productSessionsTable)
+    .where(and(eq(productSessionsTable.userId, userId), ne(productSessionsTable.id, keepSessionId)))
+    .returning({ id: productSessionsTable.id });
+  return rows.length;
 }
 
 export function extractBearerToken(authHeader?: string): string | null {

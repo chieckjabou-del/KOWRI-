@@ -33,6 +33,11 @@ export function errorHandler(
     return;
   }
 
+  if (err instanceof Error && err.name === "ModuleDisabledError") {
+    res.status(503).json({ error: true, code: "MODULE_NOT_IN_LAUNCH_SCOPE", module: (err as any).module, message: err.message });
+    return;
+  }
+
   if (err instanceof AppError) {
     res.status(err.statusCode).json({ error: true, message: err.message });
     return;
@@ -43,8 +48,70 @@ export function errorHandler(
   if (err instanceof Error) {
     const msg = err.message;
 
-    if (msg.includes("not found") || msg.includes("No results")) {
+    // Ledger-level refusals are client errors, never 500s.
+    if (err.name === "TransactionBlockedError") {
+      const findings = ((err as any).findings ?? []) as Array<{ type: string; blocking: boolean }>;
+      res.status(403).json({
+        error: true,
+        code: "TRANSACTION_BLOCKED",
+        message: "Cette opération a été bloquée par le contrôle de risque.",
+        reasons: findings.filter((f) => f.blocking).map((f) => f.type),
+      });
+      return;
+    }
+    if (err.name === "KycLimitError") {
+      res.status(400).json({ error: true, code: "KYC_LIMIT", message: msg });
+      return;
+    }
+    if (err.name === "DepositAuthorityError") {
+      res.status(403).json({ error: true, code: "DEPOSIT_AUTHORITY_REQUIRED", message: msg });
+      return;
+    }
+    if (err.name === "WalletUnavailableError" || err.name === "CurrencyMismatchError" || err.name === "InvalidAmountError" || err.name === "InvalidFeeError") {
+      res.status(400).json({ error: true, code: err.name, message: msg });
+      return;
+    }
+    if (err.name === "FxArbitrageError" || err.name === "FXNotFoundError") {
+      res.status(409).json({ error: true, code: err.name === "FxArbitrageError" ? "FX_ARBITRAGE" : "FX_RATE_MISSING", message: msg });
+      return;
+    }
+    // A financial operation whose idempotency key already exists in the ledger
+    // has been applied once: the retry is refused instead of re-executed, and
+    // the client reconciles through GET /transactions.
+    // drizzle wraps the driver error (DrizzleQueryError.cause); look through it.
+    const pg = (((err as any).cause && typeof (err as any).cause === "object") ? (err as any).cause : err) as { code?: string; constraint?: string };
+    if (pg.code === "23505" && (pg.constraint?.includes("idempotency") || msg.includes("idempotency"))) {
+      res.status(409).json({ error: true, code: "ALREADY_PROCESSED", message: "This operation was already applied; do not retry with the same idempotency key" });
+      return;
+    }
+    if (msg === "Insufficient funds") {
+      res.status(400).json({ error: true, code: "INSUFFICIENT_FUNDS", message: msg });
+      return;
+    }
+    if (err.name === "InsufficientFloatError") {
+      res.status(409).json({ error: true, code: "INSUFFICIENT_FLOAT", message: msg });
+      return;
+    }
+    if (err.name === "RateLimitExceededError") {
+      res.status(429).json({ error: true, code: "RATE_LIMITED", message: msg, retryAfter: 60 });
+      return;
+    }
+
+    // Entity lookups ("Loan not found", "Agent wallet not found") are 404s; any
+    // longer message that merely contains the words is an internal error.
+    if (/^[\w' -]{1,60} not found$/i.test(msg) || msg === "No results") {
       res.status(404).json({ error: true, message: msg });
+      return;
+    }
+
+    // Oversized or malformed bodies rejected by the body parser.
+    const status = (err as any).status ?? (err as any).statusCode;
+    if (err.name === "PayloadTooLargeError" || status === 413) {
+      res.status(413).json({ error: true, code: "PAYLOAD_TOO_LARGE", message: "Request body too large" });
+      return;
+    }
+    if (err.name === "SyntaxError" && status === 400) {
+      res.status(400).json({ error: true, code: "MALFORMED_JSON", message: "Malformed JSON body" });
       return;
     }
 

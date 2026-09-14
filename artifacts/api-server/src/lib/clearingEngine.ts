@@ -4,6 +4,7 @@ import { eq, sql, and } from "drizzle-orm";
 import { generateId } from "./id";
 import { eventBus } from "./eventBus";
 import { messageQueue, MESSAGE_TOPICS } from "./messageQueue";
+import { guard } from "./killSwitch";
 
 export interface ClearingEntry {
   fromAccountId: string;
@@ -55,6 +56,7 @@ export async function addClearingEntry(
 }
 
 export async function submitBatch(batchId: string): Promise<void> {
+  guard("settlements");
   await db
     .update(clearingBatchesTable)
     .set({ status: "submitted", submittedAt: new Date() })
@@ -68,6 +70,7 @@ export async function submitBatch(batchId: string): Promise<void> {
 }
 
 export async function settleBatch(batchId: string): Promise<void> {
+  guard("settlements");
   await db
     .update(clearingBatchesTable)
     .set({ status: "settled", settledAt: new Date() })

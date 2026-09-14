@@ -4,6 +4,10 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Layout } from "./components/layout";
 import NotFound from "@/pages/not-found";
+import AdminLogin from "./pages/AdminLogin";
+import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
+import { currentOperator, getAdminSession, subscribeAdminSession } from "@/lib/adminAuth";
 
 // War Room pages
 import Dashboard from "./pages/dashboard";
@@ -34,6 +38,7 @@ import AdminUsers from "./pages/AdminUsers";
 import AdminAnalytics from "./pages/AdminAnalytics";
 import AdminSupport from "./pages/AdminSupport";
 import AdminAgents from "./pages/AdminAgents";
+import AdminCashIn from "./pages/AdminCashIn";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -78,10 +83,23 @@ function Router() {
       <Route path="/admin/analytics" component={AdminAnalytics} />
       <Route path="/admin/support" component={AdminSupport} />
       <Route path="/admin/agents" component={AdminAgents} />
+      <Route path="/admin/cash-in" component={AdminCashIn} />
 
       <Route component={NotFound} />
     </Switch>
   );
+}
+
+// The developer portal has its own session model; everything else is the
+// back-office and needs a signed-in operator (or the legacy shared key).
+function OperatorGate({ children }: { children: React.ReactNode }) {
+  const [location] = useLocation();
+  const [operator, setOperator] = useState(currentOperator());
+  useEffect(() => subscribeAdminSession(() => setOperator(currentOperator())), []);
+  if (location.startsWith("/developer")) return <>{children}</>;
+  const session = getAdminSession();
+  if (!operator || session?.admin.mustChangePassword) return <AdminLogin />;
+  return <>{children}</>;
 }
 
 function App() {
@@ -89,9 +107,11 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Layout>
-            <Router />
-          </Layout>
+          <OperatorGate>
+            <Layout>
+              <Router />
+            </Layout>
+          </OperatorGate>
         </WouterRouter>
         <Toaster />
       </TooltipProvider>

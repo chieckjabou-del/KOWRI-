@@ -3,24 +3,28 @@ import { db } from "@workspace/db";
 import {
   remittanceCorridorsTable, beneficiariesTable, recurringTransfersTable,
 } from "@workspace/db";
-import { eq, and, desc, count } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import {
   listCorridors, addBeneficiary, getBeneficiaries,
   sendRemittance, createRecurringTransfer, runDueRecurringTransfers,
   seedCorridors,
 } from "../lib/diasporaService";
-import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import { authenticate, requirePermission, walletBelongsToUser } from "../middleware/auth";
+import { routeParamString } from "../lib/routeParams";
 
 const router = Router();
 
-router.use(async (req, res, next) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) {
-    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
+router.post("/recurring/run", requirePermission("ledger.write"), async (req, res, next) => {
+  try {
+    const result = await runDueRecurringTransfers();
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    return res.status(400).json({ error: true, message: err.message });
   }
-  return next();
 });
+
+router.use(authenticate());
 
 router.get("/corridors", async (req, res, next) => {
   try {
@@ -36,8 +40,9 @@ router.get("/corridors", async (req, res, next) => {
 
 router.get("/corridors/:corridorId", async (req, res, next) => {
   try {
+    const corridorId = routeParamString(req, "corridorId")!;
     const [corridor] = await db.select().from(remittanceCorridorsTable)
-      .where(eq(remittanceCorridorsTable.id, req.params.corridorId));
+      .where(eq(remittanceCorridorsTable.id, corridorId));
     if (!corridor) return res.status(404).json({ error: true, message: "Corridor not found" });
     return res.json({
       ...corridor,
@@ -94,23 +99,21 @@ router.post("/quote", async (req, res, next) => {
 
 router.get("/beneficiaries", async (req, res, next) => {
   try {
-    const { userId } = req.query;
-    if (!userId) return res.status(400).json({ error: true, message: "userId required" });
-    const beneficiaries = await getBeneficiaries(userId as string);
+    const beneficiaries = await getBeneficiaries(req.auth!.userId);
     return res.json({ beneficiaries, count: beneficiaries.length });
   } catch (err) { return next(err); }
 });
 
 router.post("/beneficiaries", async (req, res, next) => {
   try {
-    const { userId, name, phone, walletId, relationship = "other", country, currency = "XOF" } = req.body;
-    if (!userId || !name || !country) {
-      return res.status(400).json({ error: true, message: "userId, name, country required" });
+    const { name, phone, walletId, relationship = "other", country, currency = "XOF" } = req.body;
+    if (!name || !country) {
+      return res.status(400).json({ error: true, message: "name, country required" });
     }
     if (!phone && !walletId) {
       return res.status(400).json({ error: true, message: "Either phone or walletId required" });
     }
-    const bene = await addBeneficiary({ userId, name, phone, walletId, relationship, country, currency });
+    const bene = await addBeneficiary({ userId: req.auth!.userId, name, phone, walletId, relationship, country, currency });
     return res.status(201).json(bene);
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
@@ -119,39 +122,45 @@ router.post("/beneficiaries", async (req, res, next) => {
 
 router.delete("/beneficiaries/:beneficiaryId", async (req, res, next) => {
   try {
-    await db.update(beneficiariesTable)
+    const beneficiaryId = routeParamString(req, "beneficiaryId")!;
+    const updated = await db.update(beneficiariesTable)
       .set({ active: false })
-      .where(eq(beneficiariesTable.id, req.params.beneficiaryId));
+      .where(and(eq(beneficiariesTable.id, beneficiaryId), eq(beneficiariesTable.userId, req.auth!.userId)))
+      .returning({ id: beneficiariesTable.id });
+    if (!updated.length) return res.status(404).json({ error: true, message: "Beneficiary not found" });
     return res.json({ success: true });
   } catch (err) { return next(err); }
 });
 
 router.post("/send", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { fromWalletId, senderUserId, beneficiaryId, amount, fromCurrency, toCurrency, description } = req.body;
-    if (!fromWalletId || !senderUserId || !beneficiaryId || !amount || !fromCurrency || !toCurrency) {
+    const { fromWalletId, beneficiaryId, amount, fromCurrency, toCurrency, description } = req.body;
+    if (!fromWalletId || !beneficiaryId || !amount || !fromCurrency || !toCurrency) {
       return res.status(400).json({
         error: true,
-        message: "fromWalletId, senderUserId, beneficiaryId, amount, fromCurrency, toCurrency required",
+        message: "fromWalletId, beneficiaryId, amount, fromCurrency, toCurrency required",
       });
     }
+    if (!(await walletBelongsToUser(String(fromWalletId), req.auth!.userId))) {
+      return res.status(403).json({ error: true, message: "You do not own the source wallet" });
+    }
     const result = await sendRemittance({
-      fromWalletId, senderUserId, beneficiaryId,
+      fromWalletId, senderUserId: req.auth!.userId, beneficiaryId,
       amount: Number(amount), fromCurrency, toCurrency, description,
+      idempotencyKey: req.idempotencyKey,
     });
     return res.status(201).json({ success: true, ...result });
   } catch (err: any) {
+    // Scope and kill-switch refusals keep their 503 semantics.
+    if (err?.name === "ModuleDisabledError" || err?.name === "KillSwitchError") return next(err);
     return res.status(400).json({ error: true, message: err.message });
   }
 });
 
 router.get("/recurring", async (req, res, next) => {
   try {
-    const { userId } = req.query;
-    if (!userId) return res.status(400).json({ error: true, message: "userId required" });
-
     const rows = await db.select().from(recurringTransfersTable)
-      .where(eq(recurringTransfersTable.userId, userId as string))
+      .where(eq(recurringTransfersTable.userId, req.auth!.userId))
       .orderBy(desc(recurringTransfersTable.createdAt));
 
     return res.json({
@@ -164,13 +173,20 @@ router.get("/recurring", async (req, res, next) => {
 router.post("/recurring", async (req, res, next) => {
   try {
     const {
-      userId, fromWalletId, beneficiaryId, toWalletId,
+      fromWalletId, beneficiaryId, toWalletId,
       amount, currency = "XOF", frequency = "monthly", description, maxRuns,
     } = req.body;
+    const userId = req.auth!.userId;
 
-    if (!userId || !fromWalletId || !beneficiaryId || !amount) {
-      return res.status(400).json({ error: true, message: "userId, fromWalletId, beneficiaryId, amount required" });
+    if (!fromWalletId || !beneficiaryId || !amount) {
+      return res.status(400).json({ error: true, message: "fromWalletId, beneficiaryId, amount required" });
     }
+    if (!(await walletBelongsToUser(String(fromWalletId), userId))) {
+      return res.status(403).json({ error: true, message: "You do not own the source wallet" });
+    }
+    const [bene] = await db.select({ id: beneficiariesTable.id }).from(beneficiariesTable)
+      .where(and(eq(beneficiariesTable.id, beneficiaryId), eq(beneficiariesTable.userId, userId)));
+    if (!bene) return res.status(404).json({ error: true, message: "Beneficiary not found" });
 
     const recurring = await createRecurringTransfer({
       userId, fromWalletId, beneficiaryId, toWalletId,
@@ -184,40 +200,20 @@ router.post("/recurring", async (req, res, next) => {
   }
 });
 
-router.patch("/recurring/:recurringId/pause", async (req, res, next) => {
+async function setRecurringStatus(req: any, res: any, next: any, status: "paused" | "active" | "cancelled") {
   try {
-    await db.update(recurringTransfersTable)
-      .set({ status: "paused" })
-      .where(eq(recurringTransfersTable.id, req.params.recurringId));
-    return res.json({ success: true, status: "paused" });
+    const recurringId = routeParamString(req, "recurringId")!;
+    const updated = await db.update(recurringTransfersTable)
+      .set({ status })
+      .where(and(eq(recurringTransfersTable.id, recurringId), eq(recurringTransfersTable.userId, req.auth!.userId)))
+      .returning({ id: recurringTransfersTable.id });
+    if (!updated.length) return res.status(404).json({ error: true, message: "Recurring transfer not found" });
+    return res.json({ success: true, status });
   } catch (err) { return next(err); }
-});
+}
 
-router.patch("/recurring/:recurringId/resume", async (req, res, next) => {
-  try {
-    await db.update(recurringTransfersTable)
-      .set({ status: "active" })
-      .where(eq(recurringTransfersTable.id, req.params.recurringId));
-    return res.json({ success: true, status: "active" });
-  } catch (err) { return next(err); }
-});
-
-router.delete("/recurring/:recurringId", async (req, res, next) => {
-  try {
-    await db.update(recurringTransfersTable)
-      .set({ status: "cancelled" })
-      .where(eq(recurringTransfersTable.id, req.params.recurringId));
-    return res.json({ success: true, status: "cancelled" });
-  } catch (err) { return next(err); }
-});
-
-router.post("/recurring/run", async (req, res, next) => {
-  try {
-    const result = await runDueRecurringTransfers();
-    return res.json({ success: true, ...result });
-  } catch (err: any) {
-    return res.status(400).json({ error: true, message: err.message });
-  }
-});
+router.patch("/recurring/:recurringId/pause", (req, res, next) => setRecurringStatus(req, res, next, "paused"));
+router.patch("/recurring/:recurringId/resume", (req, res, next) => setRecurringStatus(req, res, next, "active"));
+router.delete("/recurring/:recurringId", (req, res, next) => setRecurringStatus(req, res, next, "cancelled"));
 
 export default router;

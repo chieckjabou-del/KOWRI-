@@ -341,6 +341,7 @@ export default function Dashboard() {
                   createdAt={tx.createdAt}
                   fromWalletId={tx.fromWalletId}
                   myWalletId={wallet?.id ?? ""}
+                  status={tx.status}
                 />
               ))
             )}

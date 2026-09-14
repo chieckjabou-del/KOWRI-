@@ -3,6 +3,7 @@ import { sagasTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { generateId } from "./id";
 import { audit as auditLog } from "./auditLogger";
+import { guard } from "./killSwitch";
 
 export interface SagaStep<TCtx extends Record<string, unknown>> {
   name: string;
@@ -31,6 +32,7 @@ export class SagaOrchestrator {
     initialContext: TCtx,
     steps: SagaStep<TCtx>[]
   ): Promise<TCtx> {
+    guard("saga_creation");
     const sagaId = generateId();
     const completedSteps: Array<{ step: SagaStep<TCtx>; ctx: TCtx }> = [];
 
@@ -67,7 +69,9 @@ export class SagaOrchestrator {
         await auditLog({ action: "saga.step.failed", entity: "saga", entityId: sagaId, metadata: { step: step.name, error: errMsg } });
 
         await this.compensate(sagaId, sagaType, completedSteps, ctx);
-        throw new Error(`Saga '${sagaType}' failed at step '${step.name}': ${errMsg}`);
+        // The original error travels as `cause` so callers can map a business
+        // refusal (credit line exceeded, treasury empty) to the right status.
+        throw new Error(`Saga '${sagaType}' failed at step '${step.name}': ${errMsg}`, { cause: err });
       }
     }
 

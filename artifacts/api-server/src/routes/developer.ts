@@ -1,10 +1,16 @@
 import { Router } from "express";
+import { consumeVerification } from "../lib/phoneVerification";
 import { db } from "@workspace/db";
 import { usersTable, webhooksTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { randomBytes } from "crypto";
 import { generateId } from "../lib/id";
+import { routeParamString } from "../lib/routeParams";
 import { createSession, requireAuth } from "../lib/productAuth";
+import { hashPin, verifyPin, isLegacyPinHash, isValidPinFormat } from "../lib/pin";
+import { loginRateLimit } from "../lib/loginRateLimit";
+import { authenticate } from "../middleware/auth";
+import { validateWebhookUrl } from "../lib/webhookUrl";
 import {
   generateDeveloperKey, validateDeveloperKey, trackUsage,
   getUsageStats, listDeveloperKeys, revokeKey,
@@ -15,17 +21,22 @@ import {
 const router = Router();
 
 router.post("/register", async (req, res) => {
-  const { firstName, lastName, email, phone, country = "NG", pin = "000000" } = req.body;
+  const { firstName, lastName, email, phone, country = "NG", pin } = req.body;
   if (!firstName || !lastName || !phone) {
     return res.status(400).json({ error: "firstName, lastName, phone required" });
+  }
+  if (!isValidPinFormat(pin)) {
+    return res.status(400).json({ error: "pin must be 4 to 6 digits" });
   }
   try {
     const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
     if (existing[0]) return res.status(409).json({ error: "Phone already registered" });
+    const gate = await consumeVerification(String(phone), req.body?.verificationToken);
+    if (gate) return res.status(gate.status).json({ error: true, code: gate.code, message: gate.message });
     const userId = generateId("dev");
     await db.insert(usersTable).values({
       id: userId, phone, email: email ?? null, firstName, lastName,
-      country, pinHash: pin, status: "active",
+      country, pinHash: hashPin(pin), status: "active",
     });
     const session = await createSession(userId, "developer");
     const freeKey = await generateDeveloperKey({
@@ -44,22 +55,29 @@ router.post("/register", async (req, res) => {
   }
 });
 
-router.post("/login", async (req, res) => {
-  const { phone } = req.body;
-  if (!phone) return res.status(400).json({ error: "phone required" });
+router.post("/login", loginRateLimit, async (req, res) => {
+  const { phone, pin } = req.body;
+  if (!phone || !pin) return res.status(400).json({ error: "phone and pin required" });
   try {
     const users = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
-    if (!users[0]) return res.status(401).json({ error: "User not found" });
-    const session = await createSession(users[0].id, "developer");
-    return res.json({ token: session.token, expiresAt: session.expiresAt, developerId: users[0].id });
+    const user = users[0];
+    if (!user || !verifyPin(String(pin), user.pinHash)) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    if (isLegacyPinHash(user.pinHash)) {
+      await db.update(usersTable).set({ pinHash: hashPin(String(pin)), updatedAt: new Date() }).where(eq(usersTable.id, user.id));
+    }
+    const session = await createSession(user.id, "developer", { ipAddress: req.ip });
+    return res.json({ token: session.token, expiresAt: session.expiresAt, developerId: user.id });
   } catch (err) {
     return res.status(500).json({ error: "Login failed" });
   }
 });
 
-router.post("/api-key", async (req, res) => {
-  const { developerId, name, planTier, scopes, environment } = req.body;
-  if (!developerId || !name) return res.status(400).json({ error: "developerId and name required" });
+router.post("/api-key", authenticate(["developer"]), async (req, res) => {
+  const { name, planTier, scopes, environment } = req.body;
+  const developerId = req.auth!.userId;
+  if (!name) return res.status(400).json({ error: "name required" });
   const validPlans: PlanTier[] = ["free", "starter", "growth", "enterprise"];
   if (planTier && !validPlans.includes(planTier)) {
     return res.status(400).json({ error: `planTier must be one of: ${validPlans.join(", ")}` });
@@ -111,21 +129,21 @@ router.delete("/api-key/:keyId", async (req, res) => {
   }
 });
 
-router.get("/usage", async (req, res) => {
-  const { developerId } = req.query;
-  if (!developerId) return res.status(400).json({ error: "developerId required" });
+router.get("/usage", authenticate(["developer"]), async (req, res) => {
   try {
-    const stats = await getUsageStats(developerId as string);
+    const stats = await getUsageStats(req.auth!.userId);
     return res.json(stats);
   } catch (err) {
     return res.status(500).json({ error: "Failed to fetch usage" });
   }
 });
 
-router.post("/usage/track", async (req, res) => {
+router.post("/usage/track", authenticate(["developer"]), async (req, res) => {
   const { apiKeyId, endpoint, method, statusCode, responseMs, ipAddress } = req.body;
   if (!apiKeyId || !endpoint) return res.status(400).json({ error: "apiKeyId and endpoint required" });
   try {
+    const owned = (await listDeveloperKeys(req.auth!.userId)).some((k: any) => k.id === apiKeyId);
+    if (!owned) return res.status(403).json({ error: "API key does not belong to you" });
     await trackUsage({ apiKeyId, endpoint, method: method ?? "GET", statusCode: statusCode ?? 200, responseMs: responseMs ?? 0, ipAddress });
     return res.status(201).json({ tracked: true });
   } catch (err) {
@@ -133,24 +151,54 @@ router.post("/usage/track", async (req, res) => {
   }
 });
 
-router.post("/webhook", async (req, res) => {
-  const { developerId, url, events, secret } = req.body;
-  if (!developerId || !url) return res.status(400).json({ error: "developerId and url required" });
-  if (!url.startsWith("http")) return res.status(400).json({ error: "url must be a valid HTTP(S) URL" });
+router.post("/webhook", authenticate(["developer"]), async (req, res) => {
+  const { url, events, secret } = req.body;
+  const developerId = req.auth!.userId;
+  if (!url) return res.status(400).json({ error: "url required" });
+  const urlCheck = validateWebhookUrl(url);
+  if (!urlCheck.ok) return res.status(400).json({ error: urlCheck.reason });
   try {
-    const users = await db.select().from(usersTable).where(eq(usersTable.id, developerId)).limit(1);
-    if (!users[0]) return res.status(404).json({ error: "Developer not found" });
     const eventList   = Array.isArray(events) ? events : ["transaction.completed", "wallet.updated"];
     const webhookSecret = secret ?? `whsec_${randomBytes(20).toString("hex")}`;
     const insertedIds: string[] = [];
     for (const eventType of eventList) {
       const id = generateId("wh");
-      await db.insert(webhooksTable).values({ id, url, eventType, secret: webhookSecret, active: true });
+      await db.insert(webhooksTable).values({ id, url, eventType, secret: webhookSecret, active: true, ownerId: developerId });
       insertedIds.push(id);
     }
     return res.status(201).json({ webhookId: insertedIds[0], webhookIds: insertedIds, url, events: eventList, active: true });
   } catch (err) {
     return res.status(500).json({ error: "Webhook registration failed" });
+  }
+});
+
+router.get("/webhooks", authenticate(["developer"]), async (req, res) => {
+  try {
+    const rows = await db.select({
+      id: webhooksTable.id,
+      url: webhooksTable.url,
+      eventType: webhooksTable.eventType,
+      active: webhooksTable.active,
+      createdAt: webhooksTable.createdAt,
+    }).from(webhooksTable)
+      .where(eq(webhooksTable.ownerId, req.auth!.userId))
+      .orderBy(desc(webhooksTable.createdAt));
+    return res.json(rows);
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to list webhooks" });
+  }
+});
+
+router.delete("/webhooks/:id", authenticate(["developer"]), async (req, res) => {
+  const id = routeParamString(req, "id")!;
+  try {
+    const deleted = await db.delete(webhooksTable)
+      .where(and(eq(webhooksTable.id, id), eq(webhooksTable.ownerId, req.auth!.userId)))
+      .returning({ id: webhooksTable.id });
+    if (!deleted.length) return res.status(404).json({ error: "Webhook not found" });
+    return res.json({ deleted: true, id });
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to delete webhook" });
   }
 });
 
@@ -162,12 +210,10 @@ router.get("/sandbox", (_req, res) => {
   return res.json(getSandboxConfig());
 });
 
-router.post("/sandbox/reset", async (req, res) => {
-  const { developerId } = req.body;
-  if (!developerId) return res.status(400).json({ error: "developerId required" });
+router.post("/sandbox/reset", authenticate(["developer"]), async (req, res) => {
   return res.json({
     reset: true,
-    developerId,
+    developerId: req.auth!.userId,
     message:    "Sandbox data reset. Test wallets restored to initial balances.",
     testWallets: getSandboxConfig().testWallets,
   });

@@ -7,9 +7,10 @@ import {
   tontineStrategyTargetsTable, merchantsTable,
   tontineHybridCyclesTable, tontineSolidaryClaimsTable,
 } from "@workspace/db";
-import { eq, and, desc, count, asc, gte, isNull, lt } from "drizzle-orm";
+import { eq, and, desc, count, asc, gte, isNull, lt, sql } from "drizzle-orm";
 import { audit } from "../lib/auditLogger";
-import { processTransfer } from "../lib/walletService";
+import { processTransfer, normalizeAmount } from "../lib/walletService";
+import { AppError } from "../middleware/errorHandler";
 import { eventBus } from "../lib/eventBus";
 import { generateId } from "../lib/id";
 import {
@@ -17,27 +18,48 @@ import {
   listPositionForSale, buyTontinePosition, computeNextDate, createSchedulerJob,
 } from "../lib/tontineScheduler";
 import { computeReputationScore, getReputationScore, computeTontineAIPriority } from "../lib/reputationEngine";
+import { leaveActiveTontine, cancelTontine, placeListingBid, acceptListingBid } from "../lib/tontineLifecycle";
 import { requireAuth } from "../lib/productAuth";
 import { routeParamString } from "../lib/routeParams";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 
+import { authenticate, isAdminRequest } from "../middleware/auth";
+import type { Request, Response } from "express";
+
 const router = Router();
 
-router.use(async (req, res, next) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) {
-    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
+router.use(authenticate());
+
+type TontineRow = typeof tontinesTable.$inferSelect;
+
+function isTontineAdmin(req: Request, tontine: TontineRow): boolean {
+  return isAdminRequest(req) || tontine.adminUserId === req.auth!.userId;
+}
+
+// Loads the tontine and rejects the request unless the caller administers it.
+async function requireTontineAdmin(req: Request, res: Response, tontineId: string): Promise<TontineRow | null> {
+  const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
+  if (!tontine) { res.status(404).json({ error: true, message: "Tontine not found" }); return null; }
+  if (!isTontineAdmin(req, tontine)) {
+    res.status(403).json({ error: true, message: "Only the tontine admin can perform this action" });
+    return null;
   }
-  return next();
-});
+  return tontine;
+}
+
+async function isTontineMember(tontineId: string, userId: string): Promise<boolean> {
+  const [row] = await db.select({ id: tontineMembersTable.id }).from(tontineMembersTable)
+    .where(and(eq(tontineMembersTable.tontineId, tontineId), eq(tontineMembersTable.userId, userId)));
+  return !!row;
+}
 
 router.post("/tontines/:tontineId/activate", async (req, res, next) => {
   try {
     const tontineId = routeParamString(req, "tontineId")!;
     const { rotationModel = "fixed" } = req.body;
 
-    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
-    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    const tontine = await requireTontineAdmin(req, res, tontineId);
+    if (!tontine) return;
     if (tontine.status !== "pending") return res.status(400).json({ error: true, message: "Tontine is not pending" });
 
     let poolWalletId = tontine.walletId;
@@ -74,11 +96,17 @@ router.post("/tontines/:tontineId/activate", async (req, res, next) => {
 router.post("/tontines/:tontineId/members", async (req, res, next) => {
   try {
     const tontineId = routeParamString(req, "tontineId")!;
-    const { userId } = req.body;
-    if (!userId) return res.status(400).json({ error: true, message: "userId required" });
+    const userId = typeof req.body?.userId === "string" && req.body.userId ? req.body.userId : req.auth!.userId;
 
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    // A user may join for themselves; only the tontine admin may enroll someone else.
+    if (userId !== req.auth!.userId && !isTontineAdmin(req, tontine)) {
+      return res.status(403).json({ error: true, message: "Only the tontine admin can add other members" });
+    }
+    if (tontine.status !== "pending") {
+      return res.status(400).json({ error: true, message: "Members can only join a pending tontine" });
+    }
     if (tontine.memberCount >= tontine.maxMembers) {
       return res.status(400).json({ error: true, message: "Tontine is full" });
     }
@@ -111,8 +139,19 @@ router.delete("/tontines/:tontineId/members/:userId", async (req, res, next) => 
 
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (userId !== req.auth!.userId && !isTontineAdmin(req, tontine)) {
+      return res.status(403).json({ error: true, message: "You can only remove yourself unless you administer this tontine" });
+    }
+    if (tontine.status === "active") {
+      try {
+        const result = await leaveActiveTontine(tontineId, userId);
+        return res.json({ success: true, message: "Member left the active tontine", ...result });
+      } catch (err: any) {
+        return res.status(400).json({ error: true, message: err.message });
+      }
+    }
     if (tontine.status !== "pending") {
-      return res.status(400).json({ error: true, message: "Can only leave a tontine that is still pending" });
+      return res.status(400).json({ error: true, message: `Cannot leave a ${tontine.status} tontine` });
     }
 
     const [member] = await db.select().from(tontineMembersTable)
@@ -152,13 +191,25 @@ router.delete("/tontines/:tontineId/members/:userId", async (req, res, next) => 
   } catch (err) { return next(err); }
 });
 
+router.post("/tontines/:tontineId/cancel", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
+  try {
+    const tontineId = routeParamString(req, "tontineId")!;
+    const tontine = await requireTontineAdmin(req, res, tontineId);
+    if (!tontine) return;
+    const reason = typeof req.body?.reason === "string" ? req.body.reason : undefined;
+    const result = await cancelTontine(tontineId, req.auth!.userId, reason);
+    return res.json({ success: true, tontineId, status: "cancelled", ...result });
+  } catch (err: any) {
+    return res.status(400).json({ error: true, message: err.message });
+  }
+});
+
 router.post("/tontines/:tontineId/collect", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const tontineId = routeParamString(req, "tontineId")!;
+    if (!(await requireTontineAdmin(req, res, tontineId))) return;
     const result = await runContributionCycle(tontineId);
-    const body = { success: true, ...result };
-    await req.saveIdempotentResponse?.(body);
-    return res.json(body);
+    return res.json({ success: true, ...result });
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
   }
@@ -167,10 +218,9 @@ router.post("/tontines/:tontineId/collect", requireIdempotencyKey, checkIdempote
 router.post("/tontines/:tontineId/payout", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const tontineId = routeParamString(req, "tontineId")!;
+    if (!(await requireTontineAdmin(req, res, tontineId))) return;
     const result = await runPayoutCycle(tontineId);
-    const body = { success: true, ...result };
-    await req.saveIdempotentResponse?.(body);
-    return res.json(body);
+    return res.json({ success: true, ...result });
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
   }
@@ -219,11 +269,20 @@ router.get("/tontines/:tontineId/schedule", async (req, res, next) => {
 router.post("/tontines/:tontineId/bids", async (req, res, next) => {
   try {
     const tontineId = routeParamString(req, "tontineId")!;
-    const { userId, bidAmount, desiredPosition } = req.body;
-    if (!userId || !bidAmount) return res.status(400).json({ error: true, message: "userId and bidAmount required" });
+    const { bidAmount, desiredPosition } = req.body;
+    const userId = req.auth!.userId;
+    if (!bidAmount || !Number.isFinite(Number(bidAmount)) || Number(bidAmount) <= 0) {
+      return res.status(400).json({ error: true, message: "bidAmount must be a positive number" });
+    }
 
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (tontine.status !== "pending") {
+      return res.status(400).json({ error: true, message: "Rotation bids are only accepted before activation; use the position market for an active tontine" });
+    }
+    if (!(await isTontineMember(tontineId, userId))) {
+      return res.status(403).json({ error: true, message: "Only members can bid on this tontine" });
+    }
 
     const [bid] = await db.insert(tontineBidsTable).values({
       id: generateId(), tontineId, userId,
@@ -249,9 +308,10 @@ router.get("/tontines/:tontineId/bids", async (req, res, next) => {
 router.post("/tontines/:tontineId/positions/list", async (req, res, next) => {
   try {
     const tontineId = routeParamString(req, "tontineId")!;
-    const { sellerId, payoutOrder, askPrice, currency = "XOF", expiresAt } = req.body;
-    if (!sellerId || !payoutOrder || !askPrice) {
-      return res.status(400).json({ error: true, message: "sellerId, payoutOrder, askPrice required" });
+    const { payoutOrder, askPrice, currency = "XOF", expiresAt } = req.body;
+    const sellerId = req.auth!.userId;
+    if (!payoutOrder || !askPrice || !Number.isFinite(Number(askPrice)) || Number(askPrice) <= 0) {
+      return res.status(400).json({ error: true, message: "payoutOrder and a positive askPrice are required" });
     }
     const listing = await listPositionForSale({
       tontineId, sellerId, payoutOrder: Number(payoutOrder), askPrice: Number(askPrice), currency,
@@ -276,12 +336,47 @@ router.get("/tontines/:tontineId/positions/market", async (req, res, next) => {
   } catch (err) { return next(err); }
 });
 
-router.post("/tontines/positions/:listingId/buy", async (req, res, next) => {
+router.post("/tontines/positions/:listingId/bids", async (req, res, next) => {
   try {
     const listingId = routeParamString(req, "listingId")!;
-    const { buyerId } = req.body;
-    if (!buyerId) return res.status(400).json({ error: true, message: "buyerId required" });
-    await buyTontinePosition(listingId, buyerId);
+    const bid = await placeListingBid(listingId, req.auth!.userId, Number(req.body?.bidAmount));
+    return res.status(201).json({ ...bid, bidAmount: Number(bid.bidAmount) });
+  } catch (err: any) {
+    return res.status(400).json({ error: true, message: err.message });
+  }
+});
+
+// The seller sees every offer; a bidder only sees their own.
+router.get("/tontines/positions/:listingId/bids", async (req, res, next) => {
+  try {
+    const listingId = routeParamString(req, "listingId")!;
+    const [listing] = await db.select().from(tontinePositionListingsTable).where(eq(tontinePositionListingsTable.id, listingId));
+    if (!listing) return res.status(404).json({ error: true, message: "Listing not found" });
+    const isSeller = listing.sellerId === req.auth!.userId || isAdminRequest(req);
+    const bids = await db.select().from(tontineBidsTable)
+      .where(isSeller
+        ? eq(tontineBidsTable.listingId, listingId)
+        : and(eq(tontineBidsTable.listingId, listingId), eq(tontineBidsTable.userId, req.auth!.userId)))
+      .orderBy(desc(tontineBidsTable.bidAmount));
+    return res.json({ listingId, bids: bids.map(b => ({ ...b, bidAmount: Number(b.bidAmount) })) });
+  } catch (err) { return next(err); }
+});
+
+router.post("/tontines/positions/:listingId/bids/:bidId/accept", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
+  try {
+    const listingId = routeParamString(req, "listingId")!;
+    const bidId = routeParamString(req, "bidId")!;
+    const result = await acceptListingBid(listingId, bidId, req.auth!.userId);
+    return res.json({ success: true, listingId, bidId, ...result });
+  } catch (err: any) {
+    return res.status(400).json({ error: true, message: err.message });
+  }
+});
+
+router.post("/tontines/positions/:listingId/buy", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
+  try {
+    const listingId = routeParamString(req, "listingId")!;
+    await buyTontinePosition(listingId, req.auth!.userId);
     return res.json({ success: true, message: "Position purchased successfully" });
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
@@ -326,6 +421,9 @@ router.get("/reputation/:userId", async (req, res, next) => {
 router.post("/reputation/:userId/compute", async (req, res, next) => {
   try {
     const userId = routeParamString(req, "userId")!;
+    if (userId !== req.auth!.userId && !isAdminRequest(req)) {
+      return res.status(403).json({ error: true, message: "Forbidden" });
+    }
     const score = await computeReputationScore(userId);
     return res.json({
       ...score,
@@ -354,9 +452,12 @@ router.post("/tontines/:tontineId/goals", async (req, res, next) => {
     if (releaseCondition === "vote" && !votesRequired) {
       return res.status(400).json({ error: true, message: "votesRequired is required when releaseCondition is 'vote'" });
     }
+    if (!Number.isFinite(Number(goalAmount)) || Number(goalAmount) <= 0) {
+      return res.status(400).json({ error: true, message: "goalAmount must be a positive number" });
+    }
 
-    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
-    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    const tontine = await requireTontineAdmin(req, res, tontineId);
+    if (!tontine) return;
 
     const [goal] = await db.insert(tontinePurchaseGoalsTable).values({
       id:               generateId(),
@@ -402,8 +503,8 @@ router.post("/tontines/:tontineId/goals/:goalId/release", requireIdempotencyKey,
     const tontineId = routeParamString(req, "tontineId")!;
     const goalId = routeParamString(req, "goalId")!;
 
-    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
-    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    const tontine = await requireTontineAdmin(req, res, tontineId);
+    if (!tontine) return;
     if (!tontine.walletId) return res.status(400).json({ error: true, message: "Tontine has no pool wallet" });
 
     const [goal] = await db.select().from(tontinePurchaseGoalsTable)
@@ -454,16 +555,34 @@ router.post("/tontines/:tontineId/goals/:goalId/release", requireIdempotencyKey,
       }
     }
 
+    // Claim the goal before moving money so a retry can never pay the vendor twice.
+    const [claimed] = await db.update(tontinePurchaseGoalsTable)
+      .set({ status: "released", releasedAt: now, currentAmount: String(releaseAmount) })
+      .where(and(
+        eq(tontinePurchaseGoalsTable.id, goalId),
+        sql`${tontinePurchaseGoalsTable.status} IN ('open', 'funded')`,
+      ))
+      .returning();
+    if (!claimed) return res.status(409).json({ error: true, message: "Goal is already being released" });
+
     if (resolvedWalletId) {
-      const result = await processTransfer({
-        fromWalletId:   tontine.walletId,
-        toWalletId:     resolvedWalletId,
-        amount:         releaseAmount,
-        currency:       tontine.currency,
-        description:    `Tontine project release: ${goal.goalDescription}`,
-        skipFraudCheck: true,
-      });
-      transferId = (result as any)?.transactionId ?? null;
+      try {
+        const result = await processTransfer({
+          fromWalletId:   tontine.walletId,
+          toWalletId:     resolvedWalletId,
+          amount:         releaseAmount,
+          currency:       tontine.currency,
+          description:    `Tontine project release: ${goal.goalDescription}`,
+          skipFraudCheck: true,
+          idempotencyKey: `tontine-goal:${goalId}`,
+        });
+        transferId = result.id;
+      } catch (err) {
+        await db.update(tontinePurchaseGoalsTable)
+          .set({ status: goal.status, releasedAt: null, currentAmount: goal.currentAmount })
+          .where(eq(tontinePurchaseGoalsTable.id, goalId));
+        throw err;
+      }
     } else {
       // No known vendor wallet — log a pending claim and simulate SMS invite
       await audit({
@@ -497,11 +616,7 @@ router.post("/tontines/:tontineId/goals/:goalId/release", requireIdempotencyKey,
       );
     }
 
-    const [updated] = await db.update(tontinePurchaseGoalsTable).set({
-      status:        "released",
-      releasedAt:    now,
-      currentAmount: String(releaseAmount),
-    }).where(eq(tontinePurchaseGoalsTable.id, goalId)).returning();
+    const updated = claimed;
 
     // Notify all tontine members
     const members = await db.select().from(tontineMembersTable).where(eq(tontineMembersTable.tontineId, tontineId));
@@ -535,6 +650,10 @@ router.post("/tontines/:tontineId/goals/:goalId/vote", async (req, res, next) =>
     const tontineId = routeParamString(req, "tontineId")!;
     const goalId = routeParamString(req, "goalId")!;
 
+    if (!(await isTontineMember(tontineId, req.auth!.userId))) {
+      return res.status(403).json({ error: true, message: "Only members can vote" });
+    }
+
     const [goal] = await db.select().from(tontinePurchaseGoalsTable)
       .where(and(eq(tontinePurchaseGoalsTable.id, goalId), eq(tontinePurchaseGoalsTable.tontineId, tontineId)));
     if (!goal) return res.status(404).json({ error: true, message: "Goal not found" });
@@ -553,6 +672,17 @@ router.post("/tontines/:tontineId/goals/:goalId/vote", async (req, res, next) =>
 
     // Auto-release if threshold reached
     if (newVotes >= (goal.votesRequired ?? 1)) {
+      const [claimed] = await db.update(tontinePurchaseGoalsTable)
+        .set({ status: "released", releasedAt: new Date() })
+        .where(and(
+          eq(tontinePurchaseGoalsTable.id, goalId),
+          sql`${tontinePurchaseGoalsTable.status} IN ('open', 'funded')`,
+        ))
+        .returning({ id: tontinePurchaseGoalsTable.id });
+      if (!claimed) {
+        return res.json({ ...updated, votesReceived: newVotes, autoReleased: false, message: "Goal already released" });
+      }
+
       const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
       if (tontine?.walletId && goal.vendorWalletId) {
         try {
@@ -563,13 +693,15 @@ router.post("/tontines/:tontineId/goals/:goalId/vote", async (req, res, next) =>
             currency:       tontine.currency,
             description:    `Tontine project release (vote): ${goal.goalDescription}`,
             skipFraudCheck: true,
+            idempotencyKey: `tontine-goal:${goalId}`,
           });
-        } catch { /* non-fatal: funds transfer failed, goal still marked funded */ }
+        } catch (err) {
+          await db.update(tontinePurchaseGoalsTable)
+            .set({ status: goal.status, releasedAt: null })
+            .where(eq(tontinePurchaseGoalsTable.id, goalId));
+          throw err;
+        }
       }
-      await db.update(tontinePurchaseGoalsTable).set({
-        status:     "released",
-        releasedAt: new Date(),
-      }).where(eq(tontinePurchaseGoalsTable.id, goalId));
 
       await eventBus.publish("tontine.goal.released", {
         tontineId, goalId, trigger: "vote",
@@ -715,8 +847,8 @@ router.post("/tontines/:tontineId/hybrid-config", async (req, res, next) => {
       return res.status(400).json({ error: true, message: `Percentages must sum to 100, got ${total.toFixed(2)}` });
     }
 
-    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
-    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    const tontine = await requireTontineAdmin(req, res, tontineId);
+    if (!tontine) return;
     if (tontine.status !== "pending") {
       return res.status(400).json({ error: true, message: "hybrid_config can only be set on pending tontines" });
     }
@@ -791,10 +923,10 @@ router.post("/tontines/:tontineId/solidarity-claim", async (req, res, next) => {
   try {
     const tontineId = routeParamString(req, "tontineId")!;
     const { amount, reason, urgency = "low" } = req.body;
-    const userId = (req as any).auth?.userId;
+    const userId = req.auth!.userId;
 
-    if (!amount || !reason) {
-      return res.status(400).json({ error: true, message: "amount and reason are required" });
+    if (!amount || !reason || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+      return res.status(400).json({ error: true, message: "a positive amount and a reason are required" });
     }
     if (!["low", "medium", "high"].includes(urgency)) {
       return res.status(400).json({ error: true, message: "urgency must be 'low', 'medium', or 'high'" });
@@ -803,56 +935,93 @@ router.post("/tontines/:tontineId/solidarity-claim", async (req, res, next) => {
     const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
     if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
 
-    const [membership] = await db.select().from(tontineMembersTable)
-      .where(and(eq(tontineMembersTable.tontineId, tontineId), eq(tontineMembersTable.userId, userId ?? "")));
-    if (!membership && userId) {
+    if (!(await isTontineMember(tontineId, userId))) {
       return res.status(403).json({ error: true, message: "You are not a member of this tontine" });
     }
 
-    const reserve    = Number(tontine.solidarityReserve ?? 0);
     const memberCount = Math.max(1, tontine.memberCount);
-    const claimAmt   = Number(amount);
+    const claimAmt   = normalizeAmount(Number(amount));
+    const claimId    = generateId();
 
-    // Auto-approve rules: urgency='high' AND amount <= reserve / member count
-    const autoApprove = urgency === "high" && claimAmt <= (reserve / memberCount);
-    let claimStatus: "pending_admin" | "approved" | "disbursed" = autoApprove ? "approved" : "pending_admin";
+    // Auto-approval is decided and executed under the tontine row lock, inside
+    // the same database transaction as the payout. The reserve is re-read there
+    // and decremented atomically, so parallel claims cannot all pass the check
+    // against the same stale reserve and drain the group's rotation money.
+    //
+    // Fair share: a member's auto-approved claims may never exceed their share
+    // of the reserve (reserve / members), counting what they already took.
+    let claimStatus: "pending_admin" | "approved" | "disbursed" = "pending_admin";
+    let autoApprove = false;
 
-    const [claim] = await db.insert(tontineSolidaryClaimsTable).values({
-      id:          generateId(),
-      tontineId,
-      userId:      userId ?? "anonymous",
-      amount:      String(claimAmt),
-      reason,
-      urgency:     urgency as "low" | "medium" | "high",
-      status:      claimStatus,
-      autoApproved:autoApprove,
-    }).returning();
-
-    // If auto-approved, disburse immediately from pool wallet
-    if (autoApprove && tontine.walletId) {
+    if (urgency === "high" && tontine.walletId) {
       const memberWallets = await db.select().from(walletsTable)
-        .where(and(eq(walletsTable.userId, userId ?? ""), eq(walletsTable.status, "active")));
-      const memberWallet = memberWallets.find(w => w.walletType === "personal") ?? memberWallets[0];
+        .where(and(eq(walletsTable.userId, userId), eq(walletsTable.status, "active")));
+      const memberWallet = memberWallets.find(w => w.currency === tontine.currency && w.walletType === "personal")
+        ?? memberWallets.find(w => w.currency === tontine.currency);
 
-      if (memberWallet && memberWallet.id !== tontine.walletId && reserve >= claimAmt) {
-        await processTransfer({
-          fromWalletId: tontine.walletId,
-          toWalletId:   memberWallet.id,
-          amount:       claimAmt,
-          currency:     tontine.currency,
-          description:  `Solidarity emergency claim – ${reason}`,
-          skipFraudCheck: true,
-        });
-        const newReserve = Math.max(0, reserve - claimAmt);
-        await db.update(tontinesTable)
-          .set({ solidarityReserve: String(newReserve.toFixed(4)), updatedAt: new Date() })
-          .where(eq(tontinesTable.id, tontineId));
-        await db.update(tontineSolidaryClaimsTable)
-          .set({ status: "disbursed", disbursedAt: new Date() })
-          .where(eq(tontineSolidaryClaimsTable.id, claim.id));
-        claimStatus = "disbursed";
+      if (memberWallet && memberWallet.id !== tontine.walletId) {
+        try {
+          await processTransfer({
+            fromWalletId: tontine.walletId,
+            toWalletId:   memberWallet.id,
+            amount:       claimAmt,
+            currency:     tontine.currency,
+            description:  `Solidarity emergency claim – ${reason}`,
+            skipFraudCheck: true,
+            idempotencyKey: `solidarity-claim:${claimId}`,
+            attach: async (t) => {
+              const [fresh] = await t.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId)).for("update");
+              if (!fresh || fresh.status !== "active") throw new AppError(409, "Tontine is not active");
+              const reserve = Number(fresh.solidarityReserve ?? 0);
+              const [taken] = await t.select({ total: sql<number>`COALESCE(SUM(CAST(${tontineSolidaryClaimsTable.amount} AS NUMERIC)), 0)` })
+                .from(tontineSolidaryClaimsTable)
+                .where(and(
+                  eq(tontineSolidaryClaimsTable.tontineId, tontineId),
+                  eq(tontineSolidaryClaimsTable.userId, userId),
+                  eq(tontineSolidaryClaimsTable.autoApproved, true),
+                  eq(tontineSolidaryClaimsTable.status, "disbursed"),
+                ));
+              const alreadyTaken = Number(taken?.total ?? 0);
+              const fairShare = (reserve + alreadyTaken) / memberCount;
+              if (claimAmt > reserve + 1e-9 || alreadyTaken + claimAmt > fairShare + 1e-9) {
+                throw new AppError(409, "SOLIDARITY_SHARE_EXCEEDED");
+              }
+              await t.update(tontinesTable)
+                .set({ solidarityReserve: String((reserve - claimAmt).toFixed(4)), updatedAt: new Date() })
+                .where(eq(tontinesTable.id, tontineId));
+              await t.insert(tontineSolidaryClaimsTable).values({
+                id: claimId, tontineId, userId, amount: String(claimAmt), reason,
+                urgency: urgency as "low" | "medium" | "high",
+                status: "disbursed", autoApproved: true, disbursedAt: new Date(),
+              });
+            },
+          });
+          autoApprove = true;
+          claimStatus = "disbursed";
+          await audit({ action: "tontine.solidarity.claim_disbursed", entity: "tontine", entityId: tontineId,
+            metadata: { claimId, userId, amount: claimAmt, reason } });
+        } catch (err) {
+          // Not eligible for automatic payout (share exhausted, pool short, wallet
+          // frozen, velocity cap…): the claim is queued for the tontine admin instead.
+          const refusal = err instanceof AppError || (err instanceof Error && (err.message === "Insufficient funds" || /Error$/.test(err.name)));
+          if (!refusal) throw err;
+          console.warn(`[solidarity] claim ${claimId} not auto-paid: ${(err as Error).message}`);
+        }
       }
     }
+
+    const [claim] = claimStatus === "disbursed"
+      ? await db.select().from(tontineSolidaryClaimsTable).where(eq(tontineSolidaryClaimsTable.id, claimId))
+      : await db.insert(tontineSolidaryClaimsTable).values({
+          id:          claimId,
+          tontineId,
+          userId,
+          amount:      String(claimAmt),
+          reason,
+          urgency:     urgency as "low" | "medium" | "high",
+          status:      "pending_admin",
+          autoApproved: false,
+        }).returning();
 
     await eventBus.publish("tontine.solidarity.claim_created", {
       tontineId, claimId: claim.id, userId: claim.userId,
@@ -884,8 +1053,8 @@ router.post("/tontines/:tontineId/strategy/targets", async (req, res, next) => {
       return res.status(400).json({ error: true, message: "merchantId, allocatedAmount, purpose required" });
     }
 
-    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
-    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    const tontine = await requireTontineAdmin(req, res, tontineId);
+    if (!tontine) return;
 
     const [merchant] = await db.select().from(merchantsTable).where(eq(merchantsTable.id, merchantId));
     if (!merchant) return res.status(404).json({ error: true, message: "Merchant not found" });
@@ -934,11 +1103,11 @@ router.get("/tontines/:tontineId/strategy/targets", async (req, res, next) => {
   } catch (err) { return next(err); }
 });
 
-router.post("/tontines/:tontineId/strategy/distribute", async (req, res, next) => {
+router.post("/tontines/:tontineId/strategy/distribute", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const tontineId = routeParamString(req, "tontineId")!;
-    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
-    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    const tontine = await requireTontineAdmin(req, res, tontineId);
+    if (!tontine) return;
     if (!tontine.strategyMode) {
       return res.status(400).json({ error: true, message: "This tontine is not in strategy mode. Set strategy_mode=true first." });
     }
@@ -1017,8 +1186,7 @@ router.get("/tontines/:tontineId/strategy/performance", async (req, res, next) =
 router.post("/tontines/:tontineId/ai-assess", async (req, res, next) => {
   try {
     const tontineId = routeParamString(req, "tontineId")!;
-    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
-    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    if (!(await requireTontineAdmin(req, res, tontineId))) return;
 
     const ranked = await computeTontineAIPriority(tontineId);
 
@@ -1072,8 +1240,8 @@ router.post("/tontines/:tontineId/apply-ai-order", async (req, res, next) => {
     const tontineId = routeParamString(req, "tontineId")!;
     const { adminOverride = false } = req.body;
 
-    const [tontine] = await db.select().from(tontinesTable).where(eq(tontinesTable.id, tontineId));
-    if (!tontine) return res.status(404).json({ error: true, message: "Tontine not found" });
+    const tontine = await requireTontineAdmin(req, res, tontineId);
+    if (!tontine) return;
 
     if (tontine.status !== "pending" && !adminOverride) {
       return res.status(400).json({ error: true, message: "AI order can only be applied to pending tontines. Pass adminOverride=true to force." });
@@ -1151,10 +1319,15 @@ router.get("/reputation/:userId/badges", async (req, res, next) => {
 
 router.get("/scheduler/jobs", async (req, res, next) => {
   try {
+    // Optional ?entityId= narrows the page to one tontine's jobs; ?limit= up to 500.
+    const entityId = typeof req.query.entityId === "string" && req.query.entityId ? req.query.entityId : undefined;
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 50));
+    const where = entityId ? eq(schedulerJobsTable.entityId, entityId) : undefined;
     const jobs = await db.select().from(schedulerJobsTable)
+      .where(where)
       .orderBy(desc(schedulerJobsTable.scheduledAt))
-      .limit(50);
-    const [{ total }] = await db.select({ total: count() }).from(schedulerJobsTable);
+      .limit(limit);
+    const [{ total }] = await db.select({ total: count() }).from(schedulerJobsTable).where(where);
     return res.json({ jobs, total: Number(total) });
   } catch (err) { return next(err); }
 });

@@ -11,3 +11,6 @@ export * from "./phase5";
 export * from "./phase6";
 export * from "./phase7";
 export * from "./sre";
+export * from "./admin";
+export * from "./auth";
+export * from "./cashIn";

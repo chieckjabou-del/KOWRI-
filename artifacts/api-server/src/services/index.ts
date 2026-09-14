@@ -94,23 +94,92 @@ eventBus.on("loan.repayment.made", async (event) => {
     { loanId: event.payload.loanId });
 });
 
+// Payload contract: { recipientUserId, payoutAmount, currency?, tontineName?, tontineId, round }
 eventBus.on("tontine.payout.completed", async (event) => {
-  const { recipientId, amount, currency, tontineName, tontineId } = event.payload as any;
+  const p = event.payload as any;
+  const recipientId = p.recipientUserId ?? p.recipientId;
+  const amount = p.payoutAmount ?? p.amount;
   if (!recipientId) return;
   await insertNotification(String(recipientId), "transaction", "Payout reçu !",
-    `Vous avez reçu ${fmtAmount(amount, currency)} de votre tontine ${tontineName ?? ""}`.trim(),
-    { tontineId });
+    `Vous avez reçu ${fmtAmount(amount, p.currency)} de votre tontine ${p.tontineName ?? ""}`.trim(),
+    { tontineId: p.tontineId, round: p.round });
 });
 
+// Payload contract: { collectedUserIds, amount, currency?, tontineName?, tontineId, round, failed }
 eventBus.on("tontine.contributions.collected", async (event) => {
-  const { members, amount, currency, tontineId } = event.payload as any;
-  if (!Array.isArray(members)) return;
+  const p = event.payload as any;
+  const members: string[] = Array.isArray(p.collectedUserIds) ? p.collectedUserIds : Array.isArray(p.members) ? p.members : [];
   await Promise.all(
     members.map((userId: string) =>
       insertNotification(userId, "transaction", "Cotisation collectée",
-        `Votre cotisation de ${fmtAmount(amount, currency)} a été prélevée`, { tontineId })
+        `Votre cotisation de ${fmtAmount(p.amount, p.currency)} a été prélevée${p.tontineName ? ` pour ${p.tontineName}` : ""}`,
+        { tontineId: p.tontineId, round: p.round })
     )
   );
+  const failed: string[] = Array.isArray(p.failed) ? p.failed : [];
+  await Promise.all(
+    failed.map((userId: string) =>
+      insertNotification(userId, "alert", "Cotisation non prélevée",
+        `Votre cotisation de ${fmtAmount(p.amount, p.currency)} n'a pas pu être prélevée. Rechargez votre wallet.`,
+        { tontineId: p.tontineId, round: p.round })
+    )
+  );
+});
+
+eventBus.on("tontine.completed", async (event) => {
+  const { tontineId, memberIds, tontineName } = event.payload as any;
+  if (!Array.isArray(memberIds)) return;
+  await Promise.all(memberIds.map((userId: string) =>
+    insertNotification(userId, "transaction", "Tontine terminée",
+      `La tontine ${tontineName ?? ""} est arrivée à son terme. Merci pour votre participation !`.replace("  ", " "), { tontineId })));
+});
+
+eventBus.on("tontine.cancelled", async (event) => {
+  const { tontineId, tontineName, refunds } = event.payload as any;
+  if (!Array.isArray(refunds)) return;
+  await Promise.all(refunds.map((r: { userId: string; amount: number; currency: string }) =>
+    insertNotification(r.userId, "alert", "Tontine annulée",
+      r.amount > 0
+        ? `La tontine ${tontineName ?? ""} a été annulée. ${fmtAmount(r.amount, r.currency)} vous ont été remboursés.`
+        : `La tontine ${tontineName ?? ""} a été annulée.`,
+      { tontineId })));
+});
+
+eventBus.on("tontine.member.left", async (event) => {
+  const { tontineId, userId, refundAmount, penalty, currency, tontineName } = event.payload as any;
+  if (!userId) return;
+  await insertNotification(String(userId), "transaction", "Départ de la tontine",
+    `Vous avez quitté ${tontineName ?? "la tontine"}. Remboursement : ${fmtAmount(refundAmount, currency)}${penalty > 0 ? ` (pénalité ${fmtAmount(penalty, currency)})` : ""}.`,
+    { tontineId });
+});
+
+eventBus.on("kyc.verified", async (event) => {
+  const { userId, kycLevel } = event.payload as any;
+  if (!userId) return;
+  await insertNotification(String(userId), "alert", "Identité vérifiée",
+    `Votre vérification d'identité est approuvée (niveau ${kycLevel ?? 1}). Vos plafonds ont été relevés.`);
+});
+
+eventBus.on("kyc.rejected", async (event) => {
+  const { userId, rejectionReason } = event.payload as any;
+  if (!userId) return;
+  await insertNotification(String(userId), "alert", "Vérification refusée",
+    `Votre vérification d'identité a été refusée${rejectionReason ? ` : ${rejectionReason}` : ""}. Vous pouvez soumettre un nouveau dossier.`);
+});
+
+eventBus.on("merchant.status.changed", async (event) => {
+  const { userId, to, merchantId } = event.payload as any;
+  if (!userId) return;
+  const title = to === "active" ? "Compte marchand activé" : to === "suspended" ? "Compte marchand suspendu" : "Statut marchand mis à jour";
+  await insertNotification(String(userId), "alert", title, `Votre compte marchand est désormais « ${to} ».`, { merchantId });
+});
+
+eventBus.on("wallet.status.changed", async (event) => {
+  const { userId, to, walletId, reason } = event.payload as any;
+  if (!userId) return;
+  const title = to === "frozen" ? "Wallet gelé" : to === "closed" ? "Wallet fermé" : "Wallet réactivé";
+  await insertNotification(String(userId), "alert", title,
+    `Votre wallet est désormais « ${to} »${reason ? ` — ${reason}` : ""}.`, { walletId });
 });
 
 // ── Missed contribution event handlers ────────────────────────────────────────

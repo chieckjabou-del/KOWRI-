@@ -1,4 +1,4 @@
-import { pgTable, text, jsonb, timestamp, smallint, integer, index } from "drizzle-orm/pg-core";
+import { pgTable, text, jsonb, timestamp, smallint, integer, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -6,11 +6,14 @@ export const idempotencyKeysTable = pgTable("idempotency_keys", {
   id: text("id").primaryKey(),
   key: text("key").notNull(),
   endpoint: text("endpoint").notNull(),
+  // sha256 of the canonical request body the key was first used with.
+  requestHash: text("request_hash"),
   responseBody: jsonb("response_body").notNull(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 }, (t) => [
   index("idem_key_idx").on(t.key),
   index("idem_created_idx").on(t.createdAt),
+  uniqueIndex("idem_key_endpoint_uidx").on(t.key, t.endpoint),
 ]);
 
 export const eventLogTable = pgTable("event_log", {

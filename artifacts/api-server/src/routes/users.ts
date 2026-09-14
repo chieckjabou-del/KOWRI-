@@ -4,32 +4,35 @@ import { usersTable, walletsTable, tontineMembersTable, transactionsTable, kycRe
 import { eq, count, sql, desc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { generateId } from "../lib/id";
-import { createHash } from "crypto";
 import { validateQueryParams, VALID_USER_STATUSES } from "../middleware/validate";
-import { createSession, requireAuth } from "../lib/productAuth";
+import { createSession, revokeOtherUserSessions } from "../lib/productAuth";
+import { hashPin, verifyPin, isLegacyPinHash, isValidPinFormat } from "../lib/pin";
+import { loginRateLimit } from "../lib/loginRateLimit";
+import { authenticate, requireAdmin, requireSelfOrAdmin, requirePermission } from "../middleware/auth";
+import { routeParamString } from "../lib/routeParams";
+import { consumeVerification } from "../lib/phoneVerification";
+import { encryptField } from "../lib/fieldCrypto";
 
 const router = Router();
 type UserRow = InferSelectModel<typeof usersTable>;
 type KycRow = InferSelectModel<typeof kycRecordsTable>;
 
-router.get("/me", async (req, res) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) return res.status(401).json({ error: "Session invalide ou expirée" });
+router.get("/me", authenticate(), async (req, res) => {
   try {
     const users = await db.select({
       id: usersTable.id, phone: usersTable.phone,
       firstName: usersTable.firstName, lastName: usersTable.lastName,
       status: usersTable.status, country: usersTable.country,
       email: usersTable.email,
-    }).from(usersTable).where(eq(usersTable.id, auth.userId)).limit(1);
+    }).from(usersTable).where(eq(usersTable.id, req.auth!.userId)).limit(1);
     if (!users[0]) return res.status(404).json({ error: "Utilisateur introuvable" });
-    return res.json({ user: users[0], sessionType: auth.type });
+    return res.json({ user: users[0], sessionType: req.auth!.type });
   } catch (err) {
     return res.status(500).json({ error: "Erreur serveur" });
   }
 });
 
-router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req, res, next) => {
+router.get("/", requireAdmin, requirePermission("users.read"), validateQueryParams({ status: VALID_USER_STATUSES }), async (req, res, next) => {
   try {
     const page = Number(req.query.page) || 1;
     const limit = Number(req.query.limit) || 20;
@@ -74,16 +77,19 @@ router.get("/", validateQueryParams({ status: VALID_USER_STATUSES }), async (req
 
 router.post("/", async (req, res, next) => {
   try {
-    console.log("REGISTER INPUT:", { phone: req.body?.phone, firstName: req.body?.firstName, hasPin: !!req.body?.pin });
-
     const { phone, email, firstName, lastName, country, pin } = req.body ?? {};
 
     if (!phone || !firstName || !pin) {
       return res.status(400).json({ error: "Bad request", message: "Téléphone, prénom et PIN sont requis" });
     }
+    if (!isValidPinFormat(String(pin))) {
+      return res.status(400).json({ error: "Bad request", message: "Le PIN doit contenir 4 à 6 chiffres" });
+    }
+    // Proof of control of the phone number (POST /auth/otp/request + /verify).
+    const gate = await consumeVerification(String(phone), req.body?.verificationToken);
+    if (gate) return res.status(gate.status).json({ error: true, code: gate.code, message: gate.message });
 
-    const id       = generateId();
-    const pinHash  = createHash("sha256").update(String(pin)).digest("hex");
+    const id = generateId();
 
     // DB schema: last_name and country are NOT NULL — use empty string when not provided
     const [user] = await db.insert(usersTable).values({
@@ -93,18 +99,15 @@ router.post("/", async (req, res, next) => {
       firstName: String(firstName).trim(),
       lastName:  lastName ? String(lastName).trim() : "",
       country:   country  ? String(country) : "",
-      pinHash,
+      pinHash:   hashPin(String(pin)),
       status:   "pending_kyc",
       kycLevel: 0,
     }).returning();
 
-    // Auto-create wallet for new user (walletsTable already imported at top)
     await db.insert(walletsTable).values({
       id:     generateId(),
       userId: user.id,
     }).onConflictDoNothing();
-
-    console.log("REGISTER OK:", user.id);
 
     return res.status(201).json({
       id:        user.id,
@@ -118,7 +121,6 @@ router.post("/", async (req, res, next) => {
       createdAt: user.createdAt,
     });
   } catch (err: any) {
-    console.error("REGISTER ERROR:", err?.message, err?.code, err?.detail);
     if (err?.code === "23505") {
       return res.status(409).json({ error: true, message: "Ce numéro est déjà enregistré" });
     }
@@ -126,19 +128,20 @@ router.post("/", async (req, res, next) => {
   }
 });
 
-router.post("/login", async (req, res) => {
+router.post("/login", loginRateLimit, async (req, res) => {
   const { phone, pin } = req.body;
   if (!phone || !pin) {
     return res.status(400).json({ error: true, message: "phone and pin required" });
   }
   try {
     const [user] = await db.select().from(usersTable).where(eq(usersTable.phone, phone)).limit(1);
-    if (!user) return res.status(401).json({ error: true, message: "Invalid credentials" });
-    const pinHash = createHash("sha256").update(String(pin)).digest("hex");
-    if ((user as any).pinHash !== pinHash) {
+    if (!user || !verifyPin(String(pin), user.pinHash)) {
       return res.status(401).json({ error: true, message: "Invalid credentials" });
     }
-    const session = await createSession(user.id, "wallet");
+    if (isLegacyPinHash(user.pinHash)) {
+      await db.update(usersTable).set({ pinHash: hashPin(String(pin)), updatedAt: new Date() }).where(eq(usersTable.id, user.id));
+    }
+    const session = await createSession(user.id, "wallet", { ipAddress: req.ip });
     return res.json({
       token: session.token,
       expiresAt: session.expiresAt,
@@ -156,9 +159,9 @@ router.post("/login", async (req, res) => {
   }
 });
 
-router.get("/:userId", async (req, res, next) => {
+router.get("/:userId", authenticate(), requireSelfOrAdmin(), async (req, res, next) => {
   try {
-    const { userId } = req.params;
+    const userId = routeParamString(req, "userId")!;
     const [user] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
 
     if (!user) {
@@ -196,15 +199,12 @@ router.get("/:userId", async (req, res, next) => {
 });
 
 // ── KYC: GET latest record for a user ─────────────────────────────────────────
-router.get("/:userId/kyc", async (req, res, next) => {
+router.get("/:userId/kyc", authenticate(), requireSelfOrAdmin(), async (req, res, next) => {
   try {
-    const auth = await requireAuth(req.headers.authorization);
-    if (!auth) { res.status(401).json({ error: true, message: "Unauthorized" }); return; }
-
     const records = await db
       .select()
       .from(kycRecordsTable)
-      .where(eq(kycRecordsTable.userId, req.params.userId))
+      .where(eq(kycRecordsTable.userId, routeParamString(req, "userId")!))
       .orderBy(desc(kycRecordsTable.submittedAt))
       .limit(10);
 
@@ -230,11 +230,8 @@ router.get("/:userId/kyc", async (req, res, next) => {
 });
 
 // ── KYC: POST submit new KYC application ──────────────────────────────────────
-router.post("/:userId/kyc", async (req, res, next) => {
+router.post("/:userId/kyc", authenticate(), requireSelfOrAdmin(), async (req, res, next) => {
   try {
-    const auth = await requireAuth(req.headers.authorization);
-    if (!auth) { res.status(401).json({ error: true, message: "Unauthorized" }); return; }
-
     const {
       kycLevel, documentType, documentNumber,
       fullName, dateOfBirth,
@@ -247,16 +244,17 @@ router.post("/:userId/kyc", async (req, res, next) => {
 
     const [record] = await db.insert(kycRecordsTable).values({
       id:             generateId(),
-      userId:         req.params.userId,
+      userId:         routeParamString(req, "userId")!,
       kycLevel:       Number(kycLevel),
       documentType:   documentType as any,
       documentNumber: documentNumber ?? null,
       fullName:       fullName ?? null,
       dateOfBirth:    dateOfBirth ?? null,
-      documentFront:  documentFront ?? null,
-      selfie:         selfie ?? null,
-      proofOfAddress: proofOfAddress ?? null,
-      secondDocument: secondDocument ?? null,
+      // Identity documents are encrypted at rest (lib/fieldCrypto.ts).
+      documentFront:  encryptField(documentFront),
+      selfie:         encryptField(selfie),
+      proofOfAddress: encryptField(proofOfAddress),
+      secondDocument: encryptField(secondDocument),
       status:         "pending",
     }).returning();
 
@@ -265,31 +263,24 @@ router.post("/:userId/kyc", async (req, res, next) => {
 });
 
 // ── Avatar: PATCH update user avatar ──────────────────────────────────────────
-router.patch("/:userId/avatar", async (req, res, next) => {
+router.patch("/:userId/avatar", authenticate(), requireSelfOrAdmin(), async (req, res, next) => {
   try {
-    const auth = await requireAuth(req.headers.authorization);
-    if (!auth) { res.status(401).json({ error: true, message: "Unauthorized" }); return; }
-
     const { avatarBase64 } = req.body;
     if (!avatarBase64) { res.status(400).json({ error: true, message: "avatarBase64 required" }); return; }
 
     await db
       .update(usersTable)
       .set({ avatarUrl: avatarBase64, updatedAt: new Date() })
-      .where(eq(usersTable.id, req.params.userId));
+      .where(eq(usersTable.id, routeParamString(req, "userId")!));
 
     return res.json({ success: true });
   } catch (err) { return next(err); }
 });
 
 // ── PIN: PATCH update user PIN ───────────────────────────────────────────────
-router.patch("/:userId/pin", async (req, res, next) => {
+router.patch("/:userId/pin", authenticate(), async (req, res, next) => {
   try {
-    const auth = await requireAuth(req.headers.authorization);
-    if (!auth) {
-      return res.status(401).json({ error: true, message: "Unauthorized" });
-    }
-    if (auth.userId !== req.params.userId) {
+    if (req.auth!.userId !== routeParamString(req, "userId")!) {
       return res.status(403).json({ error: true, message: "Forbidden" });
     }
 
@@ -297,30 +288,31 @@ router.patch("/:userId/pin", async (req, res, next) => {
     const oldPinStr = String(oldPin ?? "");
     const newPinStr = String(newPin ?? "");
 
-    if (!/^\d{4}$/.test(oldPinStr) || !/^\d{4}$/.test(newPinStr)) {
-      return res.status(400).json({ error: true, message: "Ancien et nouveau PIN (4 chiffres) requis" });
+    if (!isValidPinFormat(oldPinStr) || !isValidPinFormat(newPinStr)) {
+      return res.status(400).json({ error: true, message: "Ancien et nouveau PIN (4 à 6 chiffres) requis" });
     }
     if (oldPinStr === newPinStr) {
       return res.status(400).json({ error: true, message: "Le nouveau PIN doit être différent" });
     }
 
-    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, req.params.userId)).limit(1);
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.id, routeParamString(req, "userId")!)).limit(1);
     if (!user) {
       return res.status(404).json({ error: true, message: "Utilisateur introuvable" });
     }
 
-    const oldHash = createHash("sha256").update(oldPinStr).digest("hex");
-    if ((user as any).pinHash !== oldHash) {
+    if (!verifyPin(oldPinStr, user.pinHash)) {
       return res.status(401).json({ error: true, message: "Ancien PIN incorrect" });
     }
 
-    const newHash = createHash("sha256").update(newPinStr).digest("hex");
     await db
       .update(usersTable)
-      .set({ pinHash: newHash, updatedAt: new Date() })
-      .where(eq(usersTable.id, req.params.userId));
+      .set({ pinHash: hashPin(newPinStr), updatedAt: new Date() })
+      .where(eq(usersTable.id, routeParamString(req, "userId")!));
 
-    return res.json({ success: true, message: "PIN mis à jour" });
+    // A stolen token must die with the old PIN: every other session is closed.
+    const revoked = await revokeOtherUserSessions(user.id, req.auth!.sessionId);
+
+    return res.json({ success: true, message: "PIN mis à jour", otherSessionsRevoked: revoked });
   } catch (err) {
     return next(err);
   }

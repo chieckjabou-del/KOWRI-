@@ -8,7 +8,11 @@ import {
   type FailureType,
 } from "../lib/failureSimulator";
 
+import { requireAdmin, gateWrites } from "../middleware/auth";
+
 const router = Router();
+router.use(requireAdmin);
+router.use(gateWrites("system.control"));
 
 router.get("/scenarios", (_req, res) => {
   return res.json({

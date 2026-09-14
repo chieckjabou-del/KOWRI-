@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, CheckCircle2 } from "lucide-react";
+import { Loader2, CheckCircle2, Clock } from "lucide-react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { apiFetch, formatXOF, generateIdempotencyKey } from "@/lib/api";
 import { TopBar } from "@/components/TopBar";
 import { BottomNav } from "@/components/BottomNav";
 
-type Step = "form" | "confirm" | "success";
+// "pending": the API accepted the transfer but the ledger has not settled it.
+// It is shown as such, never as a success.
+type Step = "form" | "confirm" | "success" | "pending";
 
 export default function Send() {
   const { token, user } = useAuth();
@@ -20,6 +22,7 @@ export default function Send() {
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
   const [txId, setTxId] = useState<string | null>(null);
+  const [txStatus, setTxStatus] = useState<string>("completed");
 
   const walletsQ = useQuery({
     queryKey: ["wallets", user?.id],
@@ -43,8 +46,11 @@ export default function Send() {
       return data;
     },
     onSuccess: (data) => {
-      setTxId(data?.transactionId ?? data?.id ?? null);
-      setStep("success");
+      const tx = data?.transaction ?? data;
+      const status = String(tx?.status ?? "completed");
+      setTxId(tx?.reference ?? tx?.id ?? data?.transactionId ?? null);
+      setTxStatus(status);
+      setStep(status === "completed" ? "success" : "pending");
       qc.invalidateQueries({ queryKey: ["wallets", user?.id] });
       qc.invalidateQueries({ queryKey: ["transactions"] });
     },
@@ -67,17 +73,23 @@ export default function Send() {
 
   return (
     <div className="min-h-screen" style={{ background: "#FAFAF8" }}>
-      {step === "success" ? (
+      {step === "success" || step === "pending" ? (
         <div className="flex flex-col items-center justify-center min-h-screen pb-20 px-6">
           <div
             className="w-20 h-20 rounded-full flex items-center justify-center mb-6"
-            style={{ background: "#F0FDF4" }}
+            style={{ background: step === "success" ? "#F0FDF4" : "#FFFBEB" }}
           >
-            <CheckCircle2 size={40} style={{ color: "#1A6B32" }} />
+            {step === "success"
+              ? <CheckCircle2 size={40} style={{ color: "#1A6B32" }} />
+              : <Clock size={40} style={{ color: "#D97706" }} />}
           </div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Envoi réussi !</h2>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            {step === "success" ? "Envoi réussi !" : "Transfert en cours"}
+          </h2>
           <p className="text-gray-500 text-center text-sm mb-2">
-            {formatXOF(amountNum)} envoyés à <strong>{recipientPhone}</strong>
+            {step === "success"
+              ? <>{formatXOF(amountNum)} envoyés à <strong>{recipientPhone}</strong></>
+              : <>{formatXOF(amountNum)} vers <strong>{recipientPhone}</strong> : statut « {txStatus} ». Le montant n'est pas confirmé tant que la transaction n'est pas terminée ; vérifiez l'historique.</>}
           </p>
           {txId && <p className="text-xs text-gray-400 mb-8">Réf: {txId}</p>}
           <button

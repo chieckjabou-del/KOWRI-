@@ -4,8 +4,11 @@ import { patchTontineMembers } from "../lib/seed";
 import { audit } from "../lib/auditLogger";
 import { generateId } from "../lib/id";
 import { db } from "@workspace/db";
-import { feeConfigTable, type FeeOperationType, type FeeUserTier } from "@workspace/db";
+import { feeConfigTable, merchantsTable, walletsTable, type FeeOperationType, type FeeUserTier } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { getWalletBalance } from "../lib/walletService";
+import { routeParamString } from "../lib/routeParams";
+import { eventBus } from "../lib/eventBus";
 import {
   getAllSwitches,
   getSwitch,
@@ -13,11 +16,48 @@ import {
   forceOff,
   manualLift,
   autoRecover,
+  isKillSwitchName,
   type KillSwitchName,
 } from "../lib/killSwitch";
 import { rollback } from "../lib/actionExecutor";
+import { sendAlert, alertingStats } from "../lib/alerting";
+
+import { requireAdmin, requirePermission } from "../middleware/auth";
+import { listTreasuryWallets } from "../lib/treasury";
+import { runFinancialReconciliation } from "../lib/financialReconciliation";
+import { recoverStuckFloatTransfers } from "../lib/liquidityEngine";
 
 const router = Router();
+router.use(requireAdmin);
+
+// An unknown kill switch name is a client error, never a crash.
+router.param("name", (req, res, next, name) => {
+  if (!isKillSwitchName(String(name))) { res.status(404).json({ error: true, message: `Unknown kill switch: ${name}` }); return; }
+  next();
+});
+
+// Platform treasury wallets (loan capital). Funded through the cash-in
+// maker-checker (POST /admin/cash-in, then approval by a second operator).
+router.get("/treasury", async (_req, res, next) => {
+  try {
+    return res.json({ wallets: await listTreasuryWallets() });
+  } catch (err) { return next(err); }
+});
+
+// Full financial reconciliation: money supply per currency, ledger invariants,
+// stuck operations. Read-only; anomalies are listed for the operator.
+router.get("/reconciliation/report", async (_req, res, next) => {
+  try {
+    return res.json(await runFinancialReconciliation());
+  } catch (err) { return next(err); }
+});
+
+// Resolves float transfers left PENDING by a crash (see liquidityEngine).
+router.post("/reconciliation/recover-float", requirePermission("ledger.write"), async (_req, res, next) => {
+  try {
+    return res.json(await recoverStuckFloatTransfers());
+  } catch (err) { return next(err); }
+});
 
 // ── Reconciliation ────────────────────────────────────────────────────────────
 
@@ -85,8 +125,12 @@ router.get("/reconcile", async (req, res, next) => {
   }
 });
 
-router.post("/patch-tontines", async (req, res, next) => {
+router.post("/patch-tontines", requirePermission("system.control"), async (req, res, next) => {
   try {
+    // Demo-fixture repair: does not exist where demo fixtures do not.
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_DEMO_SEED !== "true") {
+      return res.status(404).json({ error: true, message: `Route ${req.method} ${req.originalUrl} not found` });
+    }
     const result = await patchTontineMembers();
     await audit({
       action: "admin.patch_tontines",
@@ -95,6 +139,90 @@ router.post("/patch-tontines", async (req, res, next) => {
       metadata: result,
     });
     return res.json(result);
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── Merchant onboarding ───────────────────────────────────────────────────────
+// PATCH /admin/merchants/:merchantId/status — approve, suspend or reset a merchant
+
+const MERCHANT_STATUSES = new Set(["active", "suspended", "pending_approval"]);
+
+router.patch("/merchants/:merchantId/status", requirePermission("merchants.manage"), async (req, res, next) => {
+  try {
+    const merchantId = routeParamString(req, "merchantId")!;
+    const { status, reason, operator = "admin" } = req.body ?? {};
+    if (!MERCHANT_STATUSES.has(status)) {
+      return res.status(400).json({ error: `status must be one of: ${[...MERCHANT_STATUSES].join(", ")}` });
+    }
+
+    const [existing] = await db.select().from(merchantsTable).where(eq(merchantsTable.id, merchantId));
+    if (!existing) return res.status(404).json({ error: "Merchant not found" });
+    if (existing.status === status) return res.json({ merchant: existing, changed: false });
+
+    const [merchant] = await db.update(merchantsTable)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(merchantsTable.id, merchantId))
+      .returning();
+
+    await audit({
+      action: "merchant.status_changed",
+      entity: "merchant",
+      entityId: merchantId,
+      actor: String(operator),
+      metadata: { from: existing.status, to: status, reason: reason ?? null, userId: existing.userId },
+    });
+    await eventBus.publish("merchant.status.changed", { merchantId, userId: existing.userId, from: existing.status, to: status, reason: reason ?? null });
+
+    return res.json({ merchant: { ...merchant, totalRevenue: Number(merchant.totalRevenue) }, changed: true });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// ── Wallet risk actions ───────────────────────────────────────────────────────
+// PATCH /admin/wallets/:walletId/status — freeze (no debits), reactivate, or close (requires zero balance)
+
+const WALLET_STATUSES = new Set(["active", "frozen", "closed"]);
+
+router.patch("/wallets/:walletId/status", requirePermission("wallets.manage"), async (req, res, next) => {
+  try {
+    const walletId = routeParamString(req, "walletId")!;
+    const { status, reason, operator = "admin" } = req.body ?? {};
+    if (!WALLET_STATUSES.has(status)) {
+      return res.status(400).json({ error: `status must be one of: ${[...WALLET_STATUSES].join(", ")}` });
+    }
+
+    const [existing] = await db.select().from(walletsTable).where(eq(walletsTable.id, walletId));
+    if (!existing) return res.status(404).json({ error: "Wallet not found" });
+    if (existing.status === "closed" && status !== "closed") {
+      return res.status(409).json({ error: "A closed wallet cannot be reopened" });
+    }
+    if (existing.status === status) return res.json({ wallet: existing, changed: false });
+
+    if (status === "closed") {
+      const balance = await getWalletBalance(walletId);
+      if (balance > 0) {
+        return res.status(409).json({ error: `Wallet still holds ${balance} ${existing.currency}; move the funds out before closing` });
+      }
+    }
+
+    const [wallet] = await db.update(walletsTable)
+      .set({ status, updatedAt: new Date() })
+      .where(eq(walletsTable.id, walletId))
+      .returning();
+
+    await audit({
+      action: "wallet.status_changed",
+      entity: "wallet",
+      entityId: walletId,
+      actor: String(operator),
+      metadata: { from: existing.status, to: status, reason: reason ?? null, userId: existing.userId },
+    });
+    await eventBus.publish("wallet.status.changed", { walletId, userId: existing.userId, from: existing.status, to: status, reason: reason ?? null });
+
+    return res.json({ wallet: { ...wallet, balance: Number(wallet.balance), availableBalance: Number(wallet.availableBalance) }, changed: true });
   } catch (err) {
     return next(err);
   }
@@ -114,6 +242,24 @@ router.get("/kill-switches", (_req, res) => {
   return res.json({ switches: getAllSwitches() });
 });
 
+// ── Alerting ──────────────────────────────────────────────────────────────────
+// GET  /admin/alerts/status — is the outbound channel configured, delivery counters
+// POST /admin/alerts/test   — send a signed test alert (proves the channel end to end)
+router.get("/alerts/status", (_req, res) => {
+  return res.json(alertingStats());
+});
+
+router.post("/alerts/test", requirePermission("system.control"), async (req, res) => {
+  const who = req.admin?.email ?? "admin";
+  const delivered = await sendAlert({
+    severity: "info", type: "alert.test",
+    message: `Test alert requested by ${who}`,
+    data: { requestedBy: who, note: typeof req.body?.note === "string" ? req.body.note.slice(0, 200) : undefined },
+  });
+  await audit({ action: "alerts.test", entity: "system", entityId: "alerting", metadata: { delivered, by: who } });
+  return res.status(delivered ? 200 : 503).json({ delivered, ...alertingStats() });
+});
+
 router.get("/kill-switches/:name", (req, res) => {
   const name = req.params.name as KillSwitchName;
   try {
@@ -123,7 +269,7 @@ router.get("/kill-switches/:name", (req, res) => {
   }
 });
 
-router.post("/kill-switches/:name/fire", (req, res) => {
+router.post("/kill-switches/:name/fire", requirePermission("system.control"), (req, res) => {
   const name     = req.params.name as KillSwitchName;
   const operator = (req.body?.operator as string) ?? "admin";
   const reason   = (req.body?.reason   as string) ?? "manual fire";
@@ -132,7 +278,7 @@ router.post("/kill-switches/:name/fire", (req, res) => {
   return res.json({ switch: name, state: getSwitch(name).state, action: "fired", by: operator });
 });
 
-router.post("/kill-switches/:name/force", (req, res) => {
+router.post("/kill-switches/:name/force", requirePermission("system.control"), (req, res) => {
   const name     = req.params.name as KillSwitchName;
   const operator = (req.body?.operator as string) ?? "admin";
   const reason   = (req.body?.reason   as string) ?? "manual force-off";
@@ -141,7 +287,7 @@ router.post("/kill-switches/:name/force", (req, res) => {
   return res.json({ switch: name, state: getSwitch(name).state, action: "forced_off", by: operator });
 });
 
-router.post("/kill-switches/:name/lift", (req, res) => {
+router.post("/kill-switches/:name/lift", requirePermission("system.control"), (req, res) => {
   const name     = req.params.name as KillSwitchName;
   const operator = (req.body?.operator as string) ?? "admin";
 
@@ -149,7 +295,7 @@ router.post("/kill-switches/:name/lift", (req, res) => {
   return res.json({ switch: name, state: getSwitch(name).state, action: "lifted", by: operator });
 });
 
-router.post("/kill-switches/:name/recover", (req, res) => {
+router.post("/kill-switches/:name/recover", requirePermission("system.control"), (req, res) => {
   const name = req.params.name as KillSwitchName;
 
   const sw = getSwitch(name);
@@ -165,7 +311,7 @@ router.post("/kill-switches/:name/recover", (req, res) => {
   return res.json({ switch: name, state: getSwitch(name).state, action: "recovered" });
 });
 
-router.post("/kill-switches/:name/rollback", (req, res) => {
+router.post("/kill-switches/:name/rollback", requirePermission("system.control"), (req, res) => {
   const name     = req.params.name as KillSwitchName;
   const operator = (req.body?.operator as string) ?? "admin";
 
@@ -188,7 +334,7 @@ router.get("/fees", async (_req, res, next) => {
   }
 });
 
-router.post("/fees", async (req, res, next) => {
+router.post("/fees", requirePermission("system.control"), async (req, res, next) => {
   try {
     const {
       operationType,
@@ -234,9 +380,9 @@ router.post("/fees", async (req, res, next) => {
   }
 });
 
-router.patch("/fees/:id", async (req, res, next) => {
+router.patch("/fees/:id", requirePermission("system.control"), async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const id = routeParamString(req, "id")!;
     const {
       feeRateBps,
       minAmount,
@@ -278,9 +424,9 @@ router.patch("/fees/:id", async (req, res, next) => {
   }
 });
 
-router.delete("/fees/:id", async (req, res, next) => {
+router.delete("/fees/:id", requirePermission("system.control"), async (req, res, next) => {
   try {
-    const { id } = req.params;
+    const id = routeParamString(req, "id")!;
 
     // Soft-delete only — fee rules are never hard-deleted (audit trail)
     const existing = await db.select({ id: feeConfigTable.id }).from(feeConfigTable).where(eq(feeConfigTable.id, id));

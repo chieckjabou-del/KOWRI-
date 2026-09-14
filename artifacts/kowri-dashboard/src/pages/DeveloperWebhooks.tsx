@@ -61,7 +61,7 @@ export default function DeveloperWebhooks() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["dev-webhooks"],
-    queryFn: () => devApiFetch<WebhookRow[]>("/webhooks"),
+    queryFn: () => devApiFetch<WebhookRow[]>("/developer/webhooks", session?.token),
   });
 
   const webhooks = Array.isArray(data) ? data : [];
@@ -87,7 +87,7 @@ export default function DeveloperWebhooks() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => devApiFetch(`/webhooks/${id}`, session?.token, { method: "DELETE" }),
+    mutationFn: (id: string) => devApiFetch(`/developer/webhooks/${id}`, session?.token, { method: "DELETE" }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["dev-webhooks"] });
       toast({ title: "Webhook supprimé" });

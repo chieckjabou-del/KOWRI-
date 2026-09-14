@@ -18,6 +18,7 @@ import {
 }                        from "@workspace/db";
 import { eq, and, sql, desc, gte, or } from "drizzle-orm";
 import { generateId }    from "../lib/id";
+import { routeParamString } from "../lib/routeParams";
 import {
   checkLiquidity,
   computeCommission,
@@ -33,8 +34,27 @@ import {
   createPendingReconciliation,
   checkAchievements,
 }                        from "../lib/liquidityEngine";
+import { authenticate, isAdminRequest, requirePermission } from "../middleware/auth";
+import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
+import type { Request, Response, NextFunction } from "express";
 
 const router = Router();
+
+// Every agent route needs a session (agent's own product session, or an operator).
+router.use(authenticate());
+
+// An agent is operated by the user it is linked to; operators may act on any agent.
+// Network-wide views and administrative actions are operator-only (see below).
+async function requireAgentAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const agent = await db.select({ id: agentsTable.id, userId: agentsTable.userId })
+      .from(agentsTable).where(eq(agentsTable.id, String(routeParamString(req, "id")!))).limit(1).then(r => r[0] ?? null);
+    if (!agent) { res.status(404).json({ error: "Agent not found" }); return; }
+    if (isAdminRequest(req)) { next(); return; }
+    if (agent.userId && req.auth && agent.userId === req.auth.userId) { next(); return; }
+    res.status(403).json({ error: "You do not operate this agent" });
+  } catch (err) { next(err); }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -46,7 +66,7 @@ function cashStatus(cash: number, min: number): "OK" | "WARNING" | "CRITICAL" {
 
 // ── GET /agents/zones ─────────────────────────────────────────────────────────
 // Must be registered BEFORE /:id to avoid "zones" being treated as an id.
-router.get("/zones", async (_req, res, next) => {
+router.get("/zones", requirePermission("wallets.manage"), async (_req, res, next) => {
   try {
     const agents = await db.select().from(agentsTable).where(eq(agentsTable.status, "ACTIVE"));
 
@@ -102,25 +122,23 @@ router.get("/zones", async (_req, res, next) => {
 
 // ── POST /agents ───────────────────────────────────────────────────────────────
 // Register a new agent + auto-create linked KOWRI wallet + agent_wallet row.
-router.post("/", async (req, res, next) => {
+router.post("/", requirePermission("wallets.manage"), async (req, res, next) => {
   try {
     const { userId, name, type, phone, zone, parentAgentId } = req.body as {
       userId: string; name: string; type: "AGENT" | "SUPER_AGENT" | "MASTER";
       phone: string; zone: string; parentAgentId?: string;
     };
 
-    if (!name || !type || !phone || !zone) {
-      return res.status(400).json({ error: "name, type, phone, zone are required" });
+    if (!userId || !name || !type || !phone || !zone) {
+      return res.status(400).json({ error: "userId, name, type, phone, zone are required" });
     }
     if (!["AGENT", "SUPER_AGENT", "MASTER"].includes(type)) {
       return res.status(400).json({ error: "Invalid type" });
     }
 
-    // Validate userId exists in users table (wallet FK requires this)
-    if (userId) {
-      const user = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.id, userId)).limit(1);
-      if (user.length === 0) return res.status(400).json({ error: "userId not found in users table" });
-    }
+    // The linked wallet belongs to the operating user (FK on wallets.user_id).
+    const user = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.id, userId)).limit(1);
+    if (user.length === 0) return res.status(400).json({ error: "userId not found in users table" });
 
     const agentId  = generateId();
     const walletId = generateId();
@@ -133,7 +151,7 @@ router.post("/", async (req, res, next) => {
     // Create linked KOWRI wallet (merchant type)
     await db.insert(walletsTable).values({
       id:               walletId,
-      userId:           userId ?? agentId,
+      userId,
       currency:         "XOF",
       walletType:       "merchant",
       balance:          "0",
@@ -144,7 +162,7 @@ router.post("/", async (req, res, next) => {
     // Create agent record
     await db.insert(agentsTable).values({
       id:            agentId,
-      userId:        userId ?? null,
+      userId,
       name,
       type,
       phone,
@@ -178,9 +196,12 @@ router.post("/", async (req, res, next) => {
 // List agents with optional filters and liquidity summary.
 router.get("/", async (req, res, next) => {
   try {
-    const { zone, type, status, userId, limit: lim, offset: off } = req.query as Record<string, string>;
+    const { zone, type, status, userId: requestedUserId, limit: lim, offset: off } = req.query as Record<string, string>;
     const limit  = Math.min(Number(lim) || 50, 200);
     const offset = Number(off) || 0;
+
+    // A user only ever sees the agents they operate; the network view is for operators.
+    const userId = isAdminRequest(req) ? requestedUserId : req.auth!.userId;
 
     let query = db.select().from(agentsTable) as any;
     const conditions: any[] = [];
@@ -222,9 +243,9 @@ router.get("/", async (req, res, next) => {
 });
 
 // ── GET /agents/:id ─────────────────────────────────────────────────────────
-router.get("/:id", async (req, res, next) => {
+router.get("/:id", requireAgentAccess, async (req, res, next) => {
   try {
-    const agent = await db.select().from(agentsTable).where(eq(agentsTable.id, req.params.id)).limit(1).then(r => r[0] ?? null);
+    const agent = await db.select().from(agentsTable).where(eq(agentsTable.id, routeParamString(req, "id")!)).limit(1).then(r => r[0] ?? null);
     if (!agent) return res.status(404).json({ error: "Agent not found" });
 
     const [wallet, alerts] = await Promise.all([
@@ -240,9 +261,9 @@ router.get("/:id", async (req, res, next) => {
 });
 
 // ── GET /agents/:id/liquidity ─────────────────────────────────────────────────
-router.get("/:id/liquidity", async (req, res, next) => {
+router.get("/:id/liquidity", requireAgentAccess, async (req, res, next) => {
   try {
-    const agentId = req.params.id;
+    const agentId = routeParamString(req, "id")!;
     const agent   = await db.select().from(agentsTable).where(eq(agentsTable.id, agentId)).limit(1).then(r => r[0] ?? null);
     if (!agent) return res.status(404).json({ error: "Agent not found" });
 
@@ -292,32 +313,32 @@ router.get("/:id/liquidity", async (req, res, next) => {
 });
 
 // ── GET /agents/:id/alerts ────────────────────────────────────────────────────
-router.get("/:id/alerts", async (req, res, next) => {
+router.get("/:id/alerts", requireAgentAccess, async (req, res, next) => {
   try {
     const alerts = await db.select()
       .from(liquidityAlertsTable)
-      .where(and(eq(liquidityAlertsTable.agentId, req.params.id), eq(liquidityAlertsTable.resolved, false)))
+      .where(and(eq(liquidityAlertsTable.agentId, routeParamString(req, "id")!), eq(liquidityAlertsTable.resolved, false)))
       .orderBy(desc(liquidityAlertsTable.level), desc(liquidityAlertsTable.createdAt));
     return res.json({ alerts, count: alerts.length });
   } catch (err) { return next(err); }
 });
 
 // ── PATCH /agents/:id/alerts/:alertId/resolve ─────────────────────────────────
-router.patch("/:id/alerts/:alertId/resolve", async (req, res, next) => {
+router.patch("/:id/alerts/:alertId/resolve", requireAgentAccess, async (req, res, next) => {
   try {
     await db.update(liquidityAlertsTable)
       .set({ resolved: true, resolvedAt: new Date() })
-      .where(and(eq(liquidityAlertsTable.id, req.params.alertId), eq(liquidityAlertsTable.agentId, req.params.id)));
+      .where(and(eq(liquidityAlertsTable.id, routeParamString(req, "alertId")!), eq(liquidityAlertsTable.agentId, routeParamString(req, "id")!)));
     return res.json({ ok: true });
   } catch (err) { return next(err); }
 });
 
 // ── POST /agents/:id/liquidity-transfer ───────────────────────────────────────
-router.post("/:id/liquidity-transfer", async (req, res, next) => {
+// Idempotency goes through the shared middleware (per-user reservation in the
+// idempotency_keys table) instead of a text match on the transfer's note.
+router.post("/:id/liquidity-transfer", requireAgentAccess, requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const idempKey = req.headers["idempotency-key"] as string;
-    if (!idempKey) return res.status(400).json({ error: "Idempotency-Key header required" });
-
+    const fromAgentId = routeParamString(req, "id")!;
     const { toAgentId, amount, type: txType } = req.body as {
       toAgentId: string; amount: number; type: "FLOAT" | "CASH";
     };
@@ -325,46 +346,47 @@ router.post("/:id/liquidity-transfer", async (req, res, next) => {
     if (!toAgentId || !amount || amount <= 0) {
       return res.status(400).json({ error: "toAgentId and amount > 0 required" });
     }
+    if (toAgentId === fromAgentId) {
+      return res.status(400).json({ error: "Cannot transfer to the same agent" });
+    }
+    const [target] = await db.select({ id: agentsTable.id }).from(agentsTable).where(eq(agentsTable.id, toAgentId)).limit(1);
+    if (!target) return res.status(404).json({ error: "Target agent not found" });
 
-    // Idempotency check
-    const existing = await db.select()
-      .from(liquidityTransfersTable)
-      .where(eq(liquidityTransfersTable.note, `idempkey:${idempKey}`))
-      .limit(1);
-    if (existing.length > 0) return res.json({ transfer: existing[0], idempotent: true });
-
+    let transferId: string;
     if (txType === "FLOAT") {
-      await executeFloatTransfer(req.params.id, toAgentId, amount);
+      transferId = await executeFloatTransfer(fromAgentId, toAgentId, amount, `${req.auth!.userId}:${req.idempotencyKey}`);
     } else {
       // CASH transfers are manually recorded (physical handoff)
+      transferId = generateId();
       await db.insert(liquidityTransfersTable).values({
-        id:          generateId(),
-        fromAgentId: req.params.id,
+        id:          transferId,
+        fromAgentId,
         toAgentId,
         amount:      String(amount),
         type:        "CASH",
         status:      "COMPLETED",
         initiatedBy: "agent",
-        note:        `idempkey:${idempKey}`,
+        note:        "Cash handoff recorded by agent",
         completedAt: new Date(),
       });
     }
 
     const transfer = await db.select().from(liquidityTransfersTable)
-      .where(eq(liquidityTransfersTable.note, `idempkey:${idempKey}`))
-      .limit(1).then(r => r[0] ?? null);
+      .where(eq(liquidityTransfersTable.id, transferId)).limit(1).then(r => r[0] ?? null);
 
-    return res.status(201).json({ transfer, ok: true });
+    const body = { transfer, ok: true };
+    await req.saveIdempotentResponse?.(body);
+    return res.status(201).json(body);
   } catch (err) { return next(err); }
 });
 
 // ── GET /agents/:id/commissions ───────────────────────────────────────────────
-router.get("/:id/commissions", async (req, res, next) => {
+router.get("/:id/commissions", requireAgentAccess, async (req, res, next) => {
   try {
     const { status, from, to, limit: lim } = req.query as Record<string, string>;
     const limit = Math.min(Number(lim) || 50, 200);
 
-    const conditions: any[] = [eq(agentCommissionsTable.agentId, req.params.id)];
+    const conditions: any[] = [eq(agentCommissionsTable.agentId, routeParamString(req, "id")!)];
     if (status) conditions.push(eq(agentCommissionsTable.status, status));
     if (from)   conditions.push(gte(agentCommissionsTable.createdAt, new Date(from)));
 
@@ -383,7 +405,7 @@ router.get("/:id/commissions", async (req, res, next) => {
         today:           sql<number>`COALESCE(SUM(CAST(agent_share AS NUMERIC)) FILTER (WHERE created_at >= ${todayMidnight}), 0)`,
       })
       .from(agentCommissionsTable)
-      .where(eq(agentCommissionsTable.agentId, req.params.id)),
+      .where(eq(agentCommissionsTable.agentId, routeParamString(req, "id")!)),
     ]);
 
     return res.json({
@@ -400,7 +422,7 @@ router.get("/:id/commissions", async (req, res, next) => {
 });
 
 // ── POST /agents/:id/cash-update ──────────────────────────────────────────────
-router.post("/:id/cash-update", async (req, res, next) => {
+router.post("/:id/cash-update", requireAgentAccess, async (req, res, next) => {
   try {
     const { cashBalance } = req.body as { cashBalance: number };
     if (cashBalance == null || cashBalance < 0) {
@@ -409,10 +431,10 @@ router.post("/:id/cash-update", async (req, res, next) => {
 
     await db.update(agentWalletsTable)
       .set({ cashBalance: String(cashBalance), updatedAt: new Date() })
-      .where(eq(agentWalletsTable.agentId, req.params.id));
+      .where(eq(agentWalletsTable.agentId, routeParamString(req, "id")!));
 
     // Auto-trigger liquidity check
-    const liquidity = await checkLiquidity(req.params.id);
+    const liquidity = await checkLiquidity(routeParamString(req, "id")!);
 
     return res.json({ ok: true, cashBalance, liquidity });
   } catch (err) { return next(err); }
@@ -420,7 +442,7 @@ router.post("/:id/cash-update", async (req, res, next) => {
 
 // ── POST /liquidity/rebalance ─────────────────────────────────────────────────
 // Mounts as /agents/liquidity/rebalance (the router is at /api/agents)
-router.post("/liquidity/rebalance", async (req, res, next) => {
+router.post("/liquidity/rebalance", requirePermission("wallets.manage"), async (req, res, next) => {
   try {
     await runLiquidityMonitor();
     return res.json({ ok: true, message: "Zone rebalance analysis complete — alerts created where needed" });
@@ -430,7 +452,7 @@ router.post("/liquidity/rebalance", async (req, res, next) => {
 // ── BLOCK 1: Trust Score + Withdrawal Approval ────────────────────────────────
 
 // POST /agents/:id/anomalies — record a new anomaly
-router.post("/:id/anomalies", async (req, res, next) => {
+router.post("/:id/anomalies", requirePermission("aml.review"), async (req, res, next) => {
   try {
     const { type, severity, description, evidence } = req.body as {
       type:        "CASH_MISMATCH" | "RAPID_WITHDRAWALS" | "LARGE_ROUND_AMOUNTS" | "CLIENT_COMPLAINT" | "RECONCILIATION_FAIL" | "COLLUSION_PATTERN";
@@ -441,61 +463,61 @@ router.post("/:id/anomalies", async (req, res, next) => {
     if (!type || !severity || !description) {
       return res.status(400).json({ error: "type, severity, description required" });
     }
-    const anomalyId = await createAnomaly(req.params.id, type, severity, description, evidence);
+    const anomalyId = await createAnomaly(routeParamString(req, "id")!, type, severity, description, evidence);
     return res.status(201).json({ anomalyId, trustUpdated: true });
   } catch (err) { return next(err); }
 });
 
 // GET /agents/:id/anomalies — list agent anomalies
-router.get("/:id/anomalies", async (req, res, next) => {
+router.get("/:id/anomalies", requireAgentAccess, async (req, res, next) => {
   try {
     const anomalies = await db
       .select()
       .from(agentAnomaliesTable)
-      .where(eq(agentAnomaliesTable.agentId, req.params.id))
+      .where(eq(agentAnomaliesTable.agentId, routeParamString(req, "id")!))
       .orderBy(desc(agentAnomaliesTable.createdAt));
     return res.json({ anomalies, count: anomalies.length });
   } catch (err) { return next(err); }
 });
 
 // POST /agents/:id/withdrawal-approval — generate approval code for large withdrawal
-router.post("/:id/withdrawal-approval", async (req, res, next) => {
+router.post("/:id/withdrawal-approval", requireAgentAccess, async (req, res, next) => {
   try {
     const { transactionId, supervisorPin } = req.body as { transactionId: string; supervisorPin?: string };
     if (!transactionId) return res.status(400).json({ error: "transactionId required" });
 
     const agent = await db.select({ trustLevel: agentsTable.trustLevel })
-      .from(agentsTable).where(eq(agentsTable.id, req.params.id)).limit(1).then(r => r[0]);
+      .from(agentsTable).where(eq(agentsTable.id, routeParamString(req, "id")!)).limit(1).then(r => r[0]);
     if (!agent) return res.status(404).json({ error: "Agent not found" });
     if (agent.trustLevel === "BLOCKED") {
       return res.status(403).json({ error: "Agent bloqué — approbation refusée" });
     }
 
-    const result = await createWithdrawalApproval(req.params.id, transactionId, supervisorPin ? "supervisor" : undefined);
+    const result = await createWithdrawalApproval(routeParamString(req, "id")!, transactionId, supervisorPin ? "supervisor" : undefined);
     return res.json(result);
   } catch (err) { return next(err); }
 });
 
 // POST /agents/:id/withdrawal-approval/validate — check a code before executing withdrawal
-router.post("/:id/withdrawal-approval/validate", async (req, res, next) => {
+router.post("/:id/withdrawal-approval/validate", requireAgentAccess, async (req, res, next) => {
   try {
     const { transactionId, approvalCode } = req.body as { transactionId: string; approvalCode: string };
     if (!transactionId || !approvalCode) {
       return res.status(400).json({ error: "transactionId and approvalCode required" });
     }
-    const result = await checkLargeWithdrawalApproval(req.params.id, transactionId, approvalCode);
+    const result = await checkLargeWithdrawalApproval(routeParamString(req, "id")!, transactionId, approvalCode);
     if (!result.approved) return res.status(403).json({ error: result.reason });
     return res.json({ approved: true });
   } catch (err) { return next(err); }
 });
 
 // PATCH /agents/:id/trust-score/refresh — recompute trust score
-router.patch("/:id/trust-score/refresh", async (req, res, next) => {
+router.patch("/:id/trust-score/refresh", requirePermission("aml.review"), async (req, res, next) => {
   try {
-    await updateAgentTrustScore(req.params.id);
+    await updateAgentTrustScore(routeParamString(req, "id")!);
     const agent = await db
       .select({ trustScore: agentsTable.trustScore, trustLevel: agentsTable.trustLevel })
-      .from(agentsTable).where(eq(agentsTable.id, req.params.id)).limit(1).then(r => r[0]);
+      .from(agentsTable).where(eq(agentsTable.id, routeParamString(req, "id")!)).limit(1).then(r => r[0]);
     return res.json({ trustScore: agent?.trustScore, trustLevel: agent?.trustLevel });
   } catch (err) { return next(err); }
 });
@@ -503,14 +525,14 @@ router.patch("/:id/trust-score/refresh", async (req, res, next) => {
 // ── BLOCK 2: Cash Reconciliation ──────────────────────────────────────────────
 
 // GET /agents/:id/reconciliations
-router.get("/:id/reconciliations", async (req, res, next) => {
+router.get("/:id/reconciliations", requireAgentAccess, async (req, res, next) => {
   try {
     const limit  = Number(req.query["limit"]  ?? 30);
     const offset = Number(req.query["offset"] ?? 0);
     const records = await db
       .select()
       .from(cashReconciliationsTable)
-      .where(eq(cashReconciliationsTable.agentId, req.params.id))
+      .where(eq(cashReconciliationsTable.agentId, routeParamString(req, "id")!))
       .orderBy(desc(cashReconciliationsTable.createdAt))
       .limit(limit).offset(offset);
     return res.json({ reconciliations: records, count: records.length });
@@ -518,7 +540,7 @@ router.get("/:id/reconciliations", async (req, res, next) => {
 });
 
 // POST /agents/:id/reconcile
-router.post("/:id/reconcile", async (req, res, next) => {
+router.post("/:id/reconcile", requireAgentAccess, async (req, res, next) => {
   try {
     const { date, declaredCash, agentNote, photoProof } = req.body as {
       date:         string;
@@ -529,21 +551,21 @@ router.post("/:id/reconcile", async (req, res, next) => {
     if (!date || declaredCash == null) {
       return res.status(400).json({ error: "date and declaredCash required" });
     }
-    const result = await submitReconciliation(req.params.id, date, declaredCash, agentNote, photoProof);
+    const result = await submitReconciliation(routeParamString(req, "id")!, date, declaredCash, agentNote, photoProof);
     return res.json({ ok: true, ...result });
   } catch (err) { return next(err); }
 });
 
 // PATCH /agents/:id/reconciliations/:date/dispute
-router.patch("/:id/reconciliations/:date/dispute", async (req, res, next) => {
+router.patch("/:id/reconciliations/:date/dispute", requireAgentAccess, async (req, res, next) => {
   try {
     const { agentNote } = req.body as { agentNote?: string };
     const updated = await db
       .update(cashReconciliationsTable)
       .set({ status: "DISPUTED", agentNote: agentNote ?? null })
       .where(and(
-        eq(cashReconciliationsTable.agentId, req.params.id),
-        eq(cashReconciliationsTable.date, req.params.date),
+        eq(cashReconciliationsTable.agentId, routeParamString(req, "id")!),
+        eq(cashReconciliationsTable.date, routeParamString(req, "date")!),
       ))
       .returning();
     if (!updated.length) return res.status(404).json({ error: "Reconciliation not found" });
@@ -554,21 +576,21 @@ router.patch("/:id/reconciliations/:date/dispute", async (req, res, next) => {
 // ── BLOCK 4: Gamification ─────────────────────────────────────────────────────
 
 // GET /agents/:id/achievements
-router.get("/:id/achievements", async (req, res, next) => {
+router.get("/:id/achievements", requireAgentAccess, async (req, res, next) => {
   try {
     const achievements = await db
       .select()
       .from(agentAchievementsTable)
-      .where(eq(agentAchievementsTable.agentId, req.params.id))
+      .where(eq(agentAchievementsTable.agentId, routeParamString(req, "id")!))
       .orderBy(desc(agentAchievementsTable.earnedAt));
     return res.json({ achievements, count: achievements.length });
   } catch (err) { return next(err); }
 });
 
 // POST /agents/:id/achievements/check — manually trigger achievement check
-router.post("/:id/achievements/check", async (req, res, next) => {
+router.post("/:id/achievements/check", requireAgentAccess, async (req, res, next) => {
   try {
-    const awarded = await checkAchievements(req.params.id);
+    const awarded = await checkAchievements(routeParamString(req, "id")!);
     return res.json({ awarded, newBadges: awarded.length });
   } catch (err) { return next(err); }
 });

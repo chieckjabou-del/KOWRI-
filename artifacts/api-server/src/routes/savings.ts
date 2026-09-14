@@ -1,58 +1,59 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { savingsPlansTable, walletsTable } from "@workspace/db";
-import { eq, and, desc, count } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { generateId } from "../lib/id";
 import {
   createSavingsPlan, accrueYield, matureSavingsPlan,
   getSavingsPlansByUser, getRateForUser,
 } from "../lib/savingsEngine";
-import { requireAuth } from "../lib/productAuth";
 import { requireIdempotencyKey, checkIdempotency } from "../middleware/idempotency";
 import { routeParamString } from "../lib/routeParams";
+import { authenticate, isAdminRequest, requirePermission, walletBelongsToUser } from "../middleware/auth";
 
 const router = Router();
 
-router.use(async (req, res, next) => {
-  const auth = await requireAuth(req.headers.authorization);
-  if (!auth) {
-    return res.status(401).json({ error: true, message: "Unauthorized. Provide a valid Bearer token." });
-  }
-  return next();
-});
+router.use(authenticate());
+
+function serializePlan(p: typeof savingsPlansTable.$inferSelect) {
+  const now = new Date();
+  return {
+    ...p,
+    lockedAmount:      Number(p.lockedAmount),
+    interestRate:      Number(p.interestRate),
+    accruedYield:      Number(p.accruedYield),
+    earlyBreakPenalty: Number(p.earlyBreakPenalty),
+    isMatured:         now >= new Date(p.maturityDate),
+    daysRemaining:     Math.max(0, Math.ceil((new Date(p.maturityDate).getTime() - now.getTime()) / 86400000)),
+  };
+}
 
 router.get("/plans", async (req, res, next) => {
   try {
-    const { userId, status } = req.query;
-    if (!userId) return res.status(400).json({ error: true, message: "userId required" });
+    const { status } = req.query;
+    const requested = typeof req.query.userId === "string" ? req.query.userId : undefined;
+    const userId = isAdminRequest(req) && requested ? requested : req.auth!.userId;
 
     const rows = await db.select().from(savingsPlansTable)
       .where(and(
-        eq(savingsPlansTable.userId, userId as string),
+        eq(savingsPlansTable.userId, userId),
         status ? eq(savingsPlansTable.status, status as any) : undefined,
       ))
       .orderBy(desc(savingsPlansTable.createdAt));
 
-    const now = new Date();
-    return res.json({
-      plans: rows.map(p => ({
-        ...p,
-        lockedAmount:      Number(p.lockedAmount),
-        interestRate:      Number(p.interestRate),
-        accruedYield:      Number(p.accruedYield),
-        earlyBreakPenalty: Number(p.earlyBreakPenalty),
-        isMatured:         now >= new Date(p.maturityDate),
-        daysRemaining:     Math.max(0, Math.ceil((new Date(p.maturityDate).getTime() - now.getTime()) / 86400000)),
-      })),
-    });
+    return res.json({ plans: rows.map(serializePlan) });
   } catch (err) { return next(err); }
 });
 
 router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
-    const { userId, walletId, name, amount, currency = "XOF", termDays, earlyBreakPenalty } = req.body;
-    if (!userId || !walletId || !name || !amount || !termDays) {
-      return res.status(400).json({ error: true, message: "userId, walletId, name, amount, termDays required" });
+    const { walletId, name, amount, currency = "XOF", termDays, earlyBreakPenalty } = req.body;
+    const userId = req.auth!.userId;
+    if (!walletId || !name || !amount || !termDays) {
+      return res.status(400).json({ error: true, message: "walletId, name, amount, termDays required" });
+    }
+    if (!(await walletBelongsToUser(String(walletId), userId))) {
+      return res.status(403).json({ error: true, message: "You do not own this wallet" });
     }
 
     const savingsWalletId = generateId();
@@ -68,19 +69,10 @@ router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, 
       name, amount: Number(amount), currency,
       termDays: Number(termDays),
       earlyBreakPenalty: earlyBreakPenalty ? Number(earlyBreakPenalty) : undefined,
+      idempotencyKey: `savings-create:${userId}:${req.idempotencyKey}`,
     });
 
-    const body = {
-      ...plan,
-      lockedAmount:      Number(plan.lockedAmount),
-      interestRate:      Number(plan.interestRate),
-      accruedYield:      Number(plan.accruedYield),
-      earlyBreakPenalty: Number(plan.earlyBreakPenalty),
-      isMatured:         false,
-      daysRemaining:     Number(termDays),
-    };
-    await req.saveIdempotentResponse?.(body);
-    return res.status(201).json(body);
+    return res.status(201).json(serializePlan(plan));
   } catch (err: any) {
     return res.status(400).json({ error: true, message: err.message });
   }
@@ -88,24 +80,18 @@ router.post("/plans", requireIdempotencyKey, checkIdempotency, async (req, res, 
 
 router.get("/plans/:planId", async (req, res, next) => {
   try {
+    const planId = routeParamString(req, "planId")!;
     const [plan] = await db.select().from(savingsPlansTable)
-      .where(eq(savingsPlansTable.id, req.params.planId));
-    if (!plan) return res.status(404).json({ error: true, message: "Savings plan not found" });
-
-    const now = new Date();
-    return res.json({
-      ...plan,
-      lockedAmount:      Number(plan.lockedAmount),
-      interestRate:      Number(plan.interestRate),
-      accruedYield:      Number(plan.accruedYield),
-      earlyBreakPenalty: Number(plan.earlyBreakPenalty),
-      isMatured:         now >= new Date(plan.maturityDate),
-      daysRemaining:     Math.max(0, Math.ceil((new Date(plan.maturityDate).getTime() - now.getTime()) / 86400000)),
-    });
+      .where(eq(savingsPlansTable.id, planId));
+    if (!plan || (!isAdminRequest(req) && plan.userId !== req.auth!.userId)) {
+      return res.status(404).json({ error: true, message: "Savings plan not found" });
+    }
+    return res.json(serializePlan(plan));
   } catch (err) { return next(err); }
 });
 
-router.post("/plans/:planId/accrue", requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
+// Yield accrual is a scheduled platform operation, not a user action.
+router.post("/plans/:planId/accrue", requirePermission("ledger.write"), requireIdempotencyKey, checkIdempotency, async (req, res, next) => {
   try {
     const planId = routeParamString(req, "planId")!;
     const yieldAmount = await accrueYield(planId);
@@ -122,7 +108,7 @@ router.post("/plans/:planId/break", requireIdempotencyKey, checkIdempotency, asy
       return res.status(400).json({ error: true, message: "targetWalletId required" });
     }
     const planId = routeParamString(req, "planId")!;
-    const result = await matureSavingsPlan(planId, targetWalletId);
+    const result = await matureSavingsPlan(planId, String(targetWalletId), req.auth!.userId);
     return res.json({
       success: true,
       ...result,
@@ -138,10 +124,8 @@ router.post("/plans/:planId/break", requireIdempotencyKey, checkIdempotency, asy
 
 router.get("/rate", async (req, res, next) => {
   try {
-    const { userId } = req.query;
-    if (!userId) return res.status(400).json({ error: true, message: "userId required" });
-
-    const rate = await getRateForUser(userId as string);
+    const userId = req.auth!.userId;
+    const rate = await getRateForUser(userId);
     const tierRates = { bronze: 6, silver: 8, gold: 10, platinum: 12 };
 
     return res.json({
@@ -156,7 +140,11 @@ router.get("/rate", async (req, res, next) => {
 
 router.get("/summary/:userId", async (req, res, next) => {
   try {
-    const plans = await getSavingsPlansByUser(req.params.userId);
+    const userId = routeParamString(req, "userId")!;
+    if (!isAdminRequest(req) && userId !== req.auth!.userId) {
+      return res.status(403).json({ error: true, message: "Forbidden" });
+    }
+    const plans = await getSavingsPlansByUser(userId);
     const active  = plans.filter(p => p.status === "active");
     const matured = plans.filter(p => p.status === "matured");
 
@@ -164,7 +152,7 @@ router.get("/summary/:userId", async (req, res, next) => {
     const totalYield  = active.reduce((s, p) => s + p.accruedYield, 0);
 
     return res.json({
-      userId: req.params.userId,
+      userId,
       totalPlans:   plans.length,
       activePlans:  active.length,
       maturedPlans: matured.length,
