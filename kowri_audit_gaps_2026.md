@@ -611,6 +611,14 @@ Rapport : `AKWE_FINAL_GO_NO_GO_GATE.md`. Commit testé : `e268bc3`. **Décision 
 - Sémantique de `LAUNCH_MODULES` rendue explicite (`.env.launch.example`, `docs/DEPLOYMENT.md`) : la variable ne liste que les modules optionnels ; `none` = cœur seulement (inscription/OTP, KYC, wallets, transferts internes, cash-in maker-checker, trésorerie, réconciliation, alerting), jamais « toute activité financière désactivée ».
 - Neuf conditions fermées (§18) avant le premier XOF client ; la décision se rejoue sans développement quand elles sont fournies.
 
+## Final Close-out / Evidence Gate (14 septembre 2026)
+
+Rapport : `AKWE_FINAL_CLOSEOUT_EVIDENCE_GATE.md`. Commit vérifié : `4965ad3`. **FINAL REAL-MONEY STATUS : 🔴 NO-GO.** Une condition PASS (C9, modules non prouvés OFF aux trois niveaux), huit BLOCKED EXTERNAL (C1 limites non signées, C2 aucune preuve réglementaire, C3 aucun opérateur réel, C4 aucun environnement de production, C5 DR non démontré sur la cible, C6 réconciliation sans propriétaire, C7 `main` non protégée — API GitHub, C8 conformité opérationnelle absente). Aucun TECHNICAL FIX REQUIRED.
+
+- Non-régression sur `4965ad3` : gating 357/0 ouverte, launch-gate 88/88, canary-adversarial 18/18. Premier passage du launch-gate à 84/88 : le rapport de réconciliation signalait deux demandes de cash-in expirées et encore ouvertes (I12) parce que le worker d'expiration n'avait pas encore tourné après plusieurs heures d'arrêt de l'API locale ; l'approbation d'une demande expirée est refusée de toute façon (`CASH_IN_EXPIRED`) ; rejoué après le premier tick : 88/88. Détection attendue, consignée.
+- `docs/INCIDENT_RESPONSE.md` : section 7 « Couverture par type d'incident » (fraude, erreur de crédit, transfert bloqué, double opération, litige, cash-in contesté, compromission opérateur ou clé, perte du second facteur, indisponibilité base, restauration, gel, communication client, escalade réglementaire).
+- Aucun code de production modifié. Étape suivante : obtention des preuves externes (liste §20 du rapport), puis simple rejeu du gate.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*

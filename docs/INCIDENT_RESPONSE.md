@@ -128,7 +128,26 @@ Levée d'un gel : `POST /api/admin/kill-switches/<name>/lift` par un
 super_admin **différent** de celui qui a résolu, après lecture d'un rapport de
 réconciliation `ok`. Toute levée est alertée (`kill_switch.lifted`).
 
-## 7. Cas particuliers
+## 7. Couverture par type d'incident
+
+| Incident | Détection | Gel | Résolution | Section |
+|---|---|---|---|---|
+| Suspicion de fraude (client ou schéma) | alerte AML/vélocité, revue `audit_logs`, réclamation | gel des wallets concernés ; `outbound_transfers` si schéma | investigation, contre-passation si prouvé, signalement | §1, §2, §5.1, §8 |
+| Erreur de crédit (cash-in erroné, mauvais bénéficiaire, montant) | rapprochement bancaire, réclamation | gel du wallet bénéficiaire | contre-passation à deux signatures | §5.2, §5.3 |
+| Transfert bloqué (`pending`/`processing`) | `checks.stuckTransactions` du rapport | aucun si isolé ; `outbound_transfers` si systémique | résolution par le chemin applicatif, jamais SQL | §5.1 |
+| Double opération | impossible par idempotence liée au corps et clés ledger uniques ; si constatée : rapport (I1–I3) | `all` | contre-passation de la seconde, cause racine, test | §4, §5.3 |
+| Litige client | réclamation support | selon doute | §5.1 | §5.1 |
+| Cash-in contesté | réclamation, rapprochement bancaire | `cash_in` si doute sur la source | §5.2 | §5.2 |
+| Compromission d'un opérateur | anomalies dans `cash_in_decisions` / `audit_logs`, alerte | désactivation immédiate du compte (révoque toutes ses sessions) | revue 30 jours, contre-passations, signalement | §2, §8 |
+| Compromission d'une clé (`SIGNING_SECRET`, `KYC_ENCRYPTION_KEY`, secret TOTP) | fuite constatée, alerte | rotation (`docs/SECURITY_SECRETS.md`, `src/tools/rotateKycKey.ts`) ; `all` si signature compromise | rotation, réenrôlement MFA (`POST /admin/auth/users/:id/mfa/reset`), revue | §8, docs/SECURITY_SECRETS.md |
+| Perte du second facteur d'un opérateur | demande de l'opérateur, identité vérifiée par un `super_admin` différent | aucune action de son compte jusqu'au réenrôlement | `mfa/reset` (admins.manage) puis nouvel enrôlement ; audité | docs/SECURITY_SECRETS.md |
+| Indisponibilité de la base | monitoring, `/health` | `all` dès la reprise si doute | vérification `cashIn.ledgerMismatch` ; aucun état intermédiaire possible | §8 |
+| Restauration | décision à deux | `all` | `scripts/db-restore.sh`, manifeste, perte bornée par le RPO | docs/DISASTER_RECOVERY.md |
+| Gel des opérations | — | `POST /admin/kill-switches/<name>/force` (super_admin MFA, propagé ≤ 5 s, alerté) | levée par un autre super_admin après rapport `ok` | §2, §6 |
+| Communication client | — | — | réponse écrite avec référence, horodatage, statut ; jamais de promesse de crédit avant réconciliation ; délai cible 48 h ouvrées (DECISION REQUIRED) | §5.1 |
+| Escalade réglementaire | — | — | déclaration à l'autorité compétente selon le cadre validé (C2) : forme et délais **PENDING LEGAL/REGULATORY VALIDATION** | §6, AKWE_FINAL_GO_NO_GO_GATE.md §8 |
+
+## 8. Cas particuliers
 
 - **Base indisponible pendant un cash-in** : la requête est soit
   `PENDING_APPROVAL`/`APPROVED` (rien crédité), soit `EXECUTED` avec sa
