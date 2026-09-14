@@ -602,6 +602,15 @@ Rapport : `AKWE_LAUNCH_READINESS_GATE.md`. Décision : **CONDITIONALLY READY —
 - Suite `test-launch-gate.mjs` (88 vérifications, en CI) : boot production refusé sur trois configurations fautives, instance production conforme (fixtures démo ignorées, 16 routes optionnelles en 503, clé partagée refusée, MFA, cash-in de bout en bout sous deux opérateurs MFA, limites, alerte signée reçue), kill switches inter-instances, conservation flux par flux, cash-out OFF (statique, dynamique, service), attaques sur les commissions créateurs, machine à états cash-in, seconde passe adversariale, arrêt propre.
 - Ouverts (P1) : outil de contre-passation, suspension client, compte ledger du float agent, compteurs globaux clients/cash-in par jour, verrou anti-force-brute partagé, rapprochement bancaire outillé, politiques crédit et épargne ; (décisions) limites signées, cadre réglementaire, opérateurs nommés, environnement de production, PITR et rejeu DR, listes de sanctions.
 
+## Final GO / NO-GO Gate (14 septembre 2026)
+
+Rapport : `AKWE_FINAL_GO_NO_GO_GATE.md`. Commit testé : `e268bc3`. **Décision : 🔴 NO-GO** — aucun défaut technique bloquant, mais quatre conditions rendent le NO-GO obligatoire et aucune ne se corrige par du code : capacité réglementaire à détenir des fonds clients non prouvée (C2), limites non signées (C1), opérateurs non provisionnés (C3), aucun environnement de production (C4). Vérifié en plus : `main` non protégé (C7, API GitHub), réconciliation sans propriétaire nommé (C6).
+
+- Preuves rejouées sur ce commit : gating 357/0 ouverte, integrity 198, cashin 120, concurrency 95, launch-gate 88, disaster-recovery 65 ; réconciliation locale MATCH (écart 0 sur quatre devises) ; sauvegarde 0,82 s et restauration 1,01 s sur 48 Mo, manifeste vérifié (RPO/RTO de production restent théoriques : pas de PITR, pas de copie de production).
+- Dernier contrôle adversarial limité au périmètre ON (`test-canary-adversarial.mjs`, 18/18) : création monétaire (six chemins × trois appelants, INSERT SQL), destruction, double dépense, course sur approbation, autorisation inter-clients, séparation opérateurs, idempotence, kill switches, réconciliation, reprise.
+- Sémantique de `LAUNCH_MODULES` rendue explicite (`.env.launch.example`, `docs/DEPLOYMENT.md`) : la variable ne liste que les modules optionnels ; `none` = cœur seulement (inscription/OTP, KYC, wallets, transferts internes, cash-in maker-checker, trésorerie, réconciliation, alerting), jamais « toute activité financière désactivée ».
+- Neuf conditions fermées (§18) avant le premier XOF client ; la décision se rejoue sans développement quand elles sont fournies.
+
 ---
 
 *Document généré à partir d'une lecture exhaustive du code source KOWRI V5.0 — 12 septembre 2026.*
